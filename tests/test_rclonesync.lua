@@ -352,42 +352,6 @@ check(not r.fatal and r.downloaded == 0 and r.uploaded == 0 and #r.conflicts == 
 r = sync(G)
 check(r.downloaded == 0 and r.uploaded == 0, "and nothing the next time")
 
--- Lists from the scripts' rclone folder.
-local E = device("E")
-write(base .. "/E/rclone/settings.txt", "/gestures.lua\n")
-local copied = Engine.migrateLists(E.paths, { base .. "/E/rclone" })
-check(#copied == 1 and read(E.paths.state .. "/settings.txt") == "/gestures.lua\n", "lists migrated")
-check(#Engine.migrateLists(E.paths, { base .. "/E/rclone" }) == 0, "only once")
--- A device still with the scripts' old list, after the list was edited on
--- another device: the edit wins, rather than the old copy looking new.
-local H = device("H")
-local h_server = { type = "folder", address = base .. "/h-server", versioner = md5 }
-local H0 = device("H0")
-write(H0.paths.state .. "/settings.txt", "/gestures.lua\n/new.lua\n") -- edited today
-Engine.sync({ paths = H0.paths, remote = Remote.new(h_server, ROOT), device = "H0" })
-write(base .. "/H/rclone/settings.txt", "/gestures.lua\n")
-touch(base .. "/H/rclone/settings.txt", os.time() - 86400 * 7) -- from last week
-Engine.migrateLists(H.paths, { base .. "/H/rclone" })
-check(lfs.attributes(H.paths.state .. "/settings.txt", "modification") == os.time() - 86400 * 7
-    or lfs.attributes(H.paths.state .. "/settings.txt", "modification") < os.time() - 86000 * 7,
-    "copied list keeps its date")
-r = Engine.sync({ paths = H.paths, remote = Remote.new(h_server, ROOT), device = "H" })
-check(r.uploaded == 0 and read(H.paths.state .. "/settings.txt") == "/gestures.lua\n/new.lua\n",
-    "the edited list wins over the old copy\n" .. r.log)
-check(read(base .. "/h-server" .. ROOT .. "/lists/settings.txt") == "/gestures.lua\n/new.lua\n",
-    "the server keeps the edited list")
-
--- After the first sync, the old folder is never used again.
-write(base .. "/E/rclone/patches.txt", "/old.lua\n")
-local e_server = { type = "folder", address = base .. "/e-server", versioner = md5 }
-Engine.sync({ paths = E.paths, remote = Remote.new(e_server, ROOT), device = "E" })
-os.remove(E.paths.state .. "/settings.txt")
-check(#Engine.migrateLists(E.paths, { base .. "/E/rclone" }) == 0
-    and not exists(E.paths.state .. "/settings.txt") and not exists(E.paths.state .. "/patches.txt"),
-    "old lists not copied after the first sync")
-check(read(base .. "/e-server" .. ROOT .. "/lists/settings.txt") == "/gestures.lua\n",
-    "lists synced from koreader/rclonesync/ to lists/")
-
 -- Dropbox and WebDAV ------------------------------------------------------------
 
 local real_request = Remote.request

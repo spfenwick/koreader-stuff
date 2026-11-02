@@ -90,10 +90,6 @@ function RcloneSync:init()
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
-    -- The lists used to be in the rclone folder the scripts used.
-    local kodir = dataDir()
-    local parent = kodir:match("^(.*)/[^/]+$") or ""
-    pcall(Engine.migrateLists, paths(), { parent .. "/rclone", kodir .. "/rclone" })
     if startup and not startup.shown then
         startup.shown = true
         UIManager:nextTick(function()

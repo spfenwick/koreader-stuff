@@ -12,10 +12,7 @@ set up in KOReader's Cloud storage, and does the syncing itself.
 2. Add your Dropbox or WebDAV server in Cloud storage (file browser → Cloud
    storage), if it isn't there already. Settings sync uses the first one,
    or the one chosen under Settings sync → Server.
-3. Put the lists of what to sync in `koreader/rclonesync/` (see below). If
-   the old scripts' rclone folder is next to KOReader's folder, its lists
-   are copied from there until the device's first sync; after that the
-   rclone folder isn't used.
+3. Put the lists of what to sync in `koreader/rclonesync/` (see below).
 
 The menu is in Tools → "Settings sync", in both the file browser and the
 reader:
@@ -103,11 +100,8 @@ Before a sync, KOReader saves its settings, so what's synced is what's in
 use. Files are downloaded to a temporary name and then put in place, so a
 file in use (such as a font) is replaced rather than rewritten.
 
-## Moving from the scripts
+## The first sync
 
-- The lists move to `koreader/rclonesync/` (copied from the old rclone
-  folder before the first sync) and on the server to `lists/`. Edit them
-  there from now on: the old `rclone/` copies are ignored.
 - The first device to sync adds its files to the manifest. On Dropbox,
   files the scripts already put there aren't uploaded again if they're the
   same: the plugin checks them against Dropbox's checksums ("already on the
@@ -116,9 +110,6 @@ file in use (such as a font) is replaced rather than rewritten.
 - Sync first from the device whose settings you want to keep; other
   devices then download what's different, and where both had a file that
   differs, the newer is kept and the other saved in `conflicts/`.
-- The rclone binary, `rclone.conf` and the scripts are no longer used.
-  Files the scripts left on the server outside the lists, and the old
-  `rclone/` folder there, can be deleted.
 
 ## Limits
 

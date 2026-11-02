@@ -36,7 +36,6 @@ local Engine = {}
 
 local TEMP_SUFFIX = ".rclonesync-part"
 local MANIFEST = "manifest.tsv"
-Engine.LISTS = { "settings.txt", "plugins.txt", "patches.txt" }
 
 -- In the order they're synced: the lists first, so the rest use the new ones.
 --   dir:       under KOReader's folder (lists: koreader/rclonesync/)
@@ -336,33 +335,6 @@ function Engine.listPath(paths, name) return paths.state .. "/" .. name end
 
 function Engine.isPending(paths)
     return lfs().attributes(paths.pending) ~= nil
-end
-
---- Copy lists from the rclone folder the scripts used, until this device
---- has synced once. After that the lists here (and on the server) are the
---- only ones, so a list deleted here stays deleted.
-function Engine.migrateLists(paths, old_dirs)
-    local copied = {}
-    if lfs().attributes(paths.state .. "/state.tsv") then return copied end
-    Engine.mkdirs(paths.state)
-    for _, name in ipairs(Engine.LISTS) do
-        local dest = Engine.listPath(paths, name)
-        if not lfs().attributes(dest) then
-            for _, dir in ipairs(old_dirs) do
-                local data = readFile(dir .. "/" .. name)
-                if data then
-                    writeFile(dest, data)
-                    -- Keep its date: a copy made now would look newer than
-                    -- edits made since on other devices, and win over them.
-                    local old = lfs().attributes(dir .. "/" .. name, "modification")
-                    if old then lfs().touch(dest, old, old) end
-                    table.insert(copied, dir .. "/" .. name)
-                    break
-                end
-            end
-        end
-    end
-    return copied
 end
 
 -- Scanning ----------------------------------------------------------------
