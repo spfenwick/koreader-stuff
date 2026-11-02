@@ -18,7 +18,8 @@ The menu is in Tools → "Settings sync", in both the file browser and the
 reader:
 
 - **Sync**: everything below.
-- **Preview sync**: shows what a sync would change, without changing it.
+- **Preview sync**: shows what a sync would change, without changing it;
+  "Sync now" there runs the sync.
 - **Server** and **Folder on server** (`/KOReader/Settings` by default).
 - **Show last log**.
 

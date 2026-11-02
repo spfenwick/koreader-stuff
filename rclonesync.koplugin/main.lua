@@ -138,14 +138,30 @@ local function serverLabel(server)
     return server and T("%1 (%2)", server.name, Remote.TYPES[server.type]) or _("none")
 end
 
-function RcloneSync:showLog(title, text)
+--- buttons: an optional row of buttons, shown instead of Close and Find.
+--- Their callbacks get the viewer, to close it.
+function RcloneSync:showLog(title, text, buttons)
     local TextViewer = require("ui/widget/textviewer")
-    UIManager:show(TextViewer:new{
+    local viewer
+    local row
+    if buttons then
+        row = {}
+        for __, button in ipairs(buttons) do
+            table.insert(row, {
+                text = button.text,
+                callback = function() button.callback(viewer) end,
+            })
+        end
+    end
+    viewer = TextViewer:new{
         title = title,
         text = text ~= "" and text or _("(nothing)"),
         monospace_font = true,
         justified = false,
-    })
+        buttons_table = row and { row },
+    }
+    UIManager:show(viewer)
+    return viewer
 end
 
 function RcloneSync:sync(preview)
@@ -199,7 +215,16 @@ function RcloneSync:report(result, preview)
     local changes = (result.uploaded or 0) + (result.downloaded or 0)
         + (result.deleted_here or 0) + (result.deleted_server or 0)
     if preview then
-        self:showLog(T(_("Sync would make %1 changes"), changes), log)
+        self:showLog(T(_("Sync would make %1 changes"), changes), log, {
+            { text = _("Close"), callback = function(viewer) UIManager:close(viewer) end },
+            {
+                text = _("Sync now"),
+                callback = function(viewer)
+                    UIManager:close(viewer)
+                    self:sync()
+                end,
+            },
+        })
         return
     end
     local summary = T(_("Uploaded %1, downloaded %2, deleted %3."), result.uploaded or 0,

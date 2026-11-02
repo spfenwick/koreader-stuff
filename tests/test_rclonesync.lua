@@ -515,7 +515,18 @@ plugin.settings = saved.rclonesync
 check(plugin:server().name == "Box", "chosen server")
 saved.rclonesync.server = { name = "Mine", type = "folder" }
 
-plugin:onRcloneSync()
+-- Preview, then its Sync now button.
+plugin:sync(true)
+local viewer = shown[#shown]
+check(viewer and viewer.viewer and viewer.title:find("would make") and #broadcast == 0,
+    "preview shows what would change")
+local row = viewer and viewer.buttons_table and viewer.buttons_table[1] or {}
+check(#row == 2 and row[2].text == "Sync now", "preview offers Sync now")
+local closed
+package.loaded["ui/uimanager"].close = function(_, w) closed = w end
+if row[2] then row[2].callback() end
+check(closed == viewer, "Sync now closes the preview")
+
 check(broadcast[1] == "FlushSettings" and flushed == 1, "sync saves settings first")
 check(#restarts == 1, "sync asks to restart for pulled settings")
 check(Engine.isPending(P.paths), "settings waiting")
