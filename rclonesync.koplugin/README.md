@@ -3,15 +3,16 @@
 Pushes and pulls KOReader settings to a cloud remote with
 [rclone](https://rclone.org), so several devices can share them. It
 replaces the `PushSettings.sh` / `PullSettings.sh` / `PushTweaks.sh` /
-`PullTweaks.sh` scripts and uses the same rclone folder and remote layout,
-so devices still on the scripts stay in step.
+`PullTweaks.sh` scripts and uses the same rclone folder. The remote layout
+is close to the scripts', but not the same (see
+[Moving from the scripts](#moving-from-the-scripts)).
 
 ## Install
 
 1. Copy `rclonesync.koplugin` into KOReader's `plugins/` folder.
 2. Keep (or create) the rclone folder next to KOReader's, as the scripts
-   had it: `rclone` (the binary for the device), `rclone.conf`,
-   `settings.txt` and `plugins.txt`.
+   had it: `rclone` (the binary for the device), `rclone.conf`, and the
+   lists of what to sync: `settings.txt`, `plugins.txt` and `patches.txt`.
    - Kobo: `.adds/rclone/` (next to `.adds/koreader/`)
    - Kindle: `/mnt/us/rclone/`
    - Linux: `~/.config/rclone/` (a system `rclone` on the PATH is used if
@@ -30,30 +31,75 @@ reader. The four actions can also be assigned to gestures (under General:
 
 | Remote (`<root>` = `/KOReader/Settings`) | Device | Direction |
 |---|---|---|
-| `rclone/settings.txt`, `rclone/plugins.txt` | rclone folder | both, first |
-| `settings/` | the files `settings.txt` lists, relative to KOReader's folder | both |
-| `plugins/` | the plugins `plugins.txt` lists, relative to `plugins/` | both |
-| `fonts/` | `fonts/` | pull only |
-| `patches/` | `patches/` (except `1-knuthplass-engine.lua`) | both |
+| `rclone/settings.txt`, `plugins.txt`, `patches.txt` | rclone folder | both, first |
+| `settings/` | what `settings.txt` lists in `settings/` | both |
+| `plugins/` | what `plugins.txt` lists in `plugins/` | both |
+| `patches/` | what `patches.txt` lists in `patches/` | both |
+| `fonts/` | `fonts/` | pull only, nothing deleted |
 | `dict/` | `data/dict/` | both |
 | `styletweaks/` | `styletweaks/` | both |
 
-"Style tweaks only" syncs just the two lists and `styletweaks/`. As with
-the scripts, everything is `rclone sync --checksum`: the destination ends
-up matching the source, deletions included.
+"Style tweaks only" syncs just the lists and `styletweaks/`. As with
+the scripts, everything except fonts is `rclone sync --checksum`: the
+destination ends up matching the source, deletions included.
 
-- **Fonts** are only pulled, so fonts installed on one device stay there.
-- **Plugins** are synced only if `plugins.txt` lists them, one per line:
-  `/assistant.koplugin/**`. Others are left alone on both sides, so large
-  plugins and the ones ZenPM updates can stay out. Without `plugins.txt`,
-  plugins aren't synced.
+Each list has one rclone pattern per line, relative to its folder and
+starting with `/`, so it matches only at the top of the folder:
+
+`settings.txt`:
+
+```
+/gestures.lua
+/ZenOS/**
+```
+
+`plugins.txt`:
+
+```
+/assistant.koplugin/configuration.lua
+/bookshortcuts.koplugin/**
+```
+
+`patches.txt`:
+
+```
+/2-fold-8-fix.lua
+/2-disable-unreadable-folder-warning.lua
+```
+
+Anything not listed is left alone on both sides: a pull doesn't delete it,
+and a push doesn't send it. A list that's missing turns that folder's sync
+off.
+
+- **Settings** are KOReader's `settings/` folder. Files elsewhere in
+  KOReader's folder (like `settings.reader.lua`) aren't synced.
+- **Plugins:** list only the ones to share, so large plugins and the ones
+  ZenPM updates stay out. A whole plugin is `/name.koplugin/**`; a plugin's
+  settings file on its own is `/name.koplugin/file.lua`.
+- **Patches:** don't list `1-knuthplass-engine.lua` (or a pattern such as
+  `/*.lua` that matches it). The Knuth–Plass plugin writes it for each
+  device itself.
+- **Fonts** are only pulled, and a pull adds and updates fonts but never
+  deletes any. Fonts installed on one device (and KOReader's own) stay
+  there, and a font removed from the remote stays on devices that have it.
 - **Icons** aren't synced.
-- **`1-knuthplass-engine.lua`** is left out because the Knuth–Plass plugin
-  writes it for each device itself.
 - **A folder missing on the device** is skipped on push instead of emptying
   the remote copy.
-- Write the entries in both lists with a leading `/` (as now), so they
-  match only at the top of the folder.
+
+## Moving from the scripts
+
+- `settings.txt` entries are now relative to `settings/`:
+  `/settings/gestures.lua` becomes `/gestures.lua`. Entries outside
+  `settings/` (like `/plugins/assistant.koplugin/configuration.lua`) move to
+  `plugins.txt` (`/assistant.koplugin/configuration.lua`).
+- `plugins.txt` lists the plugins *to* sync. The scripts' commented-out
+  plugin sync used it as a list of plugins *not* to sync.
+- `patches.txt` is new. Without it, patches aren't synced.
+- On the remote, settings are now at `<root>/settings/gestures.lua`, not
+  `<root>/settings/settings/gestures.lua`. Push from one device first. The
+  old copies under `<root>/settings/settings/` are left behind; delete
+  that folder once every device uses the plugin. Devices still on the
+  scripts won't pick up settings pushed by the plugin.
 
 ## Differences from the scripts
 
@@ -75,8 +121,6 @@ up matching the source, deletions included.
   shows what would change without changing anything.
 - **Remote:** chosen from the remotes in `rclone.conf` (the first by
   default). The folder on the remote can be changed too.
-- **`plugins.txt` lists what to sync.** The scripts' commented-out plugin
-  sync used it as a list of plugins *not* to sync.
 - **Not included:** `InstallPatch.sh`, which copied an engine over
   `libs/libkoreader-cre.so`. The Knuth–Plass plugin's updater now installs
   and updates the engine without replacing KOReader's own. The `.sh`

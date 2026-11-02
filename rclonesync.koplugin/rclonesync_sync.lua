@@ -2,15 +2,17 @@
 The rclone side of Settings sync: where things are, the commands to run,
 and reading what rclone reported.
 
-The remote keeps the layout the PushSettings.sh/PullSettings.sh scripts
-used, so devices still on the scripts stay in step:
+The remote is laid out much as the PushSettings.sh/PullSettings.sh scripts
+had it, except that settings/ holds the contents of KOReader's settings/
+folder (the scripts kept KOReader's whole folder there):
 
-    <remote>:<root>/rclone/settings.txt   the list of settings files
-    <remote>:<root>/rclone/plugins.txt    the list of plugins
-    <remote>:<root>/settings/             the files settings.txt lists
-    <remote>:<root>/plugins/              the plugins plugins.txt lists
-    <remote>:<root>/fonts/                pulled only
-    <remote>:<root>/patches/
+    <remote>:<root>/rclone/settings.txt   the lists of what to sync
+    <remote>:<root>/rclone/plugins.txt
+    <remote>:<root>/rclone/patches.txt
+    <remote>:<root>/settings/             what settings.txt lists in settings/
+    <remote>:<root>/plugins/              what plugins.txt lists in plugins/
+    <remote>:<root>/patches/              what patches.txt lists in patches/
+    <remote>:<root>/fonts/                pulled only, nothing deleted
     <remote>:<root>/dict/                 KOReader's data/dict
     <remote>:<root>/styletweaks/
 
@@ -27,25 +29,25 @@ local Sync = {}
 --   in_rclone: under the rclone folder instead
 --   list:      only what this file in the rclone folder lists
 --   tweaks:    also part of "style tweaks only"
---   pull_only: never pushed (fonts installed on one device stay there)
+--   pull_only: never pushed, and a pull adds and updates files but never
+--              deletes them (fonts installed on one device stay there)
 --   staged:    pulled into the staging folder (see above)
 --   restart:   KOReader uses the files only after a restart
 Sync.JOBS = {
     { name = "list", in_rclone = true, dir = "", remote = "rclone", tweaks = true,
-      filter = { "--include", "/settings.txt", "--include", "/plugins.txt" } },
-    { name = "settings", dir = "", remote = "settings", list = "settings.txt", staged = true },
+      filter = { "--include", "/settings.txt", "--include", "/plugins.txt",
+                 "--include", "/patches.txt" } },
+    { name = "settings", dir = "settings", remote = "settings", list = "settings.txt", staged = true },
     { name = "plugins", dir = "plugins", remote = "plugins", list = "plugins.txt", restart = true },
     { name = "fonts", dir = "fonts", remote = "fonts", pull_only = true, restart = true },
-    -- The Knuth–Plass plugin writes this patch for each device itself.
-    { name = "patches", dir = "patches", remote = "patches", restart = true,
-      filter = { "--exclude", "/1-knuthplass-engine.lua" } },
+    { name = "patches", dir = "patches", remote = "patches", list = "patches.txt", restart = true },
     { name = "dict", dir = "data/dict", remote = "dict", restart = true },
     { name = "styletweaks", dir = "styletweaks", remote = "styletweaks", tweaks = true },
 }
 
 -- The flags the scripts used: compare by checksum, as file times differ
 -- between devices and cloud storage.
-local SYNC_FLAGS = "sync --checksum --no-update-modtime --modify-window 1m"
+local FLAGS = "--checksum --no-update-modtime --modify-window 1m"
 
 local function lfs()
     return require("libs/libkoreader-lfs")
@@ -71,7 +73,7 @@ function Sync.dataDir()
     return (dir:gsub("/+$", ""))
 end
 
---- Where the rclone folder (rclone, rclone.conf, settings.txt) might be:
+--- Where the rclone folder (rclone, rclone.conf and the lists) might be:
 --- next to KOReader's folder, as the scripts had it (.adds/rclone on Kobo,
 --- /mnt/us/rclone on Kindle, ~/.config/rclone on Linux), in it, or in the
 --- plugin's folder.
@@ -176,6 +178,7 @@ end
 
 --- A list in the rclone folder (settings.txt by default).
 function Sync.listPath(ctx, name) return ctx.rclone_dir .. "/" .. (name or "settings.txt") end
+function Sync.settingsDir(ctx) return ctx.kodir .. "/settings" end
 function Sync.stagingDir(ctx) return ctx.state_dir .. "/staging" end
 function Sync.pendingPath(ctx) return ctx.state_dir .. "/pending" end
 function Sync.logPath(ctx) return ctx.state_dir .. "/last.log" end
@@ -274,7 +277,7 @@ end
 --- (@@job, @@fail, @@skip, @@differ) for Sync.parse.
 function Sync.script(ctx, direction, tweaks_only)
     local base = Sync.base(ctx)
-    local sync = base .. " " .. SYNC_FLAGS .. (ctx.dry_run and " --dry-run" or "")
+    local flags = FLAGS .. (ctx.dry_run and " --dry-run" or "")
     local lines = {}
     local function add(line) table.insert(lines, line) end
     for _, job in ipairs(Sync.jobs(direction, tweaks_only)) do
@@ -288,7 +291,8 @@ function Sync.script(ctx, direction, tweaks_only)
             src, dst = remoteDir(ctx, job), staged and Sync.stagingDir(ctx) .. "/" or localDir(ctx, job)
         end
         local cmd = (staged and "mkdir -p " .. q(Sync.stagingDir(ctx)) .. "\n" or "")
-            .. sync .. " " .. filter .. " " .. q(src) .. " " .. q(dst)
+            .. base .. " " .. (job.pull_only and "copy " or "sync ") .. flags
+            .. " " .. filter .. " " .. q(src) .. " " .. q(dst)
             .. " 2>&1 || echo '@@fail " .. job.name .. "'"
         if staged then
             -- Is there anything to put in place?
@@ -367,52 +371,18 @@ function Sync.parse(output, direction)
     return result
 end
 
-local function run(cmd)
-    local pipe = io.popen(cmd)
-    if not pipe then return "" end
-    local out = pipe:read("*a")
-    pipe:close()
-    return out
-end
-
--- The listed files under a folder, as a set; nil if rclone fails.
-local function listedFiles(ctx, dir)
-    local out = run(Sync.base(ctx) .. " lsf -R --files-only --include-from "
-        .. q(Sync.listPath(ctx)) .. " " .. q(dir) .. " 2>/dev/null && echo '@@done'")
-    if not out:find("@@done") then return nil end
-    local files = {}
-    for line in out:gmatch("[^\n]+") do
-        if line ~= "@@done" then files[line] = true end
-    end
-    return files
-end
-
 --- Put staged settings in place. Run by the plugin as KOReader starts.
---- (rclone won't sync into a folder that holds the staging folder, so: copy,
---- then delete what's no longer on the remote.) Returns ok, output.
+--- Returns ok, output.
 function Sync.applyPending(ctx)
-    local staging = Sync.stagingDir(ctx) .. "/"
-    local kodir = ctx.kodir .. "/"
-    local ok, output = false, nil
-    if not exists(Sync.listPath(ctx), "file") then
-        output = "no " .. Sync.listPath(ctx)
-    else
-        output = run(Sync.base(ctx) .. " copy --checksum --include-from " .. q(Sync.listPath(ctx))
-            .. " " .. q(staging) .. " " .. q(kodir) .. " 2>&1 && echo '@@done'")
+    local list = Sync.listPath(ctx)
+    local ok, output = false, "no " .. list
+    if exists(list, "file") then
+        local pipe = io.popen(Sync.base(ctx) .. " sync --checksum --include-from " .. q(list)
+            .. " " .. q(Sync.stagingDir(ctx) .. "/") .. " " .. q(Sync.settingsDir(ctx) .. "/")
+            .. " 2>&1 && echo '@@done'")
+        output = pipe and pipe:read("*a") or ""
+        if pipe then pipe:close() end
         ok = output:find("@@done") ~= nil
-        local wanted = ok and listedFiles(ctx, staging)
-        local present = wanted and listedFiles(ctx, kodir)
-        if present then
-            for path in pairs(present) do
-                if not wanted[path] then
-                    os.remove(kodir .. path)
-                    output = output .. "Deleted " .. path .. "\n"
-                end
-            end
-        else
-            ok = false
-            output = output .. "Couldn't list the settings files.\n"
-        end
     end
     if ok then os.remove(Sync.pendingPath(ctx)) end
     Sync.saveLog(ctx, output)
