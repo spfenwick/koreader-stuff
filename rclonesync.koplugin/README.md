@@ -1,50 +1,51 @@
 # Settings sync (rclonesync.koplugin)
 
-Pushes and pulls KOReader settings to a cloud remote with
-[rclone](https://rclone.org), so several devices can share them. It
-replaces the `PushSettings.sh` / `PullSettings.sh` / `PushTweaks.sh` /
-`PullTweaks.sh` scripts and uses the same rclone folder. The remote layout
-is close to the scripts', but not the same (see
-[Moving from the scripts](#moving-from-the-scripts)).
+Keeps KOReader's settings, chosen plugins and patches, dictionaries, fonts
+and style tweaks the same on several devices, through a Dropbox or WebDAV
+server. It needs nothing installed beyond KOReader: it uses the servers
+set up in KOReader's Cloud storage, and does the syncing itself.
 
 ## Install
 
-1. Copy `rclonesync.koplugin` into KOReader's `plugins/` folder.
-2. Keep (or create) the rclone folder next to KOReader's, as the scripts
-   had it: `rclone` (the binary for the device), `rclone.conf`, and the
-   lists of what to sync: `settings.txt`, `plugins.txt` and `patches.txt`.
-   - Kobo: `.adds/rclone/` (next to `.adds/koreader/`)
-   - Kindle: `/mnt/us/rclone/`
-   - Linux: `~/.config/rclone/` (a system `rclone` on the PATH is used if
-     the folder has no binary)
-   - Android: `/sdcard/rclone/` (see below)
-
-   `koreader/rclone/` and the plugin's own folder are also looked in, or
-   choose any folder in the menu.
-3. Restart KOReader.
+1. Copy `rclonesync.koplugin` into KOReader's `plugins/` folder and restart
+   KOReader.
+2. Add your Dropbox or WebDAV server in Cloud storage (file browser → Cloud
+   storage), if it isn't there already. Settings sync uses the first one,
+   or the one chosen under Settings sync → Server.
+3. Put the lists of what to sync in `koreader/rclonesync/` (see below). If
+   the old scripts' rclone folder is next to KOReader's folder, its lists
+   are copied from there until the device's first sync; after that the
+   rclone folder isn't used.
 
 The menu is in Tools → "Settings sync", in both the file browser and the
-reader. The four actions can also be assigned to gestures (under General:
-"Settings sync: Push settings" and so on).
+reader:
+
+- **Sync**: everything below.
+- **Preview sync**: shows what a sync would change, without changing it.
+- **Server** and **Folder on server** (`/KOReader/Settings` by default).
+- **Show last log**.
+
+Sync can be assigned to a gesture (General → "Settings sync: sync"). A sync runs in the background, and
+tapping the message cancels it; running it again finishes the job.
 
 ## What's synced
 
-| Remote (`<root>` = `/KOReader/Settings`) | Device | Direction |
+| On the server (under the folder) | On the device | |
 |---|---|---|
-| `rclone/settings.txt`, `plugins.txt`, `patches.txt` | rclone folder | both, first |
-| `settings/` | what `settings.txt` lists in `settings/` | both |
-| `plugins/` | what `plugins.txt` lists in `plugins/` | both |
-| `patches/` | what `patches.txt` lists in `patches/` | both |
-| `fonts/` | `fonts/` | pull only, nothing deleted |
-| `dict/` | `data/dict/` | both |
-| `styletweaks/` | `styletweaks/` | both |
+| `lists/` | `koreader/rclonesync/settings.txt`, `plugins.txt`, `patches.txt` | first, so the rest use the new lists |
+| `settings/` | what `settings.txt` lists in `settings/` | put in place at the next start |
+| `plugins/` | what `plugins.txt` lists in `plugins/` | |
+| `patches/` | what `patches.txt` lists in `patches/` | |
+| `fonts/` | `fonts/` | from the server only |
+| `dict/` | `data/dict/` | |
+| `styletweaks/` | `styletweaks/` | |
+| `manifest.tsv` | | every synced file and its checksum |
 
-"Style tweaks only" syncs just the lists and `styletweaks/`. As with
-the scripts, everything except fonts is `rclone sync --checksum`: the
-destination ends up matching the source, deletions included.
-
-Each list has one rclone pattern per line, relative to its folder and
-starting with `/`, so it matches only at the top of the folder:
+Each list has one pattern per line, relative to its folder and starting
+with `/`, so it matches only at the top of the folder: `*` matches within
+a name, `**` across folders, `?` one character, `{a,b}` either, and lines
+starting with `#` are comments. Anything not listed is left alone on both
+sides. Without a list, that folder isn't synced.
 
 `settings.txt`:
 
@@ -56,8 +57,8 @@ starting with `/`, so it matches only at the top of the folder:
 `plugins.txt`:
 
 ```
+/rclonesync.koplugin/**
 /assistant.koplugin/configuration.lua
-/bookshortcuts.koplugin/**
 ```
 
 `patches.txt`:
@@ -67,68 +68,61 @@ starting with `/`, so it matches only at the top of the folder:
 /2-disable-unreadable-folder-warning.lua
 ```
 
-Anything not listed is left alone on both sides: a pull doesn't delete it,
-and a push doesn't send it. A list that's missing turns that folder's sync
-off.
+Don't list `1-knuthplass-engine.lua` (or a pattern such as `/*.lua` that
+matches it): the Knuth–Plass plugin writes it for each device itself.
 
-- **Settings** are KOReader's `settings/` folder. Files elsewhere in
-  KOReader's folder (like `settings.reader.lua`) aren't synced.
-- **Plugins:** list only the ones to share, so large plugins and the ones
-  ZenPM updates stay out. A whole plugin is `/name.koplugin/**`; a plugin's
-  settings file on its own is `/name.koplugin/file.lua`.
-- **Patches:** don't list `1-knuthplass-engine.lua` (or a pattern such as
-  `/*.lua` that matches it). The Knuth–Plass plugin writes it for each
-  device itself.
-- **Fonts** are only pulled, and a pull adds and updates fonts but never
-  deletes any. Fonts installed on one device (and KOReader's own) stay
-  there, and a font removed from the remote stays on devices that have it.
-- **Icons** aren't synced.
-- **A folder missing on the device** is skipped on push instead of emptying
-  the remote copy.
+## How it decides
+
+Each device remembers what every file was when it last synced
+(`koreader/rclonesync/state.tsv`), so it can tell which side changed a
+file:
+
+- **Changed on one side:** the change is copied to the other, deletions
+  included.
+- **A file this device never had** is downloaded. It isn't taken as
+  deleted here, so adding a line to a list on a device that doesn't have
+  the file yet is safe.
+- **Changed on both sides:** the newer one is kept, and the other is saved
+  in `koreader/rclonesync/conflicts/`. A sync says when this happens.
+- **Changed on one side, deleted on the other:** the change is kept.
+
+**Fonts** come from the server's `fonts/` folder (put them there yourself)
+and are never uploaded or deleted: a font is downloaded when it's new or
+has changed on the server, fonts installed on one device stay there, and a
+font deleted on a device isn't downloaded again unless it changes on the
+server.
+
+**Settings files** are put in place the next time KOReader starts, before
+any plugin reads them, because KOReader keeps files like `gestures.lua` in
+memory and would otherwise write the old values back. A sync that pulls
+settings asks to restart. Until then a full sync is refused (it would send
+the old ones back), and the menu offers to discard them, which keeps this
+device's settings; the next sync sends them.
+
+Before a sync, KOReader saves its settings, so what's synced is what's in
+use. Files are downloaded to a temporary name and then put in place, so a
+file in use (such as a font) is replaced rather than rewritten.
 
 ## Moving from the scripts
 
-- `settings.txt` entries are now relative to `settings/`:
-  `/settings/gestures.lua` becomes `/gestures.lua`. Entries outside
-  `settings/` (like `/plugins/assistant.koplugin/configuration.lua`) move to
-  `plugins.txt` (`/assistant.koplugin/configuration.lua`).
-- `plugins.txt` lists the plugins *to* sync. The scripts' commented-out
-  plugin sync used it as a list of plugins *not* to sync.
-- `patches.txt` is new. Without it, patches aren't synced.
-- On the remote, settings are now at `<root>/settings/gestures.lua`, not
-  `<root>/settings/settings/gestures.lua`. Push from one device first. The
-  old copies under `<root>/settings/settings/` are left behind; delete
-  that folder once every device uses the plugin. Devices still on the
-  scripts won't pick up settings pushed by the plugin.
+- The lists move to `koreader/rclonesync/` (copied from the old rclone
+  folder before the first sync) and on the server to `lists/`. Edit them
+  there from now on: the old `rclone/` copies are ignored.
+- The first device to sync adds its files to the manifest. On Dropbox,
+  files the scripts already put there aren't uploaded again if they're the
+  same: the plugin checks them against Dropbox's checksums ("already on the
+  server" in the preview). Others are uploaded. On WebDAV, which has no
+  checksums, they're all uploaded once.
+- Sync first from the device whose settings you want to keep; other
+  devices then download what's different, and where both had a file that
+  differs, the newer is kept and the other saved in `conflicts/`.
+- The rclone binary, `rclone.conf` and the scripts are no longer used.
+  Files the scripts left on the server outside the lists, and the old
+  `rclone/` folder there, can be deleted.
 
-## Differences from the scripts
+## Limits
 
-- **Pushing saves first.** KOReader writes its in-memory settings to disk
-  before the push, so what's pushed is what's in use.
-- **Pulled settings files go in place at the next start.** KOReader keeps
-  files like `gestures.lua` in memory and would write the old values over
-  freshly pulled ones. So a pull puts them in `koreader/rclonesync/staging/`
-  and asks to restart. As KOReader starts, before any plugin reads its
-  settings, the plugin copies them into place. Until then, "Push settings"
-  is refused (it would send the old ones back), and the menu offers to
-  discard them. Plugins, fonts, patches, dictionaries and style tweaks are
-  pulled straight into place (a pulled plugin is used after the restart).
-- **Wi-Fi** is turned on if needed (KOReader asks as usual).
-- **Certificates:** rclone uses KOReader's own `data/ca-bundle.crt`, so
-  there's no download from curl.se.
-- **Output:** a summary when a sync finishes, the log when one fails, and
-  "Show last log" in the menu (`koreader/rclonesync/last.log`). "Dry run"
-  shows what would change without changing anything.
-- **Remote:** chosen from the remotes in `rclone.conf` (the first by
-  default). The folder on the remote can be changed too.
-- **Not included:** `InstallPatch.sh`, which copied an engine over
-  `libs/libkoreader-cre.so`. The Knuth–Plass plugin's updater now installs
-  and updates the engine without replacing KOReader's own. The `.sh`
-  scripts on the remote are left as they are.
-
-## Android
-
-Android won't run programs from shared storage. So the plugin copies
-`rclone` (an `android-arm64` build) into the app's private storage, next
-to the Knuth–Plass engine, and runs it from there. It copies it again when
-the file changes. This is untested; if it fails, the log says so.
+- Dropbox and WebDAV only (Cloud storage's FTP isn't supported).
+- On Dropbox, files over 150 MB can't be uploaded.
+- File names can't contain tabs or line breaks.
+- Device clocks decide which change is newer in a conflict.

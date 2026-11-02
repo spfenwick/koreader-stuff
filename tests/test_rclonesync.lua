@@ -1,8 +1,9 @@
--- Exercises rclonesync.koplugin: the sync module with a real rclone (a
--- "local" remote standing in for the cloud) and two simulated devices, and
--- the plugin's push/pull flow against stubbed KOReader modules.
+-- Exercises rclonesync.koplugin: list patterns, JSON, the sync engine with
+-- simulated devices and a folder standing in for the server, the Dropbox
+-- and WebDAV clients against a fake HTTP layer, and the plugin's flow
+-- against stubbed KOReader modules.
 --
--- Needs rclone on the PATH and LuaFileSystem; skipped without them.
+-- Needs LuaFileSystem and md5sum; skipped without them.
 
 package.path = "rclonesync.koplugin/?.lua;" .. package.path
 
@@ -14,10 +15,11 @@ local function sh(cmd)
 end
 
 local have_lfs, lfs = pcall(require, "lfs")
-if not have_lfs or sh("command -v rclone") == "" then
-    print("rclonesync: skipped (needs rclone and LuaFileSystem)")
+if not have_lfs or sh("command -v md5sum") == "" then
+    print("rclonesync: skipped (needs LuaFileSystem and md5sum)")
     return
 end
+package.loaded["libs/libkoreader-lfs"] = lfs
 
 local failures, count = 0, 0
 local function check(cond, msg)
@@ -43,196 +45,437 @@ local function read(path)
     return data
 end
 local function exists(path) return lfs.attributes(path) ~= nil end
+local function touch(path, t) lfs.touch(path, t, t) end
 
--- A space and a quote, to check the quoting.
+local Engine = require("rclonesync_engine")
+local Remote = require("rclonesync_remote")
+
+-- Patterns ------------------------------------------------------------------
+
+local function m(lines, path) return Engine.matches(Engine.compile(lines), path) end
+check(m({ "/gestures.lua" }, "gestures.lua"), "anchored file")
+check(not m({ "/gestures.lua" }, "x/gestures.lua"), "anchored only at the top")
+check(m({ "gestures.lua" }, "x/gestures.lua"), "unanchored at any depth")
+check(m({ "/ZenOS/**" }, "ZenOS/a/b.lua"), "** crosses folders")
+check(not m({ "/ZenOS/*" }, "ZenOS/a/b.lua"), "* stays in a folder")
+check(m({ "/ZenOS/*" }, "ZenOS/b.lua"), "* in a folder")
+check(m({ "/2-*.lua" }, "2-fold-8-fix.lua") and not m({ "/2-*.lua" }, "1-x.lua"), "* in a name")
+check(m({ "/{a,b}.lua" }, "b.lua") and not m({ "/{a,b}.lua" }, "c.lua"), "{a,b}")
+check(m({ "/x?.lua" }, "x1.lua") and not m({ "/x?.lua" }, "x12.lua"), "?")
+check(m({ "/a-b.lua" }, "a-b.lua") and not m({ "/a.lua" }, "aXlua"), "magic characters literal")
+check(not m({ "# /a.lua", "", "  ; /b.lua" }, "a.lua"), "comments and blank lines")
+check(m({ "  /a.lua  " }, "a.lua"), "spaces trimmed")
+check(m({ "/[ab].lua" }, "a.lua") and not m({ "/[!ab].lua" }, "a.lua"), "character classes")
+
+-- JSON ------------------------------------------------------------------------
+
+-- JSON escapes written as U"00e9" (a backslash, u, and the hex digits).
+local function U(hex) return "\\" .. "u" .. hex end
+local fonts_path = "/Fonts/" .. string.char(0xC3, 0x89) .. " " .. string.char(0xC3, 0xBC) .. " "
+    .. string.char(0xE5, 0xAD, 0x97) .. ".ttf"
+local emoji = string.char(0xF0, 0x9F, 0x98, 0x80)
+check(Remote.jsonEncode({ path = fonts_path })
+    == '{"path":"/Fonts/' .. U"00c9" .. " " .. U"00fc" .. " " .. U"5b57" .. '.ttf"}',
+    "JSON escapes non-ASCII: " .. Remote.jsonEncode({ path = fonts_path }))
+check(Remote.jsonEncode({ p = emoji }) == '{"p":"' .. U"d83d" .. U"de00" .. '"}', "JSON surrogate pairs")
+local decoded = Remote.jsonDecode([[{"a": [1, 2.5, true, null, "x"], "b": {}}]])
+check(decoded and decoded.a[1] == 1 and decoded.a[2] == 2.5 and decoded.a[3] == true, "JSON decode")
+local d2 = Remote.jsonDecode('{"s": "x\\"' .. U"00e9" .. U"d83d" .. U"de00" .. '\\n"}')
+check(d2 and d2.s == 'x"' .. string.char(0xC3, 0xA9) .. emoji .. "\n", "JSON decode escapes")
+check(Remote.jsonDecode("{bad") == nil, "JSON decode error")
+
+-- Manifest --------------------------------------------------------------------
+
+local man = { settings = { ["gestures.lua"] = { h = "abc", s = 3, t = 100, by = "Kobo" } } }
+local back = Engine.parseManifest(Engine.formatManifest(man))
+check(back.settings["gestures.lua"].h == "abc" and back.settings["gestures.lua"].t == 100
+    and back.settings["gestures.lua"].by == "Kobo", "manifest round trip")
+
+-- The engine --------------------------------------------------------------------
+
+-- A space and a quote, to check paths are handled.
 local base = sh("mktemp -d"):gsub("%s+$", "") .. "/it's here"
 os.execute("mkdir -p " .. q(base))
-local cloud = base .. "/cloud"
+local server_dir = base .. "/server"
+os.execute("mkdir -p " .. q(server_dir))
 
--- Two devices: koreader/ and rclone/ side by side, as on a Kobo.
+local function md5(path) return Engine.md5Files({ path })[path] end
+local server = { type = "folder", address = server_dir, versioner = md5 }
+local ROOT = "/KOReader/Settings"
+local remote_root = server_dir .. ROOT
+
 local function device(name)
-    local d = { kodir = base .. "/" .. name .. "/koreader", rclone_dir = base .. "/" .. name .. "/rclone" }
-    write(d.rclone_dir .. "/rclone.conf", "[Local]\ntype = local\n\n[Other]\ntype = local\n")
-    os.execute("ln -s \"$(command -v rclone)\" " .. q(d.rclone_dir .. "/rclone"))
-    return d
-end
-local A, B = device("a"), device("b")
-
-local current = A
-package.loaded["libs/libkoreader-lfs"] = lfs
-package.loaded["datastorage"] = { getDataDir = function() return current.kodir end }
-
-local Sync = require("rclonesync_sync")
-local opts = { remote = "Local", root = cloud .. "/KOReader/Settings" }
-
-local function run(ctx, direction, tweaks)
-    local out = sh(Sync.script(ctx, direction, tweaks))
-    return Sync.parse(out, direction), out
+    local kodir = base .. "/" .. name .. "/koreader"
+    os.execute("mkdir -p " .. q(kodir))
+    return { name = name, kodir = kodir, paths = Engine.paths(kodir) }
 end
 
--- Quoting
-check(Sync.quote("it's") == [['it'\''s']], "quote")
+local function sync(dev, opts)
+    local remote = assert(Remote.new(server, ROOT))
+    return Engine.sync({ paths = dev.paths, remote = remote, device = dev.name }, opts)
+end
 
--- Device A's files
-write(A.rclone_dir .. "/settings.txt", "/gestures.lua\n/ZenOS/**\n")
-write(A.rclone_dir .. "/patches.txt", "/2-mine.lua\n")
--- Outside settings/: not synced, even if named like a listed file.
-write(A.kodir .. "/gestures.lua", "-- not a setting\n")
+local A, B, C = device("A"), device("B"), device("C")
+
+-- A's files and lists.
+write(A.paths.state .. "/settings.txt", "/gestures.lua\n/ZenOS/**\n")
+write(A.paths.state .. "/plugins.txt", "/shared.koplugin/**\n/assistant.koplugin/configuration.lua\n")
+write(A.paths.state .. "/patches.txt", "/2-mine.lua\n")
 write(A.kodir .. "/settings/gestures.lua", "return { a = 1 }\n")
 write(A.kodir .. "/settings/ZenOS/config.lua", "return {}\n")
 write(A.kodir .. "/settings/unlisted.lua", "return {}\n")
+write(A.kodir .. "/plugins/shared.koplugin/main.lua", "-- shared\n")
+write(A.kodir .. "/plugins/big.koplugin/main.lua", "-- big\n")
+write(A.kodir .. "/plugins/assistant.koplugin/configuration.lua", "return { key = 1 }\n")
+write(A.kodir .. "/plugins/assistant.koplugin/main.lua", "-- assistant\n")
 write(A.kodir .. "/patches/2-mine.lua", "-- mine\n")
-write(A.kodir .. "/patches/1-knuthplass-engine.lua", "-- device A's\n")
 write(A.kodir .. "/patches/2-a-only.lua", "-- unlisted\n")
 write(A.kodir .. "/fonts/a.ttf", "font a\n")
 write(A.kodir .. "/data/dict/d.ifo", "dict\n")
-write(A.kodir .. "/icons/i.svg", "<svg/>\n")
-write(A.rclone_dir .. "/plugins.txt", "/shared.koplugin/**\n")
-write(A.kodir .. "/plugins/shared.koplugin/main.lua", "-- shared\n")
-write(A.kodir .. "/plugins/big.koplugin/main.lua", "-- big\n")
 write(A.kodir .. "/styletweaks/t.css", "p {}\n")
 
--- Context
-current = A
-local ctx = assert(Sync.context(opts))
-check(ctx.rclone_dir == A.rclone_dir, "rclone folder found next to koreader/")
-check(ctx.binary == A.rclone_dir .. "/rclone", "rclone in the rclone folder")
-check(ctx.config == A.rclone_dir .. "/rclone.conf", "rclone.conf")
-local remotes = Sync.remotes(ctx)
-check(#remotes == 2 and remotes[1] == "Local" and remotes[2] == "Other", "remotes from rclone.conf")
-check(assert(Sync.context({ root = opts.root })).remote == "Local", "first remote by default")
+-- First sync from A: everything listed goes up.
+local r = sync(A)
+check(not r.fatal and #r.errors == 0, "A's first sync\n" .. r.log)
+check(read(remote_root .. "/settings/gestures.lua") == "return { a = 1 }\n", "settings uploaded")
+check(exists(remote_root .. "/settings/ZenOS/config.lua"), "listed folder uploaded")
+check(not exists(remote_root .. "/settings/unlisted.lua"), "unlisted setting not uploaded")
+check(exists(remote_root .. "/plugins/shared.koplugin/main.lua"), "listed plugin uploaded")
+check(exists(remote_root .. "/plugins/assistant.koplugin/configuration.lua"), "plugin file uploaded")
+check(not exists(remote_root .. "/plugins/assistant.koplugin/main.lua"), "rest of the plugin not")
+check(not exists(remote_root .. "/plugins/big.koplugin"), "unlisted plugin not uploaded")
+check(exists(remote_root .. "/patches/2-mine.lua") and not exists(remote_root .. "/patches/2-a-only.lua"),
+    "only listed patches uploaded")
+check(not exists(remote_root .. "/fonts"), "fonts not uploaded")
+check(exists(remote_root .. "/dict/d.ifo") and exists(remote_root .. "/styletweaks/t.css"),
+    "dict and style tweaks uploaded")
+check(exists(remote_root .. "/lists/plugins.txt"), "lists uploaded")
+check(exists(remote_root .. "/manifest.tsv"), "manifest uploaded")
+check(r.uploaded == 10, "10 uploads: " .. r.uploaded)
 
--- Jobs
-local names = {}
-for _, j in ipairs(Sync.jobs("push", false)) do table.insert(names, j.name) end
-check(table.concat(names, ",") == "list,settings,plugins,patches,dict,styletweaks", "push skips fonts")
-names = {}
-for _, j in ipairs(Sync.jobs("pull", true)) do table.insert(names, j.name) end
-check(table.concat(names, ",") == "list,styletweaks", "tweaks only")
+-- Nothing to do the second time.
+r = sync(A)
+check(not r.fatal and r.uploaded == 0 and r.downloaded == 0, "A's second sync does nothing\n" .. r.log)
 
--- Push from A
-local result, out = run(ctx, "push", false)
-local remote = cloud .. "/KOReader/Settings"
-check(not result.failed, "push succeeds\n" .. out)
-check(result.changes > 0, "push copies files")
-check(read(remote .. "/settings/gestures.lua") == "return { a = 1 }\n", "listed setting pushed, rooted at settings/")
-check(exists(remote .. "/settings/ZenOS/config.lua"), "listed folder pushed")
-check(not exists(remote .. "/settings/unlisted.lua"), "unlisted setting not pushed")
-check(not exists(remote .. "/settings/settings"), "no nested settings/")
-check(exists(remote .. "/patches/2-mine.lua"), "listed patch pushed")
-check(not exists(remote .. "/patches/2-a-only.lua"), "unlisted patch not pushed")
-check(not exists(remote .. "/patches/1-knuthplass-engine.lua"), "Knuth–Plass patch not pushed")
-check(exists(remote .. "/rclone/patches.txt"), "patch list pushed")
-check(not exists(remote .. "/fonts"), "fonts not pushed")
-check(exists(remote .. "/rclone/settings.txt"), "list pushed")
-check(exists(remote .. "/dict/d.ifo"), "dict pushed")
-check(not exists(remote .. "/icons"), "icons not synced")
-check(exists(remote .. "/rclone/plugins.txt"), "plugin list pushed")
-check(exists(remote .. "/plugins/shared.koplugin/main.lua"), "listed plugin pushed")
-check(not exists(remote .. "/plugins/big.koplugin"), "unlisted plugin not pushed")
+-- Fonts only ever come from the server: put some there.
+write(remote_root .. "/fonts/shared.ttf", "shared\n")
+write(remote_root .. "/fonts/sub/deep.otf", "deep\n")
 
--- Fonts only ever go down: put some on the remote.
-write(remote .. "/fonts/shared.ttf", "shared\n")
-
--- Pull to B, which has its own Knuth–Plass patch, a font of its own and no list yet.
-current = B
-write(B.kodir .. "/patches/1-knuthplass-engine.lua", "-- device B's\n")
-write(B.kodir .. "/patches/2-b-only.lua", "-- B's\n")
+-- B: a new device with its own settings, patch, plugin and font, no lists.
 write(B.kodir .. "/settings/gestures.lua", "return { b = 2 }\n")
+write(B.kodir .. "/patches/2-b-only.lua", "-- B's\n")
 write(B.kodir .. "/plugins/own.koplugin/main.lua", "-- B's own\n")
-local bctx = assert(Sync.context(opts))
-check(not Sync.isPending(bctx), "nothing pending at first")
-result, out = run(bctx, "pull", false)
-check(not result.failed, "pull succeeds\n" .. out)
-check(exists(B.rclone_dir .. "/settings.txt"), "list pulled first")
-check(result.jobs.settings and result.jobs.settings.differ, "settings differ")
-check(result.pending and result.restart, "pull wants a restart")
-check(read(B.kodir .. "/settings/gestures.lua") == "return { b = 2 }\n", "settings staged, not in place")
-check(exists(B.kodir .. "/fonts/shared.ttf"), "fonts pulled")
-check(read(B.kodir .. "/patches/1-knuthplass-engine.lua") == "-- device B's\n", "own Knuth–Plass patch kept")
-check(exists(B.kodir .. "/patches/2-mine.lua"), "listed patch pulled")
-check(exists(B.kodir .. "/patches/2-b-only.lua"), "B's unlisted patch kept")
-check(not exists(B.kodir .. "/patches/2-a-only.lua"), "A's unlisted patch not pulled")
-check(exists(B.rclone_dir .. "/plugins.txt"), "plugin list pulled")
-check(read(B.kodir .. "/plugins/shared.koplugin/main.lua") == "-- shared\n", "listed plugin pulled")
-check(read(B.kodir .. "/plugins/own.koplugin/main.lua") == "-- B's own\n", "unlisted plugin kept")
-check(not exists(B.kodir .. "/icons"), "icons not pulled")
-
--- Put the staged settings in place, as at the next start.
-Sync.setPending(bctx)
-check(Sync.isPending(bctx), "pending")
-local ok, apply_out = Sync.applyPending(bctx)
-check(ok, "apply succeeds\n" .. apply_out)
-check(not Sync.isPending(bctx), "not pending once applied")
-check(read(B.kodir .. "/settings/gestures.lua") == "return { a = 1 }\n", "settings in place")
-check(exists(B.kodir .. "/settings/ZenOS/config.lua"), "listed folder in place")
-
--- A settings file deleted on A goes from B too; files not listed stay.
-write(B.kodir .. "/settings/unlisted.lua", "return {}\n")
-current = A
-os.remove(A.kodir .. "/settings/ZenOS/config.lua")
-write(A.kodir .. "/settings/ZenOS/home.lua", "return {}\n")
-check(not run(ctx, "push", false).failed, "push the deletion")
-current = B
-result = run(bctx, "pull", false)
-check(result.pending, "deletion pulled")
-check(Sync.applyPending(bctx), "deletion applied")
-check(not exists(B.kodir .. "/settings/ZenOS/config.lua"), "deleted file removed")
-check(exists(B.kodir .. "/settings/ZenOS/home.lua"), "new file in place")
-check(exists(B.kodir .. "/settings/unlisted.lua"), "unlisted file kept")
-check(exists(Sync.stagingDir(bctx) .. "/ZenOS/home.lua"), "staging kept")
-
--- Pulling again: nothing to do.
-result, out = run(bctx, "pull", false)
-check(not result.failed and result.changes == 0 and not result.pending and not result.restart,
-    "second pull does nothing\n" .. out)
-
--- A font installed on B alone stays on B, and doesn't reach the remote.
 write(B.kodir .. "/fonts/b-only.ttf", "b\n")
-result = run(bctx, "push", false)
-check(not result.failed, "push from B")
-check(not exists(remote .. "/fonts/b-only.ttf"), "B's font not pushed")
-write(remote .. "/fonts/shared.ttf", "shared, updated\n")
-result = run(bctx, "pull", false)
-check(not result.failed, "pull to B")
-check(exists(B.kodir .. "/fonts/b-only.ttf"), "B's own font kept by a pull")
-check(read(B.kodir .. "/fonts/shared.ttf") == "shared, updated\n", "changed font updated")
-os.remove(remote .. "/fonts/shared.ttf")
-run(bctx, "pull", false)
-check(exists(B.kodir .. "/fonts/shared.ttf"), "font deleted from the remote kept on the device")
+touch(B.kodir .. "/settings/gestures.lua", os.time() - 3600) -- older than A's
+r = sync(B)
+check(not r.fatal and #r.errors == 0, "B's first sync\n" .. r.log)
+check(exists(B.paths.state .. "/plugins.txt"), "lists downloaded first")
+check(r.pending and r.restart, "settings wait for a restart")
+check(read(B.kodir .. "/settings/gestures.lua") == "return { b = 2 }\n", "settings not in place yet")
+check(#r.conflicts == 1 and r.conflicts[1].path == "settings/gestures.lua" and r.conflicts[1].kept == "A",
+    "both had gestures.lua: A's is newer")
+check(exists(B.kodir .. "/plugins/assistant.koplugin/configuration.lua"), "plugin file downloaded")
+check(exists(B.kodir .. "/plugins/own.koplugin/main.lua"), "unlisted plugin kept")
+check(exists(B.kodir .. "/patches/2-mine.lua") and exists(B.kodir .. "/patches/2-b-only.lua"),
+    "listed patch downloaded, own kept")
+check(read(B.kodir .. "/fonts/shared.ttf") == "shared\n" and exists(B.kodir .. "/fonts/sub/deep.otf"),
+    "fonts downloaded")
+check(exists(B.kodir .. "/fonts/b-only.ttf"), "own font kept")
+check(not exists(remote_root .. "/fonts/b-only.ttf"), "own font not uploaded")
+check(read(B.kodir .. "/styletweaks/t.css") == "p {}\n", "style tweaks downloaded")
 
--- Dry run: reports, changes nothing.
+-- A sync waits for the restart.
+r = sync(B)
+check(r.fatal and r.fatal:find("restart"), "sync refused while settings wait")
+
+-- The restart.
+local ok, apply_log = Engine.applyPending(B.paths)
+check(ok, "settings put in place\n" .. tostring(apply_log))
+check(read(B.kodir .. "/settings/gestures.lua") == "return { a = 1 }\n", "A's gestures in place")
+check(exists(B.kodir .. "/settings/ZenOS/config.lua"), "listed folder in place")
+check(not Engine.isPending(B.paths), "nothing waiting")
+check(Engine.applyPending(B.paths) == nil, "nothing to put in place twice")
+local conflict_copy = sh("find " .. q(B.paths.conflicts) .. " -name gestures.lua"):gsub("%s+$", "")
+check(conflict_copy ~= "" and read(conflict_copy) == "return { b = 2 }\n", "B's own gestures kept in conflicts/")
+
+r = sync(B)
+check(not r.fatal and r.uploaded == 0 and r.downloaded == 0 and #r.conflicts == 0,
+    "B's next sync does nothing\n" .. r.log)
+
+-- A catches up on the fonts put on the server.
+r = sync(A)
+check(r.downloaded == 2 and exists(A.kodir .. "/fonts/sub/deep.otf"), "A gets the server's fonts\n" .. r.log)
+
+-- An edit on B reaches A.
 write(B.kodir .. "/styletweaks/t.css", "p { margin: 0 }\n")
-bctx.dry_run = true
-result, out = run(bctx, "push", true)
-check(not result.failed and result.changes == 1, "dry run counts the change\n" .. out)
-check(read(remote .. "/styletweaks/t.css") == "p {}\n", "dry run changes nothing")
-bctx.dry_run = false
+check(sync(B).uploaded == 1, "B uploads its tweak")
+r = sync(A)
+check(r.downloaded == 1 and read(A.kodir .. "/styletweaks/t.css") == "p { margin: 0 }\n", "A gets it\n" .. r.log)
+check(not r.restart, "style tweaks need no restart")
 
--- A missing folder is skipped on push, not mirrored as empty.
-os.execute("rm -rf " .. q(B.kodir .. "/data/dict"))
-result, out = run(bctx, "push", false)
-check(result.jobs.dict.skipped == "no folder", "missing folder skipped\n" .. out)
-check(exists(remote .. "/dict/d.ifo"), "remote dict kept")
+-- A changed patch.
+write(A.kodir .. "/patches/2-mine.lua", "-- mine, changed\n")
+r = sync(A)
+check(r.uploaded == 1 and read(remote_root .. "/patches/2-mine.lua") == "-- mine, changed\n", "sync sends it")
+r = sync(B)
+check(r.downloaded == 1 and r.restart and read(B.kodir .. "/patches/2-mine.lua") == "-- mine, changed\n",
+    "B gets the patch and needs a restart")
 
--- No plugins.txt: plugins skipped, the rest still runs.
-local D = device("d")
-current = D
-write(D.rclone_dir .. "/settings.txt", "/gestures.lua\n")
-write(D.kodir .. "/settings/gestures.lua", "return {}\n")
-local dctx = assert(Sync.context({ remote = "Local", root = cloud .. "/other" }))
-result, out = run(dctx, "push", false)
-check(not result.failed and result.jobs.plugins.skipped == "no plugins.txt", "no plugin list: skipped\n" .. out)
-check(exists(cloud .. "/other/settings/gestures.lua"), "settings still pushed")
-check(result.jobs.patches.skipped == "no patches.txt", "no patch list: skipped")
-current = B
+-- C has never had assistant's configuration: it gets it, rather than
+-- deleting it everywhere.
+write(C.kodir .. "/plugins/assistant.koplugin/main.lua", "-- assistant\n")
+r = sync(C)
+check(not r.fatal and r.deleted_server == 0, "C deletes nothing on the server\n" .. r.log)
+check(exists(C.kodir .. "/plugins/assistant.koplugin/configuration.lua"), "C gets the configuration")
+check(exists(remote_root .. "/plugins/assistant.koplugin/configuration.lua"), "still on the server")
+Engine.applyPending(C.paths)
 
--- A failing remote is reported.
-local bad = assert(Sync.context({ remote = "Missing", root = opts.root }))
-result = run(bad, "push", true)
-check(result.failed and result.jobs.list.failed, "failure reported")
+-- A deletion on A reaches B, staged for settings.
+os.remove(A.kodir .. "/settings/ZenOS/config.lua")
+os.remove(A.kodir .. "/plugins/assistant.koplugin/configuration.lua")
+r = sync(A)
+check(r.deleted_server == 2, "A's deletions go to the server\n" .. r.log)
+check(not exists(remote_root .. "/settings/ZenOS/config.lua"), "deleted on the server")
+r = sync(B)
+check(r.deleted_here == 2 and r.pending, "B deletes them\n" .. r.log)
+check(not exists(B.kodir .. "/plugins/assistant.koplugin/configuration.lua"), "plugin file deleted at once")
+check(exists(B.kodir .. "/settings/ZenOS/config.lua"), "setting deleted only at the restart")
+Engine.applyPending(B.paths)
+check(not exists(B.kodir .. "/settings/ZenOS/config.lua"), "setting deleted at the restart")
 
--- The plugin ---------------------------------------------------------------
+-- Changed on one side, deleted on the other: the change wins.
+write(C.kodir .. "/settings/ZenOS/config.lua", "return { c = 3 }\n")
+r = sync(C)
+check(r.uploaded == 1 and read(remote_root .. "/settings/ZenOS/config.lua") == "return { c = 3 }\n",
+    "an edit beats a deletion\n" .. r.log)
+
+-- Both changed: the newer is kept, the other saved.
+write(A.kodir .. "/styletweaks/t.css", "A\n")
+touch(A.kodir .. "/styletweaks/t.css", os.time() - 60)
+write(B.kodir .. "/styletweaks/t.css", "B\n")
+check(sync(B).uploaded == 1, "B uploads first")
+r = sync(A)
+check(#r.conflicts == 1 and r.conflicts[1].kept == "B", "B's is newer")
+check(read(A.kodir .. "/styletweaks/t.css") == "B\n", "A gets B's")
+check(r.conflicts[1] and r.conflicts[1].copy and read(r.conflicts[1].copy) == "A\n", "A's saved")
+
+-- Fonts: changes on the server come down; deletions on the server and
+-- fonts deleted here stay as they are.
+write(remote_root .. "/fonts/shared.ttf", "shared, updated\n")
+os.remove(remote_root .. "/fonts/sub/deep.otf")
+os.remove(B.kodir .. "/fonts/b-only.ttf")
+Engine.applyPending(B.paths)
+r = sync(B)
+check(read(B.kodir .. "/fonts/shared.ttf") == "shared, updated\n", "changed font downloaded")
+check(exists(B.kodir .. "/fonts/sub/deep.otf"), "font deleted on the server kept")
+os.remove(B.kodir .. "/fonts/shared.ttf")
+Engine.applyPending(B.paths)
+r = sync(B)
+check(not exists(B.kodir .. "/fonts/shared.ttf") and r.downloaded == 0, "font deleted here stays deleted\n" .. r.log)
+Engine.applyPending(B.paths)
+
+-- Preview changes nothing.
+write(A.kodir .. "/styletweaks/new.css", "new\n")
+Engine.applyPending(A.paths)
+r = sync(A, { preview = true })
+check(r.uploaded >= 1 and r.log:find("new.css", 1, true), "preview lists the change\n" .. r.log)
+check(not exists(remote_root .. "/styletweaks/new.css"), "preview uploads nothing")
+
+-- A missing list skips its folder.
+local D = device("D")
+write(D.kodir .. "/patches/2-d.lua", "-- D\n")
+local d_server = { type = "folder", address = base .. "/other", versioner = md5 }
+r = Engine.sync({ paths = D.paths, remote = Remote.new(d_server, ROOT), device = "D" })
+check(not r.fatal and #r.skipped == 3, "no lists: settings, plugins and patches skipped\n" .. r.log)
+check(not exists(base .. "/other" .. ROOT .. "/patches"), "no patches uploaded")
+
+-- Another device saving the file list mid-sync: the sync runs again.
+local remote = Remote.new(server, ROOT)
+local put = remote.put
+local interfered = false
+remote.put = function(self, path, local_path, opts)
+    if path == "manifest.tsv" and not interfered then
+        interfered = true
+        -- Someone else's sync finishes first.
+        write(remote_root .. "/styletweaks/other.css", "other\n")
+        local text = read(remote_root .. "/manifest.tsv") .. "styletweaks\tother.css\t"
+            .. md5(remote_root .. "/styletweaks/other.css") .. "\t6\t1\tX\n"
+        write(remote_root .. "/manifest.tsv", text)
+    end
+    return put(self, path, local_path, opts)
+end
+r = Engine.sync({ paths = A.paths, remote = remote, device = "A" })
+check(not r.fatal, "sync after a clash\n" .. r.log)
+local manifest = Engine.parseManifest(read(remote_root .. "/manifest.tsv"))
+check(manifest.styletweaks["other.css"] and manifest.styletweaks["new.css"],
+    "both devices' changes in the file list")
+check(read(A.kodir .. "/styletweaks/other.css") == "other\n", "the other device's file downloaded")
+
+-- Files already on the server from before (the scripts): not uploaded
+-- again when they're the same, which Dropbox's content hashes tell.
+local F = device("F")
+local f_dir = base .. "/old-dropbox"
+write(F.paths.state .. "/patches.txt", "/*.lua\n")
+write(F.kodir .. "/data/dict/big.dict", string.rep("dictionary ", 500000)) -- over 4 MB
+write(F.kodir .. "/patches/2-same.lua", "-- same\n")
+write(F.kodir .. "/patches/2-differs.lua", "-- here\n")
+write(F.kodir .. "/patches/2-new.lua", "-- new\n")
+write(f_dir .. ROOT .. "/dict/big.dict", string.rep("dictionary ", 500000))
+write(f_dir .. ROOT .. "/patches/2-same.lua", "-- same\n")
+write(f_dir .. ROOT .. "/patches/2-differs.lua", "-- ther\n") -- same size, different
+local f_server = { type = "folder", address = f_dir, versioner = md5, dropbox_like = true }
+r = Engine.sync({ paths = F.paths, remote = Remote.new(f_server, ROOT), device = "F" }, { preview = true })
+check(r.already_there == 2 and r.log:find("= big.dict (already on the server)", 1, true),
+    "preview shows files already there\n" .. r.log)
+r = Engine.sync({ paths = F.paths, remote = Remote.new(f_server, ROOT), device = "F" })
+check(not r.fatal and r.already_there == 2 and r.uploaded == 3,
+    "same files not uploaded; differing and new ones are (and the list)\n" .. r.log)
+check(read(f_dir .. ROOT .. "/patches/2-differs.lua") == "-- here\n", "differing file uploaded")
+manifest = Engine.parseManifest(read(f_dir .. ROOT .. "/manifest.tsv"))
+check(manifest.dict and manifest.dict["big.dict"] and manifest.patches["2-same.lua"],
+    "files already there are in the file list")
+r = Engine.sync({ paths = F.paths, remote = Remote.new(f_server, ROOT), device = "F" })
+check(r.uploaded == 0 and r.downloaded == 0 and r.already_there == 0, "then nothing to do\n" .. r.log)
+
+-- A new device that already has the same files downloads nothing.
+local G = device("G")
+Engine.applyPending(A.paths) -- A up to date first
+os.execute("cp -R " .. q(A.kodir) .. "/. " .. q(G.kodir))
+-- Keep the lists; forget A's sync history.
+for _, name in ipairs({ "state.tsv", "cache.tsv", "pending.tsv", "staging", "conflicts" }) do
+    os.execute("rm -rf " .. q(G.paths.state .. "/" .. name))
+end
+os.execute("cp -R " .. q(B.kodir .. "/fonts") .. " " .. q(G.kodir)) -- B has the server's fonts
+r = sync(G)
+check(not r.fatal and r.downloaded == 0 and r.uploaded == 0 and #r.conflicts == 0,
+    "first sync of a device with the same files: nothing transferred\n" .. r.log)
+r = sync(G)
+check(r.downloaded == 0 and r.uploaded == 0, "and nothing the next time")
+
+-- Lists from the scripts' rclone folder.
+local E = device("E")
+write(base .. "/E/rclone/settings.txt", "/gestures.lua\n")
+local copied = Engine.migrateLists(E.paths, { base .. "/E/rclone" })
+check(#copied == 1 and read(E.paths.state .. "/settings.txt") == "/gestures.lua\n", "lists migrated")
+check(#Engine.migrateLists(E.paths, { base .. "/E/rclone" }) == 0, "only once")
+-- A device still with the scripts' old list, after the list was edited on
+-- another device: the edit wins, rather than the old copy looking new.
+local H = device("H")
+local h_server = { type = "folder", address = base .. "/h-server", versioner = md5 }
+local H0 = device("H0")
+write(H0.paths.state .. "/settings.txt", "/gestures.lua\n/new.lua\n") -- edited today
+Engine.sync({ paths = H0.paths, remote = Remote.new(h_server, ROOT), device = "H0" })
+write(base .. "/H/rclone/settings.txt", "/gestures.lua\n")
+touch(base .. "/H/rclone/settings.txt", os.time() - 86400 * 7) -- from last week
+Engine.migrateLists(H.paths, { base .. "/H/rclone" })
+check(lfs.attributes(H.paths.state .. "/settings.txt", "modification") == os.time() - 86400 * 7
+    or lfs.attributes(H.paths.state .. "/settings.txt", "modification") < os.time() - 86000 * 7,
+    "copied list keeps its date")
+r = Engine.sync({ paths = H.paths, remote = Remote.new(h_server, ROOT), device = "H" })
+check(r.uploaded == 0 and read(H.paths.state .. "/settings.txt") == "/gestures.lua\n/new.lua\n",
+    "the edited list wins over the old copy\n" .. r.log)
+check(read(base .. "/h-server" .. ROOT .. "/lists/settings.txt") == "/gestures.lua\n/new.lua\n",
+    "the server keeps the edited list")
+
+-- After the first sync, the old folder is never used again.
+write(base .. "/E/rclone/patches.txt", "/old.lua\n")
+local e_server = { type = "folder", address = base .. "/e-server", versioner = md5 }
+Engine.sync({ paths = E.paths, remote = Remote.new(e_server, ROOT), device = "E" })
+os.remove(E.paths.state .. "/settings.txt")
+check(#Engine.migrateLists(E.paths, { base .. "/E/rclone" }) == 0
+    and not exists(E.paths.state .. "/settings.txt") and not exists(E.paths.state .. "/patches.txt"),
+    "old lists not copied after the first sync")
+check(read(base .. "/e-server" .. ROOT .. "/lists/settings.txt") == "/gestures.lua\n",
+    "lists synced from koreader/rclonesync/ to lists/")
+
+-- Dropbox and WebDAV ------------------------------------------------------------
+
+local real_request = Remote.request
+local requests, responses = {}, {}
+Remote.request = function(opts)
+    table.insert(requests, opts)
+    local resp = table.remove(responses, 1) or { 500 }
+    if opts.sink_path and resp.file then write(opts.sink_path, resp.file) end
+    return resp[1], resp.headers or {}, resp.body or ""
+end
+package.loaded["ffi/sha2"] = { bin_to_base64 = function(s) return "b64(" .. s .. ")" end }
+local some_file = remote_root .. "/manifest.tsv"
+
+local db = Remote.new({ type = "dropbox", password = "refresh", address = "key:secret" }, "/KOReader/Settings/")
+responses = { { 200, body = [[{"access_token": "tok"}]] }, { 200, file = "data",
+    headers = { ["dropbox-api-result"] = [[{"rev": "r1"}]] } } }
+local tmp = base .. "/dl"
+local got, rev = db:get("settings/Été.lua", tmp)
+check(got and rev == "r1" and read(tmp) == "data", "Dropbox download")
+check(requests[1].headers.Authorization == "Basic b64(key:secret)", "Dropbox token refresh")
+check(requests[2].headers["Dropbox-API-Arg"]
+    == '{"path":"/KOReader/Settings/settings/' .. U"00c9" .. "t" .. U"00e9" .. '.lua"}',
+    "Dropbox path escaped: " .. tostring(requests[2].headers["Dropbox-API-Arg"]))
+check(requests[2].headers.Authorization == "Bearer tok", "Dropbox token used")
+responses = { { 409, file = [[{"error_summary": "path/not_found/.."}]] } }
+local _, err = db:get("manifest.tsv", tmp)
+check(err == "not_found" and not exists(tmp), "Dropbox missing file")
+responses = { { 409, body = [[{"error_summary": "path/conflict/file/.."}]] } }
+_, err = db:put("manifest.tsv", some_file, { version = "r1" })
+check(err == "conflict", "Dropbox upload conflict")
+check(requests[#requests].headers["Dropbox-API-Arg"]:find([["mode":{".tag":"update","update":"r1"}]], 1, true),
+    "Dropbox conditional upload")
+responses = {
+    { 200, body = [[{"entries": [{".tag": "file", "path_display": "/koreader/settings/fonts/a.ttf", "size": 3, "content_hash": "h1"},
+        {".tag": "folder", "path_display": "/KOReader/Settings/fonts/sub"}], "has_more": true, "cursor": "c"}]] },
+    { 200, body = [[{"entries": [{".tag": "file", "path_display": "/KOReader/Settings/fonts/sub/b.ttf", "size": 4, "content_hash": "h2"}], "has_more": false}]] },
+}
+local listed = db:list("fonts")
+check(listed and listed["a.ttf"] and listed["a.ttf"].fp == "h1" and listed["sub/b.ttf"].size == 4,
+    "Dropbox listing, any case, two pages")
+responses = { { 409, body = [[{"error_summary": "path_lookup/not_found/"}]] } }
+check(db:delete("x") == true, "Dropbox delete of a missing file")
+
+requests = {}
+local dav = Remote.new({ type = "webdav", address = "https://dav.example/remote.php/dav/", username = "u", password = "p" },
+    "/KOReader/Settings")
+responses = { { 412 } }
+_, err = dav:put("manifest.tsv", some_file, { version = '"e1"' })
+check(err == "conflict" and requests[1].headers["If-Match"] == '"e1"', "WebDAV conditional upload")
+check(requests[1].url == "https://dav.example/remote.php/dav/KOReader/Settings/manifest.tsv",
+    "WebDAV URL: " .. tostring(requests[1].url))
+check(requests[1].headers.Authorization == "Basic b64(u:p)", "WebDAV login")
+responses = { { 201 } }
+dav:put("new", some_file, { create = true })
+check(requests[2].headers["If-None-Match"] == "*", "WebDAV create only")
+requests = {}
+responses = { { 405 }, { 405 }, { 201 }, { 201 } }
+check(dav:mkdirs("settings/My Dir"), "WebDAV folders")
+check(requests[4] and requests[4].url == "https://dav.example/remote.php/dav/KOReader/Settings/settings/My%20Dir",
+    "WebDAV folder URL encoded: " .. tostring(requests[4] and requests[4].url))
+local before = #requests
+dav:mkdirs("settings/My Dir")
+check(#requests == before, "WebDAV folders made once each")
+requests = {}
+responses = {
+    { 207, body = [[<d:multistatus xmlns:d="DAV:">
+<d:response><d:href>/remote.php/dav/KOReader/Settings/fonts/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+<d:response><d:href>/remote.php/dav/KOReader/Settings/fonts/A%20b.ttf</d:href><d:propstat><d:prop><d:resourcetype/><d:getcontentlength>5</d:getcontentlength><d:getetag>&quot;e5&quot;</d:getetag></d:prop></d:propstat></d:response>
+<d:response><d:href>https://dav.example/remote.php/dav/KOReader/Settings/fonts/sub/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+</d:multistatus>]] },
+    { 207, body = [[<D:multistatus xmlns:D="DAV:">
+<D:response><D:href>/remote.php/dav/KOReader/Settings/fonts/sub/</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat></D:response>
+<D:response><D:href>/remote.php/dav/KOReader/Settings/fonts/sub/c.otf</D:href><D:propstat><D:prop><D:resourcetype/><D:getcontentlength>7</D:getcontentlength><D:getlastmodified>Mon</D:getlastmodified></D:prop></D:propstat></D:response>
+</D:multistatus>]] },
+}
+listed = dav:list("fonts")
+check(listed and listed["A b.ttf"] and listed["A b.ttf"].fp == '"e5"' and listed["A b.ttf"].size == 5,
+    "WebDAV listing")
+check(listed and listed["sub/c.otf"] and listed["sub/c.otf"].fp == "7:Mon", "WebDAV listing of subfolders")
+check(requests[1] and requests[1].headers.Depth == "1", "WebDAV one level at a time")
+Remote.request = real_request
+
+-- The plugin ----------------------------------------------------------------------
+
+local P = device("P")
+write(P.paths.state .. "/settings.txt", "/gestures.lua\n")
+write(P.kodir .. "/settings/gestures.lua", "return { p = 1 }\n")
+touch(P.kodir .. "/settings/gestures.lua", os.time() - 7200) -- the server's is newer
 
 local shown, notified, restarts, flushed, broadcast = {}, {}, {}, 0, {}
 local saved = {}
@@ -242,15 +485,26 @@ _G.G_reader_settings = {
     flush = function() flushed = flushed + 1 end,
 }
 local function stub(name, value) package.loaded[name] = value end
+stub("datastorage", {
+    getDataDir = function() return P.kodir end,
+    getSettingsDir = function() return P.kodir .. "/settings" end,
+})
+local cs_servers = {
+    { name = "Mine", type = "folder", address = server_dir, versioner = md5 },
+    { name = "Box", type = "dropbox", password = "x", address = "k:s" },
+}
+Remote.TYPES.folder = "Folder"
+stub("luasettings", { open = function() return { readSetting = function() return cs_servers end } end })
 stub("dispatcher", { registerAction = function() end })
 stub("ui/event", { new = function(_, name) return { name = name } end })
 stub("ui/widget/infomessage", { new = function(_, o) return o end })
 stub("ui/widget/textviewer", { new = function(_, o) o.viewer = true return o end })
 stub("ui/network/manager", { runWhenOnline = function(_, fn) fn() end })
 stub("ui/widget/notification", { notify = function(_, text) table.insert(notified, text) end })
+stub("device", { model = "Test" })
 stub("ui/trapper", {
     wrap = function(_, fn) fn() end,
-    dismissablePopen = function(_, cmd) return true, sh(cmd) end,
+    dismissableRunInSubprocess = function(_, task) return true, task() end,
 })
 stub("ui/uimanager", {
     show = function(_, w) table.insert(shown, w) end,
@@ -275,52 +529,63 @@ stub("ffi/util", {
     end,
 })
 
+-- A copy of the plugin, with a file left from an earlier version.
+local plugin_copy = base .. "/plugins/rclonesync.koplugin"
+os.execute("mkdir -p " .. q(plugin_copy) .. " && cp rclonesync.koplugin/*.lua " .. q(plugin_copy))
+write(plugin_copy .. "/rclonesync_sync.lua", "-- old\n")
+
 local function loadPlugin()
-    return dofile("rclonesync.koplugin/main.lua")
+    local Plugin = dofile(plugin_copy .. "/main.lua")
+    return Plugin:new{ ui = { menu = { registerToMainMenu = function() end } } }
 end
 
--- A third device pulls through the plugin.
-local C = device("c")
-current = C
-write(C.kodir .. "/settings/gestures.lua", "return { c = 3 }\n")
-saved.rclonesync = { remote = "Local", root = opts.root }
-local Plugin = loadPlugin()
-local plugin = Plugin:new{ ui = { menu = { registerToMainMenu = function() end } } }
+local plugin = loadPlugin()
+check(not exists(plugin_copy .. "/rclonesync_sync.lua") and exists(plugin_copy .. "/main.lua"),
+    "file from an earlier version removed at start")
 local menu_items = {}
 plugin:addToMainMenu(menu_items)
-check(#menu_items.rclonesync.sub_item_table_func() >= 8, "menu")
+check(#menu_items.rclonesync.sub_item_table_func() >= 5, "menu")
+check(plugin:server().name == "Mine", "first server by default")
+saved.rclonesync = { server = { name = "Box", type = "dropbox" } }
+plugin.settings = saved.rclonesync
+check(plugin:server().name == "Box", "chosen server")
+saved.rclonesync.server = { name = "Mine", type = "folder" }
 
-plugin:onRcloneSyncPull()
-local cctx = assert(Sync.context(saved.rclonesync))
-check(Sync.isPending(cctx), "plugin pull leaves settings pending")
-check(#restarts == 1, "plugin pull asks to restart")
-check(read(C.kodir .. "/settings/gestures.lua") == "return { c = 3 }\n", "not in place before restart")
-local discard_shown = false
+plugin:onRcloneSync()
+check(broadcast[1] == "FlushSettings" and flushed == 1, "sync saves settings first")
+check(#restarts == 1, "sync asks to restart for pulled settings")
+check(Engine.isPending(P.paths), "settings waiting")
+check(read(P.kodir .. "/settings/gestures.lua") == "return { p = 1 }\n", "not in place before restart")
+
+plugin:onRcloneSync()
+check(#restarts == 2 and #broadcast == 1, "sync refused while settings wait")
+
+local discard = false
 for _, item in ipairs(plugin:menu()) do
-    if item.text and item.text:find("^Discard") then discard_shown = true end
+    if item.text and item.text:find("^Discard") then discard = true end
 end
-check(discard_shown, "menu offers to discard pending settings")
-
--- Pushing now would undo the pull.
-plugin:onRcloneSyncPush()
-check(#restarts == 2 and #broadcast == 0, "push refused while pending")
+check(discard, "menu offers to discard")
 
 -- The next start puts them in place.
-Plugin = loadPlugin()
-plugin = Plugin:new{ ui = { menu = { registerToMainMenu = function() end } } }
-check(read(C.kodir .. "/settings/gestures.lua") == "return { a = 1 }\n", "applied at start")
-check(not Sync.isPending(cctx), "nothing pending after start")
-check(notified[#notified] == "Pulled settings applied.", "start reports it")
+plugin = loadPlugin()
+plugin.settings = saved.rclonesync
+check(read(P.kodir .. "/settings/gestures.lua") ~= "return { p = 1 }\n", "put in place at start")
+check(notified[#notified] == "Pulled settings put in place.", "start reports it")
 
--- Push saves settings first.
-plugin:onRcloneSyncPush()
-check(broadcast[1] == "FlushSettings" and flushed == 1, "push flushes settings")
-check(notified[#notified] == "Already up to date.", "push reports nothing to do: " .. tostring(notified[#notified]))
+plugin:onRcloneSync()
+check(notified[#notified] == "Already up to date." or (notified[#notified] or ""):find("^Uploaded"),
+    "sync after the restart: " .. tostring(notified[#notified]))
 
--- A failure shows the log.
-saved.rclonesync.remote = "Missing"
-plugin:onRcloneSyncPullTweaks()
-check(shown[#shown] and shown[#shown].viewer and shown[#shown].title == "Sync failed", "failure shows log")
+saved.rclonesync.server = { name = "Box", type = "dropbox" }
+Remote.request = function() return 401, {}, "{}" end
+plugin:onRcloneSync()
+check(shown[#shown] and shown[#shown].text and shown[#shown].text:find("Dropbox login failed"),
+    "login failure reported: " .. tostring(shown[#shown] and shown[#shown].text))
+Remote.request = real_request
+
+cs_servers = {}
+plugin:onRcloneSync()
+check(shown[#shown].text:find("Cloud storage"), "no server: points to Cloud storage")
 
 os.execute("rm -rf " .. q(base:match("^(.*)/[^/]+$")))
 print(string.format("rclonesync: %d checks, %d failures", count, failures))
