@@ -461,10 +461,17 @@ Remote.TYPES.folder = "Folder"
 stub("luasettings", { open = function() return { readSetting = function() return cs_servers end } end })
 stub("dispatcher", { registerAction = function() end })
 stub("ui/event", { new = function(_, name) return { name = name } end })
-stub("ui/widget/infomessage", { new = function(_, o) return o end })
+-- Messages that stay until tapped (no timeout) are what the user is told.
+stub("ui/widget/infomessage", {
+    new = function(_, o)
+        if not o.timeout then table.insert(notified, o.text) end
+        return o
+    end,
+})
 stub("ui/widget/textviewer", { new = function(_, o) o.viewer = true return o end })
 stub("ui/network/manager", { runWhenOnline = function(_, fn) fn() end })
-stub("ui/widget/notification", { notify = function(_, text) table.insert(notified, text) end })
+-- Notifications time out, so the plugin shouldn't use them.
+stub("ui/widget/notification", { notify = function() error("a notification that times out") end })
 stub("device", { model = "Test" })
 stub("ui/trapper", {
     wrap = function(_, fn) fn() end,
@@ -550,6 +557,10 @@ check(notified[#notified] == "Pulled settings put in place.", "start reports it"
 plugin:onRcloneSync()
 check(notified[#notified] == "Already up to date." or (notified[#notified] or ""):find("^Uploaded"),
     "sync after the restart: " .. tostring(notified[#notified]))
+local before = #notified
+plugin:onRcloneSync()
+check(#notified == before + 1 and notified[#notified] == "Already up to date.",
+    "nothing to sync: says so: " .. tostring(notified[#notified]))
 
 saved.rclonesync.server = { name = "Box", type = "dropbox" }
 Remote.request = function() return 401, {}, "{}" end

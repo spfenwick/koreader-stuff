@@ -12,7 +12,6 @@ local Dispatcher = require("dispatcher")
 local Event = require("ui/event")
 local InfoMessage = require("ui/widget/infomessage")
 local NetworkMgr = require("ui/network/manager")
-local Notification = require("ui/widget/notification")
 local Trapper = require("ui/trapper")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -22,6 +21,13 @@ local T = require("ffi/util").template
 -- Names of their own: plugins share package.loaded.
 local Engine = require("rclonesync_engine")
 local Remote = require("rclonesync_remote")
+
+--- A message that stays until the screen is tapped (KOReader's own
+--- notifications go after a few seconds, and are often hidden by its
+--- notification setting).
+local function notify(text)
+    UIManager:show(InfoMessage:new{ text = text })
+end
 
 local SETTINGS_KEY = "rclonesync"
 local DEFAULT_ROOT = "/KOReader/Settings"
@@ -94,7 +100,7 @@ function RcloneSync:init()
         startup.shown = true
         UIManager:nextTick(function()
             if startup.ok then
-                Notification:notify(_("Pulled settings put in place."))
+                notify(_("Pulled settings put in place."))
             else
                 UIManager:show(InfoMessage:new{
                     text = T(_("Settings sync couldn't put all the pulled settings in place. It will try again at the next start.\n\nLog: %1"),
@@ -198,7 +204,7 @@ function RcloneSync:sync(preview)
                 return { fatal = tostring(res), log = tostring(res) }
             end, text)
             if not completed then
-                Notification:notify(_("Sync cancelled. Run it again to finish."))
+                notify(_("Sync cancelled. Run it again to finish."))
                 return
             end
             self:report(result or { fatal = _("The sync stopped unexpectedly.") }, preview)
@@ -251,9 +257,9 @@ function RcloneSync:report(result, preview)
             .. (result.pending and _("Pulled settings are put in place when KOReader restarts.")
                 or _("The new files are used after KOReader restarts.")))
     elseif changes == 0 and (result.already_there or 0) == 0 then
-        Notification:notify(_("Already up to date."))
+        notify(_("Already up to date."))
     else
-        Notification:notify(summary)
+        notify(summary)
     end
 end
 
@@ -326,7 +332,7 @@ function RcloneSync:menu()
             keep_menu_open = true,
             callback = function(touchmenu_instance)
                 Engine.discardPending(p)
-                Notification:notify(_("Discarded. The next sync sends this device's settings."))
+                notify(_("Discarded. The next sync sends this device's settings."))
                 if touchmenu_instance then touchmenu_instance:updateItems() end
             end,
             separator = true,
