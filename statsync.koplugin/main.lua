@@ -116,7 +116,8 @@ end
 
 function StatSync:showStatus()
     local s = Plugin.settings()
-    local st = s.status or {}
+    local d = Plugin.deviceState()
+    local st = d.status or {}
     local ok, counts = pcall(function() return Plugin.makeStore():counts() end)
     counts = ok and counts or {}
     local lines = {
@@ -130,7 +131,7 @@ function StatSync:showStatus()
         T(_("Entries sent last time: %1"), st.uploaded_events or 0),
         T(_("Entries published or received in total: %1"), counts.exported or "?"),
         T(_("Files imported: %1, unreadable: %2"), counts.seen or "?", counts.bad or "?"),
-        T(_("This device's ID: %1"), s.device_id or _("not yet created")),
+        T(_("This device's ID: %1"), d.device_id or _("not yet created")),
     }
     UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
 end
@@ -148,7 +149,7 @@ function StatSync:chooseServer(touchmenu_instance)
         end
         local s = Plugin.settings()
         s.server = server
-        Plugin.saveSettings(s)
+        Plugin.saveSettings()
         if touchmenu_instance then touchmenu_instance:updateItems() end
     end)
 end
@@ -173,7 +174,7 @@ function StatSync:menuItems()
             callback = function()
                 local s = Plugin.settings()
                 s.enabled = not s.enabled
-                Plugin.saveSettings(s)
+                Plugin.saveSettings()
             end,
         },
         {
@@ -197,7 +198,7 @@ function StatSync:menuItems()
                         callback = function()
                             local s = Plugin.settings()
                             s.server = nil
-                            Plugin.saveSettings(s)
+                            Plugin.saveSettings()
                         end,
                     },
                 }
@@ -210,7 +211,7 @@ function StatSync:menuItems()
             callback = function()
                 local s = Plugin.settings()
                 s.allow_wifi = not s.allow_wifi
-                Plugin.saveSettings(s)
+                Plugin.saveSettings()
             end,
         },
         {

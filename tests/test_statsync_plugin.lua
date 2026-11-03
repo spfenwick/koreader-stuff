@@ -30,7 +30,11 @@ _G.G_reader_settings = {
         return settings_data[k]
     end,
     saveSetting = function(_, k, v) settings_data[k] = v end,
+    delSetting = function(_, k) settings_data[k] = nil end,
 }
+-- Settings from an earlier version, in settings.reader.lua: moved to the
+-- settings folder on first use.
+settings_data.statsync = { allow_wifi = false, time_limit = 120, status = { last_success = 5 } }
 
 -- The open book: KOReader's statistics plugin, with page times not yet written.
 local dev = S.newDevice("reader", TMP .. "/settings")
@@ -65,6 +69,33 @@ stub("ffi/util", {
     terminateSubProcess = function(pid) S.Fork.kill({ pid = pid }) end,
 })
 stub("lua-ljsqlite3/init", S.SQ3)
+-- KOReader's LuaSettings, enough of it: dofile to read, a Lua table to write.
+local function serialize(v, indent)
+    indent = indent or ""
+    if type(v) == "table" then
+        local keys = {}
+        for k in pairs(v) do keys[#keys + 1] = k end
+        table.sort(keys, function(x, y) return tostring(x) < tostring(y) end)
+        local out = { "{\n" }
+        for _, k in ipairs(keys) do
+            out[#out + 1] = string.format("%s    [%q] = %s,\n", indent, k, serialize(v[k], indent .. "    "))
+        end
+        return table.concat(out) .. indent .. "}"
+    elseif type(v) == "string" then
+        return string.format("%q", v)
+    end
+    return tostring(v)
+end
+stub("luasettings", {
+    open = function(_, path)
+        local ok, data = pcall(dofile, path)
+        return {
+            file = path,
+            data = ok and type(data) == "table" and data or {},
+            flush = function(self) S.writeFile(self.file, "return " .. serialize(self.data) .. "\n") end,
+        }
+    end,
+})
 stub("socket.http", S.Http.new())
 stub("apps/reader/readerui", { instance = { statistics = stats } })
 stub("ui/widget/confirmbox", { new = function(_, o) return o end })
@@ -107,17 +138,27 @@ check(item("from Reading statistics"), "server taken from Reading statistics")
 
 -- Automatic sync is off by default: the start-up trigger does nothing
 loop:run(30)
-check(not settings_data.statsync.status or not settings_data.statsync.status.last_attempt, "automatic sync off by default")
+local P = require("statsync/plugin")
+-- The old settings were moved: shared ones and this device's own apart.
+local function fileData(name) return dofile(dev.dir .. "/" .. name) end
+check(settings_data.statsync == nil, "old settings removed from settings.reader.lua")
+local shared, own = fileData("statsync.lua"), fileData("statsync_device.lua")
+check(shared.allow_wifi == false and shared.time_limit == 120 and shared.status == nil and shared.device_id == nil,
+    "statsync.lua: shared settings only")
+check(own.status and own.status.last_success == 5, "statsync_device.lua: this device's status")
+check(not P.deviceState().status.last_attempt, "automatic sync off by default")
 
 -- Turn it on; a network-connected trigger syncs, and flushes the open book first
 item("Sync automatically").callback()
-check(settings_data.statsync.enabled == true, "automatic sync turned on")
+check(P.settings().enabled == true and fileData("statsync.lua").enabled == true, "automatic sync turned on, saved to statsync.lua")
 plugin:onNetworkConnected()
 loop:run(60)
-local st = settings_data.statsync.status
+local st = P.deviceState().status
 check(st and st.last_success and not st.last_error, "automatic sync succeeded: " .. tostring(st and st.last_error))
 check(st and st.uploaded_events == 3, "the unsaved page times were flushed and sent (" .. tostring(st and st.uploaded_events) .. ")")
-local id = settings_data.statsync.device_id
+local id = P.deviceState().device_id
+check(fileData("statsync_device.lua").device_id == id and fileData("statsync.lua").device_id == nil,
+    "device ID saved in statsync_device.lua only")
 check(id and #id == 16, "device ID created")
 local segs = 0
 for name in io.popen("ls " .. S.q(server.dir .. "/books/statsync/devices/" .. id)):lines() do
@@ -130,7 +171,7 @@ connected = false
 local before = st.last_attempt
 plugin:onResume()
 loop:run(10)
-check(settings_data.statsync.status.last_attempt == before, "offline: automatic sync skipped")
+check(P.deviceState().status.last_attempt == before, "offline: automatic sync skipped")
 connected = true
 
 -- Another device's reading of the open book shows up in the open book's totals
@@ -149,10 +190,10 @@ stats.page_stat = {}
 item("Sync now").callback()
 loop:run(60)
 check(shown[#shown] and shown[#shown].text:find("Statistics synced"), "manual sync reports success")
-check(settings_data.statsync.status.imported_events == 2, "two events imported")
+check(P.deviceState().status.imported_events == 2, "two events imported")
 check(stats.book_read_time > time_before, "open book's cached totals refreshed ("
     .. tostring(time_before) .. " -> " .. tostring(stats.book_read_time) .. ")")
-check(settings_data.statsync.status.devices == 2, "two devices seen")
+check(P.deviceState().status.devices == 2, "two devices seen")
 
 -- Status, rebuild, reset device ID
 item("Status").callback()
@@ -160,12 +201,12 @@ check(shown[#shown].text:find("Devices seen: 2", 1, true), "status shows devices
 item("Rebuild from cloud").callback()
 shown[#shown].ok_callback()
 loop:run(60)
-check(settings_data.statsync.status.imported_events == 5, "rebuild re-imported both devices' segments (3 + 2 events, got "
-    .. tostring(settings_data.statsync.status.imported_events) .. ")")
+check(P.deviceState().status.imported_events == 5, "rebuild re-imported both devices' segments (3 + 2 events, got "
+    .. tostring(P.deviceState().status.imported_events) .. ")")
 check(dev:totalsMatch(), "totals still match after rebuild")
 item("Reset device ID").callback()
 shown[#shown].ok_callback()
-check(settings_data.statsync.device_id ~= id, "device ID reset")
+check(P.deviceState().device_id ~= id, "device ID reset")
 
 server.stop()
 S.finish("statsync plugin test")

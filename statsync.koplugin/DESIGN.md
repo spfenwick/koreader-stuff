@@ -287,6 +287,9 @@ Compression would save far more (below).
   lookup of the book on the device that loses (see Book identity).
 - **Comparing totals across devices** isn't meaningful for pages read
   (see 8); comparing `page_stat_data` is.
-- **Device IDs live in `settings.reader.lua`**, which people copy to new
-  devices. Two devices sharing an ID is safe here (no overwrites, unknown
-  own segments get imported), but "Reset device ID" is still worth doing.
+- **Device IDs live in `settings/statsync_device.lua`**, apart from the
+  shared settings (`settings/statsync.lua`) so the latter can be synced
+  between devices. Copying a whole KOReader folder to a new device still
+  copies the ID. Two devices sharing an ID is safe here (no overwrites,
+  unknown own segments get imported), but "Reset device ID" is still worth
+  doing.

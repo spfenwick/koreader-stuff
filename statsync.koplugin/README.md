@@ -158,10 +158,29 @@ remove the matching files from the server by hand, or start a new sync folder.
 - **Logs**: messages start with `StatSync:` in KOReader's `crash.log`.
   Passwords are never logged.
 
-Local files: `settings/statsync.sqlite3` (what was sent and received; safe
-to delete, at the cost of sending everything once more), and
-`cache/statsync/` (temporary). Settings are under `statsync` in
-`settings.reader.lua`.
+## Where things are kept
+
+In KOReader's `settings/` folder:
+
+- `statsync.lua`: the settings that are the same on every device:
+  automatic sync on/off, "Turn on Wi-Fi to sync", the chosen server
+  (including its password, in plain text), and `time_limit` (seconds before
+  the network step is stopped, default 180; not in the menu). **This one is
+  meant to be synced between devices**, e.g. with Settings sync: add
+  `/statsync.lua` to its `settings.txt`. A synced change takes effect at the
+  next start.
+- `statsync_device.lua`: this device's ID and sync status. **Never sync
+  it**: devices sharing it would share an ID.
+- `statsync.sqlite3`: what was sent and received. Never sync it either. Safe
+  to delete, at the cost of sending everything once more.
+
+So in `settings.txt` list `/statsync.lua` exactly, not a pattern such as
+`/statsync*` that would also match the other two.
+
+Also: `cache/statsync/` (temporary files), and the updater's setting
+(`statsync_updates` in `settings.reader.lua`, kept per device along with
+when it last checked). Versions before these files kept everything under
+`statsync` in `settings.reader.lua`; it's moved on the first start.
 
 ## Updates
 

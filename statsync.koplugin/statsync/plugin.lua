@@ -17,16 +17,62 @@ local logger = require("logger")
 local Engine = require("statsync/engine")
 local Store = require("statsync/store")
 
-local SETTINGS_KEY = "statsync"
-
 local Plugin = {}
 
-function Plugin.settings()
-    return G_reader_settings:readSetting(SETTINGS_KEY, {})
+-- Settings live in KOReader's settings folder, in two files:
+--
+--   statsync.lua         the same on every device (fine to sync between
+--                        devices, e.g. with Settings sync): enabled,
+--                        allow_wifi, server, time_limit
+--   statsync_device.lua  this device's own: device_id, status
+--
+-- Earlier versions kept both under "statsync" in settings.reader.lua; that
+-- is moved here the first time.
+Plugin.SHARED_FILE = "statsync.lua"
+Plugin.DEVICE_FILE = "statsync_device.lua"
+local LEGACY_KEY = "statsync"
+local DEVICE_KEYS = { device_id = true, status = true }
+
+local files -- { shared = LuaSettings, device = LuaSettings }, opened on first use
+
+local function openFiles()
+    if files then return files end
+    local LuaSettings = require("luasettings")
+    local dir = DataStorage:getSettingsDir()
+    files = {
+        shared = LuaSettings:open(dir .. "/" .. Plugin.SHARED_FILE),
+        device = LuaSettings:open(dir .. "/" .. Plugin.DEVICE_FILE),
+    }
+    local legacy = G_reader_settings:readSetting(LEGACY_KEY)
+    if type(legacy) == "table" then
+        for k, v in pairs(legacy) do
+            local target = DEVICE_KEYS[k] and files.device or files.shared
+            if target.data[k] == nil then target.data[k] = v end
+        end
+        files.shared:flush()
+        files.device:flush()
+        G_reader_settings:delSetting(LEGACY_KEY)
+        logger.info("StatSync: moved settings to", Plugin.SHARED_FILE, "and", Plugin.DEVICE_FILE)
+    end
+    return files
 end
 
-function Plugin.saveSettings(s)
-    G_reader_settings:saveSetting(SETTINGS_KEY, s or Plugin.settings())
+--- Settings shared by all devices (a live table; call saveSettings after changing it).
+function Plugin.settings()
+    return openFiles().shared.data
+end
+
+function Plugin.saveSettings()
+    openFiles().shared:flush()
+end
+
+--- This device's own state (a live table; call saveDeviceState after changing it).
+function Plugin.deviceState()
+    return openFiles().device.data
+end
+
+function Plugin.saveDeviceState()
+    openFiles().device:flush()
 end
 
 local function randomId()
@@ -42,19 +88,17 @@ local function randomId()
 end
 
 function Plugin.deviceId()
-    local s = Plugin.settings()
-    if not s.device_id then
-        s.device_id = randomId()
-        Plugin.saveSettings(s)
-        logger.info("StatSync: new device ID", s.device_id)
+    local d = Plugin.deviceState()
+    if not d.device_id then
+        d.device_id = randomId()
+        Plugin.saveDeviceState()
+        logger.info("StatSync: new device ID", d.device_id)
     end
-    return s.device_id
+    return d.device_id
 end
 
 function Plugin.resetDeviceId()
-    local s = Plugin.settings()
-    s.device_id = nil
-    Plugin.saveSettings(s)
+    Plugin.deviceState().device_id = nil
     return Plugin.deviceId()
 end
 
@@ -105,7 +149,7 @@ function Plugin.engine()
     controller = Engine.new{
         store = makeStore(),
         logger = logger,
-        status = s.status,
+        status = Plugin.deviceState().status,
         device_name = Device.model,
         work_dir = p.work,
         tmp_dir = p.tmp,
@@ -177,9 +221,8 @@ function Plugin.engine()
             end
         end,
         saveStatus = function(status)
-            local st = Plugin.settings()
-            st.status = status
-            Plugin.saveSettings(st)
+            Plugin.deviceState().status = status
+            Plugin.saveDeviceState()
         end,
         onDone = function(status, run)
             if Plugin.onDone then Plugin.onDone(status, run) end
