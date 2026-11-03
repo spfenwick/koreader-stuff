@@ -548,17 +548,41 @@ end
 local PROPFIND = [[<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop>]]
     .. [[<d:resourcetype/><d:getcontentlength/><d:getetag/><d:getlastmodified/></d:prop></d:propfind>]]
 
+local XML_ENTITIES = { amp = "&", lt = "<", gt = ">", quot = '"', apos = "'" }
+
+local function xmlText(text)
+    return (text:gsub("&(#?x?)(%w+);", function(kind, name)
+        if kind == "#" then return string.char(tonumber(name) % 256) end
+        if kind == "#x" then return string.char(tonumber(name, 16) % 256) end
+        return XML_ENTITIES[name] or ("&" .. name .. ";")
+    end))
+end
+
+-- A property's text, if it has any.
 local function tag(block, name)
-    return block:match("<[^>]-" .. name .. "[^>]*>(.-)</[^>]-" .. name .. ">")
+    local text = block:match("<[^>]-" .. name .. "[^>]*>(.-)</[^>]-" .. name .. ">")
+    if text and text:find("%S") then return xmlText(text) end
+end
+
+-- What the server said, briefly, for an error message.
+local function serverSays(body)
+    local text = (body or ""):gsub("<[^>]*>", " "):gsub("%s+", " "):gsub("^ ", ""):gsub(" $", "")
+    return text ~= "" and ": " .. text:sub(1, 200) or ""
 end
 
 function WebDav:listInto(rel, files, base_len, depth)
-    local code, err, body = self:send("PROPFIND", rel, {
-        headers = { ["Depth"] = "1", ["Content-Type"] = "application/xml" },
+    local code, err, body = Remote.request{
+        -- A folder's URL ends with a slash: some servers insist.
+        url = self:url(rel):gsub("/*$", "/"),
+        method = "PROPFIND",
+        headers = self:authHeaders{ ["Depth"] = "1", ["Content-Type"] = "application/xml" },
         body = PROPFIND,
-    })
+    }
     if code == 404 then return true end
-    if code ~= 207 then return nil, "listing failed (" .. tostring(code or err) .. ")" end
+    if code ~= 207 then
+        return nil, "listing " .. joinPath(self.root, rel) .. " failed (" .. tostring(code or err) .. ")"
+            .. (code and serverSays(body) or "")
+    end
     -- Where hrefs start, as a decoded path: the server may give full URLs.
     local folder = decodePath(self.address:match("^%a+://[^/]+(.*)$") or "")
         .. joinPath(self.root, rel)
@@ -578,7 +602,6 @@ function WebDav:listInto(rel, files, base_len, depth)
                 else
                     local size = tonumber(tag(block, "getcontentlength") or "")
                     local fp = tag(block, "getetag")
-                    fp = fp and fp:gsub("&quot;", '"')
                         or (tostring(size) .. ":" .. (tag(block, "getlastmodified") or ""))
                     files[child_rel:sub(base_len + 1)] = { size = size, fp = fp }
                 end

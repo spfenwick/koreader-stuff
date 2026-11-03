@@ -88,7 +88,20 @@ file:
 and are never uploaded or deleted: a font is downloaded when it's new or
 has changed on the server, fonts installed on one device stay there, and a
 font deleted on a device isn't downloaded again unless it changes on the
-server.
+server. The manifest has each font's checksum, so a device that already has
+a font (the same checksum) doesn't download it. As fonts are put on the
+server by hand, a font changed there is noticed by its size or the
+server's ID for the file.
+
+## Moving to another server
+
+Copy the whole folder (with `manifest.tsv`) from the old server to the new
+one, then choose the new server under Settings sync → Server on each
+device. Syncing then carries on without uploading or downloading anything.
+The new server has its own IDs for the fonts, so the first sync takes fonts
+the same size as in the manifest as the same fonts and notes their new IDs.
+A font you also replaced with one of exactly the same size while moving
+would be missed.
 
 **Settings files** are put in place the next time KOReader starts, before
 any plugin reads them, because KOReader keeps files like `gestures.lua` in

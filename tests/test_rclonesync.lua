@@ -352,6 +352,75 @@ check(not r.fatal and r.downloaded == 0 and r.uploaded == 0 and #r.conflicts == 
 r = sync(G)
 check(r.downloaded == 0 and r.uploaded == 0, "and nothing the next time")
 
+-- Fonts in the manifest, and moving to another server.
+do
+    local dbx = { type = "folder", address = base .. "/fm-dropbox", versioner = md5, dropbox_like = true }
+    local dav = { type = "folder", address = base .. "/fm-webdav", versioner = md5 } -- IDs: size and time
+    local function fsync(dev, srv)
+        local res = Engine.sync({ paths = dev.paths, remote = Remote.new(srv, ROOT), device = dev.name })
+        Engine.applyPending(dev.paths)
+        return res
+    end
+    local FA, FB, FC = device("FA"), device("FB"), device("FC")
+    write(base .. "/fm-dropbox" .. ROOT .. "/fonts/one.ttf", "one\n")
+    write(base .. "/fm-dropbox" .. ROOT .. "/fonts/sub/two.otf", "two\n")
+    write(FB.kodir .. "/fonts/one.ttf", "one\n") -- installed by hand before
+    r = fsync(FA, dbx)
+    check(r.downloaded == 2, "fonts downloaded\n" .. r.log)
+    local fm = Engine.parseManifest(read(base .. "/fm-dropbox" .. ROOT .. "/manifest.tsv")).fonts or {}
+    check(fm["one.ttf"] and fm["one.ttf"].h == md5(FA.kodir .. "/fonts/one.ttf") and fm["one.ttf"].fp
+        and fm["sub/two.otf"], "fonts in the manifest with hash and server ID")
+    r = fsync(FB, dbx)
+    check(r.downloaded == 1 and read(FB.kodir .. "/fonts/sub/two.otf") == "two\n",
+        "a font already here isn't downloaded\n" .. r.log)
+
+    -- The files copied to a server with IDs of its own.
+    os.execute("cp -R " .. q(base .. "/fm-dropbox") .. " " .. q(base .. "/fm-webdav"))
+    for __, f in ipairs({ "/fonts/one.ttf", "/fonts/sub/two.otf" }) do
+        touch(base .. "/fm-webdav" .. ROOT .. f, os.time() - 3600)
+    end
+    r = fsync(FA, dav)
+    check(not r.fatal and r.downloaded == 0 and r.uploaded == 0, "new server: no fonts downloaded\n" .. r.log)
+    local moved_fp = (Engine.parseManifest(read(base .. "/fm-webdav" .. ROOT .. "/manifest.tsv")).fonts or {})["one.ttf"]
+    r = fsync(FB, dav)
+    check(r.downloaded == 0 and r.uploaded == 0, "nor on the next device\n" .. r.log)
+    check(moved_fp and moved_fp.fp ~= fm["one.ttf"].fp, "the manifest has the new server's IDs")
+
+    -- A font replaced on the server, the same size: its ID changes.
+    write(base .. "/fm-webdav" .. ROOT .. "/fonts/one.ttf", "ONE\n")
+    touch(base .. "/fm-webdav" .. ROOT .. "/fonts/one.ttf", os.time() - 60)
+    r = fsync(FA, dav)
+    check(r.downloaded == 1 and read(FA.kodir .. "/fonts/one.ttf") == "ONE\n",
+        "replaced font downloaded\n" .. r.log)
+    r = fsync(FB, dav)
+    check(r.downloaded == 1 and read(FB.kodir .. "/fonts/one.ttf") == "ONE\n", "on every device")
+    r = fsync(FB, dav)
+    check(r.downloaded == 0, "once")
+
+    -- A new device with a different font of the same name and size.
+    write(FC.kodir .. "/fonts/sub/two.otf", "TWO\n")
+    r = fsync(FC, dav)
+    check(read(FC.kodir .. "/fonts/sub/two.otf") == "two\n", "a different font the same size is replaced")
+
+    -- A device that synced fonts before they were in the manifest.
+    local FD = device("FD")
+    local plain = { type = "folder", address = base .. "/fm-plain", versioner = md5 }
+    write(base .. "/fm-plain" .. ROOT .. "/fonts/old.ttf", "old\n")
+    write(base .. "/fm-plain" .. ROOT .. "/fonts/gone.ttf", "gone\n")
+    write(FD.kodir .. "/fonts/old.ttf", "old\n")
+    local function id(f) -- the plain test server's ID: size and time
+        local attr = lfs.attributes(base .. "/fm-plain" .. ROOT .. "/fonts/" .. f)
+        return attr.size .. ":" .. attr.modification
+    end
+    write(FD.paths.state .. "/state.tsv", "fonts\told.ttf\t" .. id("old.ttf") .. "\n"
+        .. "fonts\tgone.ttf\t" .. id("gone.ttf") .. "\n")
+    r = fsync(FD, plain)
+    check(r.downloaded == 0 and not exists(FD.kodir .. "/fonts/gone.ttf"),
+        "earlier state: nothing downloaded, a deleted font stays deleted\n" .. r.log)
+    fm = Engine.parseManifest(read(base .. "/fm-plain" .. ROOT .. "/manifest.tsv")).fonts or {}
+    check(fm["old.ttf"] and not fm["gone.ttf"], "and the font it has goes in the manifest")
+end
+
 -- Dropbox and WebDAV ------------------------------------------------------------
 
 local real_request = Remote.request
@@ -425,6 +494,7 @@ responses = {
     { 207, body = [[<D:multistatus xmlns:D="DAV:">
 <D:response><D:href>/remote.php/dav/KOReader/Settings/fonts/sub/</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat></D:response>
 <D:response><D:href>/remote.php/dav/KOReader/Settings/fonts/sub/c.otf</D:href><D:propstat><D:prop><D:resourcetype/><D:getcontentlength>7</D:getcontentlength><D:getlastmodified>Mon</D:getlastmodified></D:prop></D:propstat></D:response>
+<D:response><D:href>/remote.php/dav/KOReader/Settings/fonts/sub/b%20&amp;%20c.ttf</D:href><D:propstat><D:prop><D:resourcetype/><D:getcontentlength>3</D:getcontentlength><D:getlastmodified>Tue</D:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat><D:propstat><D:prop><D:getetag></D:getetag></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat></D:response>
 </D:multistatus>]] },
 }
 listed = dav:list("fonts")
@@ -432,6 +502,15 @@ check(listed and listed["A b.ttf"] and listed["A b.ttf"].fp == '"e5"' and listed
     "WebDAV listing")
 check(listed and listed["sub/c.otf"] and listed["sub/c.otf"].fp == "7:Mon", "WebDAV listing of subfolders")
 check(requests[1] and requests[1].headers.Depth == "1", "WebDAV one level at a time")
+check(requests[1] and requests[1].url == "https://dav.example/remote.php/dav/KOReader/Settings/fonts/"
+    and requests[2] and requests[2].url:sub(-5) == "/sub/", "WebDAV folder URLs end with a slash")
+check(listed and listed["sub/b & c.ttf"] and listed["sub/b & c.ttf"].fp == "3:Tue",
+    "WebDAV names with XML entities; an empty ETag isn't an ID")
+requests = {}
+responses = { { 400, body = "<html><body><h1>Bad Request</h1><p>Invalid Depth header</p></body></html>" } }
+listed, err = dav:list("fonts")
+check(not listed and err:find("/KOReader/Settings/fonts", 1, true) and err:find("400") and err:find("Invalid Depth header"),
+    "WebDAV listing error says where and what the server said: " .. tostring(err))
 Remote.request = real_request
 
 -- The plugin ----------------------------------------------------------------------

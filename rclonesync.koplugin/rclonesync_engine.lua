@@ -4,11 +4,12 @@ The sync itself: which files, what changed, and making both sides agree.
 On the server, under the sync folder:
 
     manifest.tsv     every synced file with its hash, size, time and device
+                     (and for fonts, the server's ID for the file)
     lists/           settings.txt, plugins.txt, patches.txt
     settings/        what settings.txt lists in KOReader's settings/
     plugins/         what plugins.txt lists in plugins/
     patches/         what patches.txt lists in patches/
-    fonts/           pulled only, never deleted (not in the manifest)
+    fonts/           pulled only, never deleted
     dict/            data/dict/
     styletweaks/
 
@@ -271,11 +272,11 @@ local function safePath(path)
     return not path:find("[\t\n\r]")
 end
 
-local MANIFEST_FIELDS = { "area", "path", "h", "s", "t", "by" }
+local MANIFEST_FIELDS = { "area", "path", "h", "s", "t", "by", "fp" }
 local STATE_FIELDS = { "area", "path", "h" }
 local CACHE_FIELDS = { "path", "size", "mtime", "h" }
 
---- { [area] = { [path] = { h, s, t, by } } }
+--- { [area] = { [path] = { h, s, t, by, fp } } }
 function Engine.parseManifest(text)
     local manifest = {}
     for line in (text or ""):gmatch("[^\n]+") do
@@ -286,7 +287,8 @@ function Engine.parseManifest(text)
         end
         if row.area ~= "#" and row.path and row.h and row.h ~= "" then
             manifest[row.area] = manifest[row.area] or {}
-            manifest[row.area][row.path] = { h = row.h, s = tonumber(row.s), t = tonumber(row.t), by = row.by }
+            manifest[row.area][row.path] = { h = row.h, s = tonumber(row.s), t = tonumber(row.t), by = row.by,
+                fp = row.fp ~= "" and row.fp or nil }
         end
     end
     return manifest
@@ -300,12 +302,12 @@ local function sortedKeys(t)
 end
 
 function Engine.formatManifest(manifest)
-    local lines = { "#\tSettings sync manifest\t1" }
+    local lines = { "#\tSettings sync manifest\t2" }
     for _, area in ipairs(sortedKeys(manifest)) do
         for _, path in ipairs(sortedKeys(manifest[area])) do
             local e = manifest[area][path]
             table.insert(lines, table.concat({ area, path, e.h, tostring(e.s or ""),
-                tostring(e.t or ""), e.by or "" }, "\t"))
+                tostring(e.t or ""), e.by or "", e.fp or "" }, "\t"))
         end
     end
     return table.concat(lines, "\n") .. "\n"
@@ -627,9 +629,13 @@ local function syncTwoWay(ctx, area, result)
     ctx.new_state[area.name] = newB
 end
 
--- Fonts: whatever is in the folder on the server, pulled only. A font is
--- downloaded when it's new or changed on the server since the last sync,
--- so fonts deleted or changed here stay as they are.
+-- Fonts: whatever is in the folder on the server, pulled only. Fonts are
+-- put there by hand, not by a sync, so a font changed on the server shows
+-- only in the server's listing: its size, or the server's ID for the file.
+-- The manifest has each font's hash, size and ID; the first device to have
+-- a font adds it. A font is downloaded when this device doesn't have the
+-- server's version and didn't have it at its last sync, so fonts deleted or
+-- changed here stay as they are.
 local function syncPullOnly(ctx, area, result)
     local root = areaDir(ctx.paths, area)
     local R, err = ctx.remote:list(area.remote)
@@ -639,27 +645,92 @@ local function syncPullOnly(ctx, area, result)
         ctx.new_state[area.name] = ctx.state[area.name]
         return
     end
+    ctx.manifest[area.name] = ctx.manifest[area.name] or {}
+    local M = ctx.manifest[area.name]
     local L = scan(root, ALL)
     local B = ctx.state[area.name] or {}
     local newB = {}
+    local function changed() ctx.manifest_changed = true end
+
+    -- Another server (the files copied from the old one) has its own IDs for
+    -- them all: then fonts the same size as in the manifest are taken as the
+    -- same fonts.
+    local known, same = false, false
+    for path, r in pairs(R) do
+        local m = M[path]
+        if m and m.fp and r.fp then
+            known = true
+            if m.fp == r.fp then same = true end
+        end
+    end
+    local moved = known and not same
+    if moved then say(result, "  (on a different server: fonts the same size taken as the same)") end
+
+    -- Hashes of this device's fonts, where they're needed.
+    local need = {}
+    for path in pairs(R) do
+        local l, m = L[path], M[path]
+        if l and not (m and B[path] == m.h) then need[path] = l end
+    end
+    hashScan(root, need, ctx.cache, ctx.new_cache)
+
+    -- Whether a font here the same size as the server's is the same font:
+    -- Dropbox's listing tells. Otherwise only for a font this device hasn't
+    -- had from the server (one installed here before the first sync).
+    local function sameAsServer(path, r, b)
+        if ctx.remote.contentHash and r.fp then
+            return ctx.remote:contentHash(root .. "/" .. path, ctx.paths.state .. "/hash" .. TEMP_SUFFIX) == r.fp
+        end
+        return b == nil
+    end
+    local function add(path, l, r)
+        M[path] = { h = l.h, s = r.size, t = l.mtime, by = ctx.device, fp = r.fp }
+        changed()
+        return l.h
+    end
+
     for _, path in ipairs(sortedKeys(R)) do
-        local l, r, b = L[path], R[path], B[path]
-        if b == r.fp then
-            newB[path] = b
-        elseif l and not b and l.size == r.size then
-            newB[path] = r.fp -- already here
+        local r, m, l, b = R[path], M[path], L[path], B[path]
+        -- The manifest's entry, if it's still the font on the server.
+        if m and m.s == r.size and r.fp and m.fp ~= r.fp and (moved or not m.fp) then
+            m.fp = r.fp
+            changed()
+        end
+        if m and not (m.s == r.size and (m.fp == r.fp or not r.fp)) then
+            m = nil -- changed on the server
+        end
+        if m and (b == m.h or (b and b == r.fp)) then
+            newB[path] = m.h -- had it at the last sync
+        elseif m and l and l.h == m.h then
+            newB[path] = m.h -- already here
+        elseif not m and b and b == r.fp then
+            -- Had it at the last sync, before fonts were in the manifest.
+            newB[path] = (l and l.h and l.size == r.size) and add(path, l, r) or b
+        elseif not m and l and l.h and l.size == r.size and sameAsServer(path, r, b) then
+            newB[path] = add(path, l, r) -- already here, new to the manifest
         else
             say(result, "  ↓ " .. path)
-            local ok, dl_err = true, nil
-            if not ctx.preview then ok, dl_err = download(ctx, area, path, root .. "/" .. path) end
+            local ok, hash = true, nil
+            if not ctx.preview then ok, hash = download(ctx, area, path, root .. "/" .. path) end
             if ok then
                 result.downloaded = result.downloaded + 1
                 result.restart = true
-                newB[path] = r.fp
+                if hash then
+                    M[path] = { h = hash, s = r.size, t = os.time(), by = ctx.device, fp = r.fp }
+                    changed()
+                end
+                newB[path] = hash or b
             else
-                fail(result, area, path, dl_err)
+                fail(result, area, path, hash)
                 newB[path] = b
             end
+        end
+    end
+    -- Fonts taken off the server leave the manifest (not this device).
+    for path in pairs(M) do
+        if not R[path] then
+            M[path] = nil
+            changed()
         end
     end
     ctx.new_state[area.name] = newB
