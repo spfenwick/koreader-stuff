@@ -192,8 +192,19 @@ description, and what couldn't be verified. Written against KOReader
   KOReader's own "action when Wi-Fi is off" setting, like other network
   actions the user starts.
 - **Automatic sync is off by default** (assumption: no network activity
-  before the user has chosen to). The server falls back to Reading
-  statistics' Cloud sync server.
+  before the user has chosen to).
+- **The server comes from Cloud storage, by name** (as in Settings sync):
+  `statsync_settings.lua` keeps `{name, type}` and a folder (default
+  `/KOReader/Statistics`, relative to the server's address), and the address
+  and credentials are read from `cloudstorage.lua` when syncing. Nothing is
+  shared with Reading statistics' own Cloud sync setting. With no server
+  chosen, the first WebDAV server is used; a chosen one that's gone is an
+  error, not a fallback to another (that could be a different place).
+- **A changed server or folder resets the sync record.** The state database
+  remembers the location (address without credentials, and folder). When it
+  differs, `exported`, `seen_segments` and `bad_segments` are cleared, so
+  the device publishes everything it has to the new place and imports
+  everything there. Statistics themselves are untouched.
 - The subprocess keeps the garbage collector running (stopping it would let
   a big download pile up garbage on a 512 MB e-reader). statsync closes all
   its database connections before forking, so the child can't finalize any
@@ -288,8 +299,11 @@ Compression would save far more (below).
 - **Comparing totals across devices** isn't meaningful for pages read
   (see 8); comparing `page_stat_data` is.
 - **Device IDs live in `settings/statsync_device.lua`**, apart from the
-  shared settings (`settings/statsync.lua`) so the latter can be synced
-  between devices. Copying a whole KOReader folder to a new device still
+  shared settings (`settings/statsync_settings.lua`) so the latter can be
+  synced between devices. That file is new in 0.2.2 (with the server kept
+  by name): earlier versions' `statsync.lua` is copied once and left alone,
+  so devices on different versions syncing their settings don't read a
+  format they don't know. Copying a whole KOReader folder to a new device still
   copies the ID. Two devices sharing an ID is safe here (no overwrites,
   unknown own segments get imported), but "Reset device ID" is still worth
   doing.

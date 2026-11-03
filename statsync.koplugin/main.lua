@@ -105,13 +105,10 @@ local function when(ts)
 end
 
 function StatSync:serverText()
-    local server, source = Plugin.server()
-    if not server then return _("not set") end
-    local name = server.name or server.address or "?"
-    if source == "statistics" then
-        return T(_("%1 (from Reading statistics)"), name)
-    end
-    return name
+    local server, why = Plugin.server()
+    if server then return server.name or server.address or "?" end
+    local chosen = Plugin.settings().server
+    return chosen and T(_("%1 (not in Cloud storage)"), chosen.name or "?") or _("not set")
 end
 
 function StatSync:showStatus()
@@ -137,22 +134,56 @@ function StatSync:showStatus()
     UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
 end
 
-function StatSync:chooseServer(touchmenu_instance)
-    local cs = self.ui.cloudstorage
-    if not cs then
-        UIManager:show(InfoMessage:new{ text = _("The Cloud storage plugin is needed to choose a server.") })
-        return
+--- The WebDAV servers from Cloud storage, to choose one (as Settings sync does).
+function StatSync:serverMenu()
+    local items = {}
+    for _i, server in ipairs(Plugin.servers()) do
+        table.insert(items, {
+            text = server.name or server.address or "?",
+            radio = true,
+            checked_func = function()
+                local current = Plugin.server()
+                return current ~= nil and current.name == server.name
+            end,
+            callback = function()
+                Plugin.settings().server = { name = server.name, type = server.type }
+                Plugin.saveSettings()
+            end,
+        })
     end
-    cs:onShowCloudStorageList(function(server)
-        if server.type ~= "webdav" then
-            UIManager:show(InfoMessage:new{ text = _("Only WebDAV servers are supported for now.") })
-            return
-        end
-        local s = Plugin.settings()
-        s.server = server
-        Plugin.saveSettings()
-        if touchmenu_instance then touchmenu_instance:updateItems() end
-    end)
+    if #items == 0 then
+        table.insert(items, {
+            text = _("No WebDAV servers in Cloud storage"),
+            enabled = false,
+            help_text = _("Add a WebDAV server in Cloud storage (file browser → Cloud storage) first."),
+        })
+    end
+    return items
+end
+
+function StatSync:editRoot(touchmenu_instance)
+    local InputDialog = require("ui/widget/inputdialog")
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Folder on the server"),
+        input = Plugin.root(),
+        buttons = {{
+            { text = _("Cancel"), id = "close", callback = function() UIManager:close(dialog) end },
+            {
+                text = _("Save"),
+                is_enter_default = true,
+                callback = function()
+                    local root = dialog:getInputText():gsub("^%s+", ""):gsub("%s+$", "")
+                    Plugin.settings().root = root ~= "" and root or nil
+                    Plugin.saveSettings()
+                    UIManager:close(dialog)
+                    if touchmenu_instance then touchmenu_instance:updateItems() end
+                end,
+            },
+        }},
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
 end
 
 function StatSync:addToMainMenu(menu_items)
@@ -185,40 +216,14 @@ function StatSync:menuItems()
         },
         {
             text_func = function() return T(_("Server: %1"), self:serverText()) end,
+            help_text = _([[A WebDAV server set up in Cloud storage, which has its address and login. Only its name is kept here.]]),
+            sub_item_table_func = function() return self:serverMenu() end,
+        },
+        {
+            text_func = function() return T(_("Folder on server: %1"), Plugin.root()) end,
+            help_text = _([[Use the same server and folder on every device. Changing it sends all of this device's statistics to the new folder at the next sync.]]),
             keep_menu_open = true,
-            sub_item_table_func = function()
-                return {
-                    {
-                        text_func = function()
-                            return T(_("Folder: %1"), Plugin.serverLocation() or _("not set"))
-                        end,
-                        keep_menu_open = true,
-                        enabled_func = function() return Plugin.server() ~= nil end,
-                        callback = function()
-                            local server = Plugin.server()
-                            UIManager:show(InfoMessage:new{
-                                text = T(_("Server: %1\nType: %2\nFolder: %3"), self:serverText(),
-                                    server.type or "?", Plugin.serverLocation(server) or "?"),
-                            })
-                        end,
-                        separator = true,
-                    },
-                    {
-                        text = _("Choose a WebDAV server and folder…"),
-                        keep_menu_open = true,
-                        callback = function(touchmenu_instance) self:chooseServer(touchmenu_instance) end,
-                    },
-                    {
-                        text = _("Use Reading statistics' cloud sync server"),
-                        checked_func = function() return Plugin.settings().server == nil end,
-                        callback = function()
-                            local s = Plugin.settings()
-                            s.server = nil
-                            Plugin.saveSettings()
-                        end,
-                    },
-                }
-            end,
+            callback = function(touchmenu_instance) self:editRoot(touchmenu_instance) end,
         },
         {
             text = _("Turn on Wi-Fi to sync"),

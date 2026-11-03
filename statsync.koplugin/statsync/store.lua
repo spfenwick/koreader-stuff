@@ -311,6 +311,31 @@ function Store:forgetSeen()
     end)
 end
 
+--- Records where segments go (server and folder). When that changes, the
+-- record of what was sent and imported is about the old place, so it's
+-- cleared: everything is sent to, and imported from, the new one.
+-- Returns true when it cleared something.
+function Store:useLocation(location)
+    local old = self:_getMeta("location")
+    if old == location then return false end
+    local conn = self:openState()
+    withConn(conn, function()
+        conn:exec("BEGIN;")
+        local ok, err = pcall(function()
+            if old then
+                conn:exec("DELETE FROM exported; DELETE FROM seen_segments; DELETE FROM bad_segments;")
+                conn:exec("DELETE FROM meta WHERE key = 'clean_fingerprint';")
+            end
+            local stmt = conn:prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('location', ?);")
+            stmt:bind(location):step()
+            stmt:close()
+            conn:exec("COMMIT;")
+        end)
+        if not ok then rollback(conn); error(err, 0) end
+    end)
+    return old ~= nil
+end
+
 function Store:counts()
     local conn = self:openState()
     return withConn(conn, function()

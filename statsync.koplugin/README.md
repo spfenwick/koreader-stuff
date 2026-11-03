@@ -16,17 +16,27 @@ sources) with the Reading statistics plugin enabled.
 
 ## Set up
 
-1. Tools → Statistics sync → Server.
-   - If Reading statistics → Settings → Cloud sync already has a WebDAV
-     server, it's used (shown as "from Reading statistics").
-   - Or "Choose a WebDAV server and folder…" opens Cloud storage, where you
-     pick (or add) a WebDAV server and the folder to sync in.
-   Only WebDAV is supported for now.
-2. Tools → Statistics sync → Sync now, to check it works.
-3. Turn on "Sync automatically".
+Like Settings sync, it uses a server set up in Cloud storage:
 
-Use the same server and folder on every device. Each device gets a random ID
-the first time it syncs.
+1. Add a WebDAV server in Cloud storage (file browser → Cloud storage), if
+   there isn't one. Its address, user name and password are used from there.
+   Only WebDAV is supported.
+2. Tools → Statistics sync → Server: choose it. With none chosen, the first
+   WebDAV server in Cloud storage is used.
+3. Tools → Statistics sync → Folder on server: where on the server to keep
+   the statistics, `/KOReader/Statistics` unless you change it. It's
+   relative to the server's address; the folder set for the server in Cloud
+   storage isn't used.
+4. Sync now, to check it works, then turn on "Sync automatically".
+
+Use the same server and folder on every device. The server is remembered by
+its name in Cloud storage, so give it the same name on every device (or sync
+`cloudstorage.lua` too). Each device gets a random ID the first time it
+syncs.
+
+This is separate from Reading statistics' own Cloud sync and its server
+setting: choosing a server here doesn't change that one, nor the other way
+round.
 
 **Don't also use Reading statistics' own "Sync now" on the same devices.**
 It keeps working (this plugin doesn't change it), but the two syncs disagree
@@ -55,8 +65,9 @@ Tools → Statistics sync:
 
 - **Sync automatically**: on/off (off until you turn it on).
 - **Sync now**.
-- **Server**: which server, the folder it syncs to (tap for the details),
-  and choosing another.
+- **Server**: the WebDAV server from Cloud storage to use.
+- **Folder on server**: the folder to sync in. Changing it (or the server)
+  sends all of this device's statistics to the new place at the next sync.
 - **Turn on Wi-Fi to sync**: for automatic syncs.
 - **Status**: server and folder, last success, last attempt and error, devices seen, entries
   sent and received last time, totals, this device's ID.
@@ -67,7 +78,7 @@ Tools → Statistics sync:
 ## What's on the server
 
 ```
-<chosen folder>/statsync/
+<folder on server>/              /KOReader/Statistics unless changed
   devices/<device-id>/
     meta.json                  device ID, model, format version, when written
     seg-0000000001.jsonl       segment files, numbered 1, 2, 3, …
@@ -154,8 +165,9 @@ remove the matching files from the server by hand, or start a new sync folder.
   device that finds segments under its ID it doesn't know imports them.
 - **Statistics missing on a device**: "Rebuild from cloud" re-imports every
   device's files. It only adds; it never deletes.
-- **Starting over**: choose another server folder on every device. Each
-  device then uploads its whole history again on its next syncs.
+- **Starting over**: choose another folder on every device. Each device
+  then uploads its whole history (including what it got from the others)
+  there on its next syncs.
 - **Logs**: messages start with `StatSync:` in KOReader's `crash.log`.
   Passwords are never logged.
 
@@ -163,25 +175,33 @@ remove the matching files from the server by hand, or start a new sync folder.
 
 In KOReader's `settings/` folder:
 
-- `statsync.lua`: the settings that are the same on every device:
-  automatic sync on/off, "Turn on Wi-Fi to sync", the chosen server
-  (including its password, in plain text), and `time_limit` (seconds before
-  the network step is stopped, default 180; not in the menu). **This one is
-  meant to be synced between devices**, e.g. with Settings sync: add
-  `/statsync.lua` to its `settings.txt`. A synced change takes effect at the
-  next start.
+- `statsync_settings.lua`: the settings that are the same on every device:
+  automatic sync on/off, "Turn on Wi-Fi to sync", the chosen server's name
+  (no password: that stays in Cloud storage's `cloudstorage.lua`), the
+  folder, and `time_limit` (seconds before the network step is stopped,
+  default 180; not in the menu). **This one is meant to be synced between
+  devices**, e.g. with Settings sync: add `/statsync_settings.lua` to its
+  `settings.txt`. A synced change takes effect at the next start.
 - `statsync_device.lua`: this device's ID and sync status. **Never sync
   it**: devices sharing it would share an ID.
 - `statsync.sqlite3`: what was sent and received. Never sync it either. Safe
   to delete, at the cost of sending everything once more.
 
-So in `settings.txt` list `/statsync.lua` exactly, not a pattern such as
-`/statsync*` that would also match the other two.
+So in `settings.txt` list `/statsync_settings.lua` exactly, not a pattern
+such as `/statsync*` that would also match the other two.
 
 Also: `cache/statsync/` (temporary files), and the updater's setting
 (`statsync_updates` in `settings.reader.lua`, kept per device along with
-when it last checked). Versions before these files kept everything under
-`statsync` in `settings.reader.lua`; it's moved on the first start.
+when it last checked).
+
+Earlier versions kept the shared settings in `statsync.lua`, with a copy of
+the whole server entry (password included), and before that everything
+under `statsync` in `settings.reader.lua`. On the first start they're
+copied to the files above, keeping only the server's name and the folder
+they synced to (`<server's Cloud storage folder>/statsync`). The old ones
+are left as they were, so a device still on an older version keeps
+working; delete `statsync.lua` once every device is updated (and take it out
+of `settings.txt` if it was there).
 
 ## Updates
 

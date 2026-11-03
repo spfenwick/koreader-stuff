@@ -2,8 +2,8 @@
 -- with KOReader's UI modules stubbed, but the rest real: KOReader's
 -- statistics plugin as the open book's, forked subprocesses, and a WebDAV
 -- server (rclone). Checks the flush of unsaved page times, the server
--- fallback to Reading statistics' one, the menu, and the refresh of the
--- open book's totals.
+-- taken from Cloud storage by name, the folder setting, the menu, and the
+-- refresh of the open book's totals.
 
 local S = dofile("tests/statsync/support.lua")
 local check = S.check
@@ -32,12 +32,17 @@ _G.G_reader_settings = {
     saveSetting = function(_, k, v) settings_data[k] = v end,
     delSetting = function(_, k) settings_data[k] = nil end,
 }
--- Settings from an earlier version, in settings.reader.lua: moved to the
--- settings folder on first use.
-settings_data.statsync = { allow_wifi = false, time_limit = 120, status = { last_success = 5 } }
+-- Settings from earlier versions, copied on first use: this device's status
+-- from settings.reader.lua, the shared ones from statsync.lua (written
+-- below), which has a whole Cloud storage entry, password and all, synced to
+-- its folder + /statsync. Both are left as they were, for older versions.
+settings_data.statsync = { allow_wifi = true, status = { last_success = 5 } }
+local OLD_SHARED = 'return { allow_wifi = false, time_limit = 120, server = { name = "My DAV", type = "webdav", '
+    .. string.format("address = %q, ", server.url) .. 'username = "u", password = "p", url = "/books" } }\n'
 
 -- The open book: KOReader's statistics plugin, with page times not yet written.
 local dev = S.newDevice("reader", TMP .. "/settings")
+S.writeFile(dev.dir .. "/statsync.lua", OLD_SHARED)
 local book = { md5 = string.rep("c", 32), title = "Open book", authors = "Someone", pages = 200 }
 dev:read(book, { { 1, 1000, 30 } })
 local stats = dev.stats
@@ -58,6 +63,7 @@ stub("ui/uimanager", {
     nextTick = function(_, fn) loop:schedule(0, fn) end,
     preventStandby = function() end, allowStandby = function() end,
     show = function(_, w) table.insert(shown, w) end,
+    close = function() end,
 })
 stub("ffi/util", {
     template = function(s, ...)
@@ -100,6 +106,12 @@ stub("socket.http", S.Http.new())
 stub("apps/reader/readerui", { instance = { statistics = stats } })
 stub("ui/widget/confirmbox", { new = function(_, o) return o end })
 stub("ui/widget/infomessage", { new = function(_, o) return o end })
+local folder_input
+stub("ui/widget/inputdialog", { new = function(_, o)
+    o.getInputText = function() return folder_input end
+    o.onShowKeyboard = function() end
+    return o
+end })
 stub("dispatcher", { registerAction = function() end })
 stub("datetime", { secondsToDateTime = function(t) return os.date("!%Y-%m-%d %H:%M:%S", t) end })
 stub("gettext", setmetatable({}, { __call = function(_, s) return s end }))
@@ -122,51 +134,70 @@ local function item(text)
         if t and t:find(text, 1, true) then return it end
     end
 end
-check(item("Server: not set"), "server shown as not set")
 check(item("Check for updates") and item("Automatic updates"), "update items in the menu")
 
--- Sync now without a server: told why
+-- The old server entry became a reference by name, with the same folder.
+local P0 = require("statsync/plugin")
+local function fileData(name) return dofile(dev.dir .. "/" .. name) end
+local saved = fileData("statsync_settings.lua")
+check(saved.server and saved.server.name == "My DAV" and saved.server.password == nil and saved.server.address == nil,
+    "statsync_settings.lua keeps the server's name only, no credentials")
+check(saved.root == "/books/statsync", "same folder as before: " .. tostring(saved.root))
+check(item("Folder on server: /books/statsync"), "folder shown in the menu")
+
+-- Not (yet) in Cloud storage: told why
+check(item("Server: My DAV (not in Cloud storage)"), "missing server shown")
 item("Sync now").callback()
 loop:run(10)
-check(shown[#shown] and shown[#shown].text:find("no server set"), "manual sync without a server explains why")
+check(shown[#shown] and shown[#shown].text:find("not found in Cloud storage"), "manual sync without the server explains why")
 
--- Reading statistics' Cloud sync server is used when statsync has none
-settings_data.statistics = { is_enabled = true, sync_server = {
-    name = "My DAV", type = "webdav", address = server.url, username = "u", password = "p", url = "/books" } }
+-- Cloud storage's servers: only WebDAV ones offered, credentials from there.
+local function writeCloudStorage(servers)
+    local f = assert(io.open(dev.dir .. "/cloudstorage.lua", "w"))
+    local parts = {}
+    for _, sv in ipairs(servers) do
+        local fields = {}
+        for k, v in pairs(sv) do fields[#fields + 1] = string.format("[%q] = %q", k, v) end
+        parts[#parts + 1] = "{ " .. table.concat(fields, ", ") .. " }"
+    end
+    f:write("return { cs_servers = { " .. table.concat(parts, ", ") .. " } }\n")
+    f:close()
+end
+writeCloudStorage({
+    { name = "Box", type = "dropbox", address = "x", password = "y" },
+    { name = "My DAV", type = "webdav", address = server.url, username = "u", password = "p", url = "/elsewhere" },
+})
 S.mkdirp(server.dir .. "/books")
-check(item("from Reading statistics"), "server taken from Reading statistics")
-local P0 = require("statsync/plugin")
-check(P0.serverLocation() == server.url .. "/books/statsync/", "folder shown: " .. tostring(P0.serverLocation()))
-check(P0.serverLocation({ address = "https://me:secret@dav.example.com/dav/", url = "/My Books" })
-    == "https://dav.example.com/dav/My Books/statsync/", "folder shown without credentials")
+check(item("Server: My DAV") and not item("not in Cloud storage"), "server found in Cloud storage")
 local sub = item("Server:").sub_item_table_func()
-check(sub[1].text_func():find("/books/statsync/", 1, true), "server menu shows the folder")
-sub[1].callback()
-check(shown[#shown].text:find("My DAV", 1, true) and shown[#shown].text:find("/books/statsync/", 1, true),
-    "folder details show name and location")
+check(#sub == 1 and sub[1].text == "My DAV" and sub[1].checked_func(), "only WebDAV servers offered, chosen one checked")
+check(P0.serverLocation() == server.url .. "/books/statsync/", "location: " .. tostring(P0.serverLocation()))
+check(P0.serverLocation({ address = "https://me:secret@dav.example.com/dav/" })
+    == "https://dav.example.com/dav/books/statsync/", "location shown without credentials")
 
 -- Automatic sync is off by default: the start-up trigger does nothing
 loop:run(30)
 local P = require("statsync/plugin")
--- The old settings were moved: shared ones and this device's own apart.
-local function fileData(name) return dofile(dev.dir .. "/" .. name) end
-check(settings_data.statsync == nil, "old settings removed from settings.reader.lua")
-local shared, own = fileData("statsync.lua"), fileData("statsync_device.lua")
+-- The old settings were copied: shared ones and this device's own apart,
+-- statsync.lua's shared ones over settings.reader.lua's.
+local shared, own = fileData("statsync_settings.lua"), fileData("statsync_device.lua")
 check(shared.allow_wifi == false and shared.time_limit == 120 and shared.status == nil and shared.device_id == nil,
-    "statsync.lua: shared settings only")
+    "statsync_settings.lua: shared settings only")
+check(S.readFile(dev.dir .. "/statsync.lua") == OLD_SHARED and settings_data.statsync.allow_wifi == true,
+    "old settings left alone for older versions")
 check(own.status and own.status.last_success == 5, "statsync_device.lua: this device's status")
 check(not P.deviceState().status.last_attempt, "automatic sync off by default")
 
 -- Turn it on; a network-connected trigger syncs, and flushes the open book first
 item("Sync automatically").callback()
-check(P.settings().enabled == true and fileData("statsync.lua").enabled == true, "automatic sync turned on, saved to statsync.lua")
+check(P.settings().enabled == true and fileData("statsync_settings.lua").enabled == true, "automatic sync turned on, saved to statsync_settings.lua")
 plugin:onNetworkConnected()
 loop:run(60)
 local st = P.deviceState().status
 check(st and st.last_success and not st.last_error, "automatic sync succeeded: " .. tostring(st and st.last_error))
 check(st and st.uploaded_events == 3, "the unsaved page times were flushed and sent (" .. tostring(st and st.uploaded_events) .. ")")
 local id = P.deviceState().device_id
-check(fileData("statsync_device.lua").device_id == id and fileData("statsync.lua").device_id == nil,
+check(fileData("statsync_device.lua").device_id == id and fileData("statsync_settings.lua").device_id == nil,
     "device ID saved in statsync_device.lua only")
 check(id and #id == 16, "device ID created")
 local segs = 0
@@ -217,6 +248,28 @@ check(dev:totalsMatch(), "totals still match after rebuild")
 item("Reset device ID").callback()
 shown[#shown].ok_callback()
 check(P.deviceState().device_id ~= id, "device ID reset")
+
+-- Another folder: everything this device has is sent there.
+folder_input = "/fresh"
+item("Folder on server").callback()
+shown[#shown].buttons[1][2].callback()
+check(fileData("statsync_settings.lua").root == "/fresh", "folder saved to statsync_settings.lua")
+check(P.serverLocation() == server.url .. "/fresh/", "new location")
+item("Sync now").callback()
+loop:run(60)
+local st2 = P.deviceState().status
+check(st2.uploaded_events == 5 and not st2.last_error,
+    "all 5 entries sent to the new folder (" .. tostring(st2.uploaded_events) .. ", " .. tostring(st2.last_error) .. ")")
+check(io.open(server.dir .. "/fresh/devices/" .. P.deviceState().device_id .. "/seg-0000000001.jsonl") ~= nil,
+    "segment in the new folder")
+
+-- No server chosen: the first WebDAV server in Cloud storage
+P.settings().server = nil
+check(P.server() and P.server().name == "My DAV", "first WebDAV server used when none chosen")
+writeCloudStorage({ { name = "Box", type = "dropbox" } })
+local none, why = P.server()
+check(none == nil and why:find("no WebDAV server"), "no WebDAV server: told why")
+check(item("Server: not set"), "server shown as not set")
 
 server.stop()
 S.finish("statsync plugin test")
