@@ -55,9 +55,10 @@ Tools → Statistics sync:
 
 - **Sync automatically**: on/off (off until you turn it on).
 - **Sync now**.
-- **Server**: which server, and choosing another.
+- **Server**: which server, the folder it syncs to (tap for the details),
+  and choosing another.
 - **Turn on Wi-Fi to sync**: for automatic syncs.
-- **Status**: last success, last attempt and error, devices seen, entries
+- **Status**: server and folder, last success, last attempt and error, devices seen, entries
   sent and received last time, totals, this device's ID.
 - **Rebuild from cloud**: imports every device's files again (see below).
 - **Reset device ID**: see below.

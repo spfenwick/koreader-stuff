@@ -111,6 +111,21 @@ function Plugin.server()
     if stats and stats.sync_server then return stats.sync_server, "statistics" end
 end
 
+--- The folder on the server statsync uses, relative to the server's address:
+-- the folder chosen for the server, then "statsync".
+function Plugin.remoteRoot(server)
+    return require("statsync/webdav").join(server.url or "", "statsync")
+end
+
+--- Where statsync syncs to, for showing: the server's address (without any
+-- user:password@), the folder, and "statsync/". Nil without a server.
+function Plugin.serverLocation(server)
+    server = server or Plugin.server()
+    if not server or not server.address then return nil end
+    local WebDav = require("statsync/webdav")
+    return WebDav.redact(server.address):gsub("/+$", "") .. "/" .. Plugin.remoteRoot(server) .. "/"
+end
+
 function Plugin.serverProblem()
     local server = Plugin.server()
     if not server then return "no server set" end
@@ -182,7 +197,7 @@ function Plugin.engine()
             return WebDav.new{
                 http = http, logger = logger,
                 address = server.address, username = server.username, password = server.password,
-                root = WebDav.join(server.url or "", "statsync"),
+                root = Plugin.remoteRoot(server),
                 random = randomId,
             }
         end,

@@ -135,6 +135,15 @@ settings_data.statistics = { is_enabled = true, sync_server = {
     name = "My DAV", type = "webdav", address = server.url, username = "u", password = "p", url = "/books" } }
 S.mkdirp(server.dir .. "/books")
 check(item("from Reading statistics"), "server taken from Reading statistics")
+local P0 = require("statsync/plugin")
+check(P0.serverLocation() == server.url .. "/books/statsync/", "folder shown: " .. tostring(P0.serverLocation()))
+check(P0.serverLocation({ address = "https://me:secret@dav.example.com/dav/", url = "/My Books" })
+    == "https://dav.example.com/dav/My Books/statsync/", "folder shown without credentials")
+local sub = item("Server:").sub_item_table_func()
+check(sub[1].text_func():find("/books/statsync/", 1, true), "server menu shows the folder")
+sub[1].callback()
+check(shown[#shown].text:find("My DAV", 1, true) and shown[#shown].text:find("/books/statsync/", 1, true),
+    "folder details show name and location")
 
 -- Automatic sync is off by default: the start-up trigger does nothing
 loop:run(30)
@@ -198,6 +207,7 @@ check(P.deviceState().status.devices == 2, "two devices seen")
 -- Status, rebuild, reset device ID
 item("Status").callback()
 check(shown[#shown].text:find("Devices seen: 2", 1, true), "status shows devices seen")
+check(shown[#shown].text:find("Folder: " .. server.url .. "/books/statsync/", 1, true), "status shows the folder")
 item("Rebuild from cloud").callback()
 shown[#shown].ok_callback()
 loop:run(60)

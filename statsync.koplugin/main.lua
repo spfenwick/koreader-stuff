@@ -122,6 +122,7 @@ function StatSync:showStatus()
     counts = ok and counts or {}
     local lines = {
         T(_("Server: %1"), self:serverText()),
+        T(_("Folder: %1"), Plugin.serverLocation() or _("not set")),
         T(_("Automatic sync: %1"), s.enabled and _("on") or _("off")),
         T(_("Last success: %1"), when(st.last_success)),
         T(_("Last attempt: %1"), when(st.last_attempt)),
@@ -187,6 +188,21 @@ function StatSync:menuItems()
             keep_menu_open = true,
             sub_item_table_func = function()
                 return {
+                    {
+                        text_func = function()
+                            return T(_("Folder: %1"), Plugin.serverLocation() or _("not set"))
+                        end,
+                        keep_menu_open = true,
+                        enabled_func = function() return Plugin.server() ~= nil end,
+                        callback = function()
+                            local server = Plugin.server()
+                            UIManager:show(InfoMessage:new{
+                                text = T(_("Server: %1\nType: %2\nFolder: %3"), self:serverText(),
+                                    server.type or "?", Plugin.serverLocation(server) or "?"),
+                            })
+                        end,
+                        separator = true,
+                    },
                     {
                         text = _("Choose a WebDAV server and folder…"),
                         keep_menu_open = true,

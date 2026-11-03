@@ -12,7 +12,7 @@ updates".
 1. Set `version` in the plugin's `_meta.lua` (semantic versioning: the
    updater only installs a higher version).
 2. Commit and push to main.
-3. Either push a tag `<plugin>-v<version>` (e.g. `statsync-v0.2.0`), or run
+3. Either push a tag `<plugin>-v<version>` (e.g. `statsync-v0.2.1`), or run
    Actions → "Release plugin" → Run workflow on main, choosing the plugin
    (this creates the tag).
 
@@ -41,7 +41,7 @@ release.
 ## On devices
 
 - The first version of a plugin with the updater (Knuth–Plass already has
-  it; Settings sync 0.2.0 and Statistics sync 0.2.0 have it from their first
+  it; Settings sync 0.2.0 and Statistics sync 0.2.1 have it from their first
   release) has to be copied to the device by hand.
 - Don't list these plugins in Settings sync's `plugins.txt`: the sync and the
   updater would both write their folders. Settings sync is for settings,
