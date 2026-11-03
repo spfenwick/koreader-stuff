@@ -92,6 +92,7 @@ local function item(text)
     end
 end
 check(item("Server: not set"), "server shown as not set")
+check(item("Check for updates") and item("Automatic updates"), "update items in the menu")
 
 -- Sync now without a server: told why
 item("Sync now").callback()

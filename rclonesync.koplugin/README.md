@@ -22,6 +22,7 @@ reader:
   "Sync now" there runs the sync.
 - **Server** and **Folder on server** (`/KOReader/Settings` by default).
 - **Show last log**.
+- **Check for updates** and **Automatic updates** (see Updates).
 
 Sync can be assigned to a gesture (General → "Settings sync: sync"). A sync runs in the background, and
 tapping the message cancels it; running it again finishes the job.
@@ -55,9 +56,12 @@ sides. Without a list, that folder isn't synced.
 `plugins.txt`:
 
 ```
-/rclonesync.koplugin/**
-/assistant.koplugin/configuration.lua
+/assistant.koplugin/**
 ```
+
+Don't list the plugins from this repository (`rclonesync.koplugin`,
+`statsync.koplugin`, `knuthplass.koplugin`): they update themselves from
+GitHub (see Updates), and a sync would fight the updater over their folders.
 
 `patches.txt`:
 
@@ -68,6 +72,15 @@ sides. Without a list, that folder isn't synced.
 
 Don't list `1-knuthplass-engine.lua` (or a pattern such as `/*.lua` that
 matches it): the Knuth–Plass plugin writes it for each device itself.
+
+## Updates
+
+Tools → Settings sync → "Check for updates" looks for a newer release on
+GitHub. "Automatic updates" sets what happens once a day when KOReader is
+already online: off, notify (the default: asks first), or install. An update
+is checked (checksum, complete plugin) before it replaces the installed one,
+and takes effect after a restart. The first version with the updater has to
+be installed by hand.
 
 ## How it decides
 

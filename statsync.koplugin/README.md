@@ -61,6 +61,7 @@ Tools → Statistics sync:
   sent and received last time, totals, this device's ID.
 - **Rebuild from cloud**: imports every device's files again (see below).
 - **Reset device ID**: see below.
+- **Check for updates** and **Automatic updates**: see Updates.
 
 ## What's on the server
 
@@ -161,6 +162,15 @@ Local files: `settings/statsync.sqlite3` (what was sent and received; safe
 to delete, at the cost of sending everything once more), and
 `cache/statsync/` (temporary). Settings are under `statsync` in
 `settings.reader.lua`.
+
+## Updates
+
+"Check for updates" looks for a newer release of the plugin on GitHub.
+"Automatic updates" sets what happens once a day when KOReader is already
+online: off, notify (the default: asks first), or install. An update is
+checked (checksum, complete plugin) before it replaces the installed one, and
+takes effect after a restart. Don't also copy this plugin between devices
+with Settings sync (`plugins.txt`): the two would fight over its folder.
 
 ## Tests
 

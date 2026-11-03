@@ -18,6 +18,12 @@ local _ = require("gettext")
 local T = require("ffi/util").template
 
 local Plugin = require("statsync/plugin")
+local Updater = require("statsync/updatecore").new{
+    name = "statsync",
+    title = _("Statistics sync"),
+    settings_key = "statsync_updates",
+    log_prefix = "StatSync:",
+}
 
 local STARTUP_DELAY = 20 -- s: let KOReader settle (and Wi-Fi come up) first
 local CLOSE_DELAY = 2    -- s: after the statistics plugin has written the closed book
@@ -39,6 +45,7 @@ function StatSync:init()
         started = true
         UIManager:scheduleIn(STARTUP_DELAY, function() self.trigger("start") end)
     end
+    Updater.scheduleCheck(self)
 end
 
 function StatSync.trigger(reason, interactive)
@@ -147,91 +154,98 @@ function StatSync:chooseServer(touchmenu_instance)
 end
 
 function StatSync:addToMainMenu(menu_items)
+    local items = self:menuItems()
+    items[#items].separator = true
+    for _i, item in ipairs(Updater.menuItems(self)) do table.insert(items, item) end
     menu_items.statsync = {
         text = _("Statistics sync"),
         sorting_hint = "tools",
-        sub_item_table = {
-            {
-                text = _("Sync automatically"),
-                help_text = _([[Sync when a book is closed, on wake-up, when the network connects and when KOReader starts. Without a network connection, the sync is skipped; the next one catches up.]]),
-                checked_func = function() return Plugin.settings().enabled end,
-                callback = function()
-                    local s = Plugin.settings()
-                    s.enabled = not s.enabled
-                    Plugin.saveSettings(s)
-                end,
-            },
-            {
-                text = _("Sync now"),
-                keep_menu_open = true,
-                callback = function() self.trigger("manual", true) end,
-            },
-            {
-                text_func = function() return T(_("Server: %1"), self:serverText()) end,
-                keep_menu_open = true,
-                sub_item_table_func = function()
-                    return {
-                        {
-                            text = _("Choose a WebDAV server and folder…"),
-                            keep_menu_open = true,
-                            callback = function(touchmenu_instance) self:chooseServer(touchmenu_instance) end,
-                        },
-                        {
-                            text = _("Use Reading statistics' cloud sync server"),
-                            checked_func = function() return Plugin.settings().server == nil end,
-                            callback = function()
-                                local s = Plugin.settings()
-                                s.server = nil
-                                Plugin.saveSettings(s)
-                            end,
-                        },
-                    }
-                end,
-            },
-            {
-                text = _("Turn on Wi-Fi to sync"),
-                help_text = _([[When off (the default), automatic syncs are skipped while offline. When on, they turn on Wi-Fi as set in KOReader's network settings.]]),
-                checked_func = function() return Plugin.settings().allow_wifi end,
-                callback = function()
-                    local s = Plugin.settings()
-                    s.allow_wifi = not s.allow_wifi
-                    Plugin.saveSettings(s)
-                end,
-            },
-            {
-                text = _("Status"),
-                keep_menu_open = true,
-                callback = function() self:showStatus() end,
-                separator = true,
-            },
-            {
-                text = _("Rebuild from cloud"),
-                keep_menu_open = true,
-                callback = function()
-                    UIManager:show(ConfirmBox:new{
-                        text = _("Download and merge every device's statistics again?\n\nNothing is deleted. Use this if statistics are missing on this device."),
-                        ok_text = _("Rebuild"),
-                        ok_callback = function()
-                            Plugin.rebuild()
-                            self.trigger("rebuild", true)
+        sub_item_table = items,
+    }
+end
+
+function StatSync:menuItems()
+    return {
+        {
+            text = _("Sync automatically"),
+            help_text = _([[Sync when a book is closed, on wake-up, when the network connects and when KOReader starts. Without a network connection, the sync is skipped; the next one catches up.]]),
+            checked_func = function() return Plugin.settings().enabled end,
+            callback = function()
+                local s = Plugin.settings()
+                s.enabled = not s.enabled
+                Plugin.saveSettings(s)
+            end,
+        },
+        {
+            text = _("Sync now"),
+            keep_menu_open = true,
+            callback = function() self.trigger("manual", true) end,
+        },
+        {
+            text_func = function() return T(_("Server: %1"), self:serverText()) end,
+            keep_menu_open = true,
+            sub_item_table_func = function()
+                return {
+                    {
+                        text = _("Choose a WebDAV server and folder…"),
+                        keep_menu_open = true,
+                        callback = function(touchmenu_instance) self:chooseServer(touchmenu_instance) end,
+                    },
+                    {
+                        text = _("Use Reading statistics' cloud sync server"),
+                        checked_func = function() return Plugin.settings().server == nil end,
+                        callback = function()
+                            local s = Plugin.settings()
+                            s.server = nil
+                            Plugin.saveSettings(s)
                         end,
-                    })
-                end,
-            },
-            {
-                text = _("Reset device ID"),
-                keep_menu_open = true,
-                callback = function()
-                    UIManager:show(ConfirmBox:new{
-                        text = _("Give this device a new ID?\n\nDo this on a device restored from a backup of another device, or copied from one, so the two don't share an ID."),
-                        ok_text = _("Reset"),
-                        ok_callback = function()
-                            local id = Plugin.resetDeviceId()
-                            UIManager:show(InfoMessage:new{ text = T(_("New device ID: %1"), id) })
-                        end,
-                    })
-                end,
-            },
+                    },
+                }
+            end,
+        },
+        {
+            text = _("Turn on Wi-Fi to sync"),
+            help_text = _([[When off (the default), automatic syncs are skipped while offline. When on, they turn on Wi-Fi as set in KOReader's network settings.]]),
+            checked_func = function() return Plugin.settings().allow_wifi end,
+            callback = function()
+                local s = Plugin.settings()
+                s.allow_wifi = not s.allow_wifi
+                Plugin.saveSettings(s)
+            end,
+        },
+        {
+            text = _("Status"),
+            keep_menu_open = true,
+            callback = function() self:showStatus() end,
+            separator = true,
+        },
+        {
+            text = _("Rebuild from cloud"),
+            keep_menu_open = true,
+            callback = function()
+                UIManager:show(ConfirmBox:new{
+                    text = _("Download and merge every device's statistics again?\n\nNothing is deleted. Use this if statistics are missing on this device."),
+                    ok_text = _("Rebuild"),
+                    ok_callback = function()
+                        Plugin.rebuild()
+                        self.trigger("rebuild", true)
+                    end,
+                })
+            end,
+        },
+        {
+            text = _("Reset device ID"),
+            keep_menu_open = true,
+            callback = function()
+                UIManager:show(ConfirmBox:new{
+                    text = _("Give this device a new ID?\n\nDo this on a device restored from a backup of another device, or copied from one, so the two don't share an ID."),
+                    ok_text = _("Reset"),
+                    ok_callback = function()
+                        local id = Plugin.resetDeviceId()
+                        UIManager:show(InfoMessage:new{ text = T(_("New device ID: %1"), id) })
+                    end,
+                })
+            end,
         },
     }
 end

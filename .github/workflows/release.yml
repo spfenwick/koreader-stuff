@@ -1,22 +1,32 @@
-# Publishes a plugin release for the updater, either
+# Publishes a release of one plugin for its updater, either
 #
-# - when a vX.Y.Z tag is pushed (it must match the version in _meta.lua), or
-# - by hand (Actions → Release plugin → Run workflow, on main), which tags
-#   the commit with the version in _meta.lua.
+# - when a <plugin>-vX.Y.Z tag is pushed (e.g. statsync-v0.1.0; the version
+#   must match the plugin's _meta.lua), or
+# - by hand (Actions → Release plugin → Run workflow, on main, choosing the
+#   plugin), which tags the commit with the version in its _meta.lua.
 #
-# The zip goes on the versioned release, and its plugin.json is also put on
-# the rolling "knuthplass" release, where the updater finds it at
+# The zip and plugin.json go on the versioned release (<plugin>-vX.Y.Z), and
+# plugin.json is also put on the plugin's rolling release, named after the
+# plugin, where its updater (shared/updatecore.lua) finds it:
 #
-#   https://github.com/<repo>/releases/download/knuthplass/plugin.json
+#   https://github.com/<repo>/releases/download/<plugin>/plugin.json
 #
-# (A fixed tag, so other releases in this repo can't hide it the way they
-# could with "latest". Like "engine", it is a prerelease.)
+# (A fixed tag per plugin, so the plugins' releases can't hide each other the
+# way they could with "latest". Like "engine", these are prereleases.)
+#
+# Knuth–Plass releases before 0.6 were tagged vX.Y.Z; its rolling release
+# ("knuthplass") is the same, so installed copies keep updating.
 name: Release plugin
 
 on:
   push:
-    tags: ["v*.*.*"]
+    tags: ["*-v*.*.*"]
   workflow_dispatch:
+    inputs:
+      plugin:
+        description: Plugin to release
+        type: choice
+        options: [knuthplass, rclonesync, statsync]
 
 permissions:
   contents: write
@@ -34,71 +44,85 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check version
+      - name: Check plugin and version
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
+          INPUT_PLUGIN: ${{ inputs.plugin }}
         run: |
           set -euo pipefail
-          version=$(sed -n 's/^ *version = "\([0-9]*\.[0-9]*\.[0-9]*\)",$/\1/p' knuthplass.koplugin/_meta.lua)
-          [ -n "$version" ] || { echo "::error::no version in _meta.lua"; exit 1; }
-          tag="v$version"
           if [ "$EVENT" = "push" ]; then
-            if [ "$tag" != "$REF_NAME" ]; then
-              echo "::error::tag $REF_NAME does not match _meta.lua version $version"
-              exit 1
-            fi
+            plugin=${REF_NAME%-v*}
           else
+            plugin=$INPUT_PLUGIN
             if [ "$REF" != "refs/heads/main" ]; then
               echo "::error::run it on main (not $REF_NAME)"
               exit 1
             fi
-            if gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-                || git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
-              echo "::error::$tag already exists: bump version in _meta.lua first"
+          fi
+          case "$plugin" in
+            knuthplass|rclonesync|statsync) ;;
+            *) echo "::error::unknown plugin '$plugin'"; exit 1 ;;
+          esac
+          meta="$plugin.koplugin/_meta.lua"
+          version=$(sed -n 's/^ *version = "\([0-9]*\.[0-9]*\.[0-9]*\)",$/\1/p' "$meta")
+          [ -n "$version" ] || { echo "::error::no version in $meta"; exit 1; }
+          title=$(sed -n 's/^ *fullname = _("\(.*\)"),$/\1/p' "$meta")
+          [ -n "$title" ] || title=$plugin
+          tag="$plugin-v$version"
+          if [ "$EVENT" = "push" ]; then
+            if [ "$tag" != "$REF_NAME" ]; then
+              echo "::error::tag $REF_NAME does not match $meta version $version"
               exit 1
             fi
+          elif gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              || git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "::error::$tag already exists: bump version in $meta first"
+            exit 1
           fi
-          echo "Releasing $tag"
+          echo "Releasing $title $version as $tag"
           {
+            echo "PLUGIN=$plugin"
             echo "VERSION=$version"
             echo "TAG=$tag"
+            echo "TITLE=$title"
           } >> "$GITHUB_ENV"
 
+      # All plugins' tests: they share the updater.
       - name: Test
         run: |
-          sudo apt-get update && sudo apt-get install --no-install-recommends -y luajit
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y luajit lua-filesystem libsqlite3-0 rclone
           sh scripts/test.sh
+          sh scripts/test-statsync.sh
 
       - name: Package
         run: |
           set -euo pipefail
           mkdir -p out
-          zip -qrX out/knuthplass.koplugin.zip knuthplass.koplugin
-          sha=$(sha256sum out/knuthplass.koplugin.zip | cut -d' ' -f1)
-          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/knuthplass.koplugin.zip"
-          jq -n --arg v "$VERSION" --arg url "$url" --arg sha "$sha" \
-            '{version: $v, file: "knuthplass.koplugin.zip", url: $url, sha256: $sha}' \
+          zip -qrX "out/$PLUGIN.koplugin.zip" "$PLUGIN.koplugin"
+          sha=$(sha256sum "out/$PLUGIN.koplugin.zip" | cut -d' ' -f1)
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$PLUGIN.koplugin.zip"
+          jq -n --arg v "$VERSION" --arg file "$PLUGIN.koplugin.zip" --arg url "$url" --arg sha "$sha" \
+            '{version: $v, file: $file, url: $url, sha256: $sha}' \
             > out/plugin.json
           cat out/plugin.json
 
       # For a manual run this also creates the tag, on the commit tested.
       - name: Publish
         run: |
-          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --latest --target "$GITHUB_SHA" \
-            --title "Knuth–Plass justification $VERSION" --generate-notes \
-            out/knuthplass.koplugin.zip out/plugin.json
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --latest=false --target "$GITHUB_SHA" \
+            --title "$TITLE $VERSION" --generate-notes \
+            "out/$PLUGIN.koplugin.zip" out/plugin.json
 
       # Last, so the updater only sees plugin.json once the zip is up.
       - name: Point updater at it
-        env:
-          UPDATE_TAG: knuthplass
         run: |
           set -euo pipefail
-          if ! gh release view "$UPDATE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$UPDATE_TAG" -R "$GITHUB_REPOSITORY" --prerelease --latest=false \
-              --target "$GITHUB_SHA" --title "Knuth–Plass justification updates" \
-              --notes "plugin.json for the plugin's updater; points at the newest vX.Y.Z release."
+          if ! gh release view "$PLUGIN" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$PLUGIN" -R "$GITHUB_REPOSITORY" --prerelease --latest=false \
+              --target "$GITHUB_SHA" --title "$TITLE updates" \
+              --notes "plugin.json for the plugin's updater; points at the newest $PLUGIN-vX.Y.Z release."
           fi
-          gh release upload "$UPDATE_TAG" -R "$GITHUB_REPOSITORY" --clobber out/plugin.json
+          gh release upload "$PLUGIN" -R "$GITHUB_REPOSITORY" --clobber out/plugin.json

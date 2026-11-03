@@ -205,7 +205,8 @@ reMarkable 1 or 2 uses `remarkable`.)
   `knuthplass/`.
 
 To publish a release, set `version` in `_meta.lua` and push a matching
-tag (`v0.2.0`). The release workflow tests, packages and publishes it.
+tag (`knuthplass-v0.6.0`; releases before 0.6 were tagged `v0.5.1`), or run
+the "Release plugin" workflow on main. See RELEASING.md.
 Engine builds are published by the "Build engine" workflow (on each push to
 the crengine branch, daily for new nightlies, or run by hand).
 

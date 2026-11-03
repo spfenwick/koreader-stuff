@@ -21,6 +21,12 @@ local T = require("ffi/util").template
 -- Names of their own: plugins share package.loaded.
 local Engine = require("rclonesync_engine")
 local Remote = require("rclonesync_remote")
+local Updater = require("rclonesync_updatecore").new{
+    name = "rclonesync",
+    title = _("Settings sync"),
+    settings_key = "rclonesync_updates",
+    log_prefix = "Settings sync:",
+}
 
 --- A message that stays until the screen is tapped (KOReader's own
 --- notifications go after a few seconds, and are often hidden by its
@@ -96,6 +102,7 @@ function RcloneSync:init()
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
+    Updater.scheduleCheck(self)
     if startup and not startup.shown then
         startup.shown = true
         UIManager:nextTick(function()
@@ -363,7 +370,9 @@ function RcloneSync:menu()
             end
             self:showLog(_("Settings sync log"), log or _("No sync has run yet."))
         end,
+        separator = true,
     })
+    for _i, item in ipairs(Updater.menuItems(self)) do table.insert(items, item) end
     return items
 end
 
