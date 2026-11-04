@@ -421,6 +421,81 @@ do
     check(fm["old.ttf"] and not fm["gone.ttf"], "and the font it has goes in the manifest")
 end
 
+-- settings.txt lines starting with // name files elsewhere in KOReader's
+-- folder, such as a plugin's configuration.
+do
+    local rules = Engine.compile({ "//plugins/a.koplugin/configuration.lua", "//plugins/*.lua",
+        "//../x.lua", "//settings/x.lua", "//rclonesync/state.tsv", "//a//b", "//" })
+    check(rules.koreader["plugins/a.koplugin/configuration.lua"], "// path compiled")
+    check(#rules.bad == 6, "patterns, .., settings/, rclonesync/ and empty paths refused: " .. #rules.bad)
+    check(Engine.matches(rules, "@koreader/plugins/a.koplugin/configuration.lua"), "// path matches")
+    check(not Engine.matches(Engine.compile({ "/**" }), "@koreader/plugins/x.lua"),
+        "other patterns don't match // paths")
+
+    local ko_server = { type = "folder", address = base .. "/ko", versioner = md5 }
+    local ko_root = base .. "/ko" .. ROOT
+    local function ksync(dev)
+        return Engine.sync({ paths = dev.paths, remote = Remote.new(ko_server, ROOT), device = dev.name })
+    end
+    local CONF = "/plugins/assistant.koplugin/configuration.lua"
+    local list = "/gestures.lua\n//plugins/assistant.koplugin/configuration.lua\n"
+    local H, I, J = device("H"), device("I"), device("J")
+    write(H.paths.state .. "/settings.txt", list)
+    write(H.kodir .. "/settings/gestures.lua", "return {}\n")
+    write(H.kodir .. CONF, "return { key = 1 }\n")
+    write(H.kodir .. "/settings/@koreader/plugins/assistant.koplugin/configuration.lua", "stray\n")
+
+    r = ksync(H)
+    check(not r.fatal and #r.errors == 0 and r.uploaded == 3, "// file uploaded with the rest\n" .. r.log)
+    check(read(ko_root .. "/settings/@koreader" .. CONF) == "return { key = 1 }\n",
+        "kept under settings/@koreader/ on the server")
+    check(not exists(ko_root .. "/plugins"), "not in plugins/")
+
+    -- I has the plugin but not its configuration: it comes at the next start.
+    write(I.kodir .. "/plugins/assistant.koplugin/main.lua", "-- assistant\n")
+    r = ksync(I)
+    check(not r.fatal and r.downloaded == 3 and r.pending, "// file pulled, staged\n" .. r.log)
+    check(not exists(I.kodir .. CONF), "not in place before the restart")
+    check(Engine.applyPending(I.paths), "put in place")
+    check(read(I.kodir .. CONF) == "return { key = 1 }\n", "in the plugin's folder at the restart")
+    check(not exists(I.kodir .. "/settings/@koreader"), "not in settings/")
+
+    -- An edit on I reaches H.
+    write(I.kodir .. CONF, "return { key = 2 }\n")
+    r = ksync(I)
+    check(r.uploaded == 1, "I uploads its edit\n" .. r.log)
+    r = ksync(H)
+    check(r.downloaded == 1 and r.pending, "H gets it\n" .. r.log)
+    Engine.applyPending(H.paths)
+    check(read(H.kodir .. CONF) == "return { key = 2 }\n", "H's configuration updated")
+
+    -- A device that already has the same file transfers nothing.
+    os.execute("mkdir -p " .. q(J.paths.state))
+    os.execute("cp " .. q(H.paths.state .. "/settings.txt") .. " " .. q(J.paths.state))
+    write(J.kodir .. "/settings/gestures.lua", "return {}\n")
+    write(J.kodir .. CONF, "return { key = 2 }\n")
+    r = ksync(J)
+    check(not r.fatal and r.downloaded == 0 and r.uploaded == 0 and not r.pending,
+        "same file already here: nothing transferred\n" .. r.log)
+
+    -- A deletion on H reaches I at its next start.
+    os.remove(H.kodir .. CONF)
+    r = ksync(H)
+    check(r.deleted_server == 1 and not exists(ko_root .. "/settings/@koreader" .. CONF),
+        "deleted on the server\n" .. r.log)
+    r = ksync(I)
+    check(r.deleted_here == 1 and r.pending and exists(I.kodir .. CONF), "I deletes it at the restart\n" .. r.log)
+    Engine.applyPending(I.paths)
+    check(not exists(I.kodir .. CONF), "deleted at the restart")
+
+    -- Bad // lines, and // in another list, are reported and ignored.
+    write(H.paths.state .. "/settings.txt", list .. "//plugins/*.lua\n")
+    write(H.paths.state .. "/plugins.txt", "//plugins/x.lua\n")
+    r = ksync(H)
+    check(#r.errors == 2 and r.log:find("//plugins/*.lua: only exact paths", 1, true)
+        and r.log:find("only settings.txt", 1, true), "bad // lines reported\n" .. r.log)
+end
+
 -- Dropbox and WebDAV ------------------------------------------------------------
 
 local real_request = Remote.request

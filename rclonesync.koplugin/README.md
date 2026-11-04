@@ -32,7 +32,7 @@ tapping the message cancels it; running it again finishes the job.
 | On the server (under the folder) | On the device | |
 |---|---|---|
 | `lists/` | `koreader/rclonesync/settings.txt`, `plugins.txt`, `patches.txt` | first, so the rest use the new lists |
-| `settings/` | what `settings.txt` lists in `settings/` | put in place at the next start |
+| `settings/` | what `settings.txt` lists in `settings/` (and with `//`, elsewhere) | put in place at the next start |
 | `plugins/` | what `plugins.txt` lists in `plugins/` | |
 | `patches/` | what `patches.txt` lists in `patches/` | |
 | `fonts/` | `fonts/` | from the server only |
@@ -51,7 +51,15 @@ sides. Without a list, that folder isn't synced.
 ```
 /gestures.lua
 /ZenOS/**
+//plugins/assistant.koplugin/configuration.lua
 ```
+
+A line starting with `//` names a file elsewhere in KOReader's folder,
+such as a setting a plugin keeps in its own folder. It's synced like the
+other settings (put in place at the next start), and kept on the server
+under `settings/@koreader/`. It has to be the exact path of one file, not
+a pattern, and not in `settings/` (list those with a single `/`) or
+`rclonesync/`. Only `settings.txt` can have these lines.
 
 `plugins.txt`:
 

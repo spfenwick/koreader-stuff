@@ -7,6 +7,7 @@ On the server, under the sync folder:
                      (and for fonts, the server's ID for the file)
     lists/           settings.txt, plugins.txt, patches.txt
     settings/        what settings.txt lists in KOReader's settings/
+      @koreader/     files settings.txt lists with //, from KOReader's folder
     plugins/         what plugins.txt lists in plugins/
     patches/         what patches.txt lists in patches/
     fonts/           pulled only, never deleted
@@ -36,18 +37,23 @@ local Remote = require("rclonesync_remote")
 local Engine = {}
 
 local TEMP_SUFFIX = ".rclonesync-part"
+-- Files named with // in settings.txt: their paths in the sync.
+local KO = "@koreader/"
 local MANIFEST = "manifest.tsv"
 
 -- In the order they're synced: the lists first, so the rest use the new ones.
 --   dir:       under KOReader's folder (lists: koreader/rclonesync/)
 --   list:      only what this list names; without the list, not synced
+--   koreader_paths: the list can name files anywhere in KOReader's folder
+--              with //, kept under @koreader/
 --   pull_only: never uploaded, never deleted here
 --   staged:    put in place at the next start
 --   restart:   KOReader uses new files only after a restart
 Engine.AREAS = {
     { name = "lists", remote = "lists", in_state = true,
       patterns = { "/settings.txt", "/plugins.txt", "/patches.txt" } },
-    { name = "settings", dir = "settings", remote = "settings", list = "settings.txt", staged = true },
+    { name = "settings", dir = "settings", remote = "settings", list = "settings.txt", staged = true,
+      koreader_paths = true },
     { name = "plugins", dir = "plugins", remote = "plugins", list = "plugins.txt", restart = true },
     { name = "patches", dir = "patches", remote = "patches", list = "patches.txt", restart = true },
     { name = "fonts", dir = "fonts", remote = "fonts", pull_only = true, restart = true },
@@ -148,14 +154,38 @@ local function globToLua(g)
     return table.concat(out)
 end
 
+-- Why a // path can't be synced, or nil if it can.
+local function badKoreaderPath(rel)
+    if rel == "" then return "no file named" end
+    if rel:find("[%*%?%[%]{}\\]") then return "only exact paths, no patterns" end
+    if rel:find("[\t\n\r]") then return "tabs and line breaks can't be synced" end
+    for part in (rel .. "/"):gmatch("([^/]*)/") do
+        if part == "" or part == "." or part == ".." then return "not a plain path" end
+    end
+    local top = rel:match("^[^/]+")
+    if top == "settings" then return "files in settings/ are listed with a single /" end
+    if top == "rclonesync" then return "Settings sync's own folder" end
+    return nil
+end
+
 --- Rules from the lines of a list: one rclone-style pattern per line, # or
 --- ; for comments. "/x" matches only at the top of the folder; "x" at the
---- end of any path.
+--- end of any path. "//x" names one file in KOReader's folder (only exact
+--- paths, as finding them would mean looking through all of it): it goes
+--- in rules.koreader, or rules.bad with why it can't be synced.
 function Engine.compile(lines)
-    local rules = { tops = {}, prunable = true }
+    local rules = { tops = {}, prunable = true, koreader = {}, bad = {} }
     for _, line in ipairs(lines) do
         line = line:gsub("^%s+", ""):gsub("%s+$", "")
-        if line ~= "" and not line:match("^[#;]") then
+        if line:sub(1, 2) == "//" then
+            local rel = line:sub(3)
+            local why = badKoreaderPath(rel)
+            if why then
+                table.insert(rules.bad, line .. ": " .. why)
+            else
+                rules.koreader[rel] = true
+            end
+        elseif line ~= "" and not line:match("^[#;]") then
             local anchored = line:sub(1, 1) == "/"
             local body = anchored and line:sub(2) or line
             for _, alt in ipairs(expandBraces(body)) do
@@ -175,6 +205,9 @@ end
 
 function Engine.matches(rules, path)
     if rules.all then return true end
+    if path:sub(1, #KO) == KO then
+        return rules.koreader ~= nil and rules.koreader[path:sub(#KO + 1)] == true
+    end
     for _, rule in ipairs(rules) do
         if rule.anchored then
             if path:find(rule.pattern) then return true end
@@ -377,10 +410,11 @@ local function scan(root, rules)
 end
 
 -- Hashes for scanned files, from the cache where size and time match.
-local function hashScan(root, files, cache, new_cache)
+-- fullOf gives a file's path on the device.
+local function hashScan(fullOf, files, cache, new_cache)
     local todo = {}
     for path, f in pairs(files) do
-        local full = root .. "/" .. path
+        local full = fullOf(path)
         local c = cache[full]
         if c and tonumber(c.size) == f.size and tonumber(c.mtime) == f.mtime then
             f.h = c.h
@@ -390,7 +424,7 @@ local function hashScan(root, files, cache, new_cache)
     end
     local hashes = Engine.md5Files(todo)
     for path, f in pairs(files) do
-        local full = root .. "/" .. path
+        local full = fullOf(path)
         f.h = f.h or hashes[full]
         if f.h then new_cache[full] = { path = full, size = f.size, mtime = f.mtime, h = f.h } end
     end
@@ -456,9 +490,40 @@ local function syncTwoWay(ctx, area, result)
     else
         rules = ALL
     end
+    for _, bad in ipairs(rules.bad or {}) do
+        table.insert(result.errors, area.list .. ": " .. bad)
+        say(result, "  ! " .. bad)
+    end
+    if rules.koreader and next(rules.koreader) and not area.koreader_paths then
+        for rel in pairs(rules.koreader) do
+            table.insert(result.errors, area.list .. ": //" .. rel .. ": only settings.txt can list // paths")
+            say(result, "  ! //" .. rel .. ": only settings.txt can list // paths")
+        end
+        rules.koreader = {}
+    end
+
+    -- A file's path on the device.
+    local function fullOf(path)
+        if area.koreader_paths and path:sub(1, #KO) == KO then
+            return paths.kodir .. "/" .. path:sub(#KO + 1)
+        end
+        return root .. "/" .. path
+    end
 
     local L = scan(root, rules)
-    hashScan(root, L, ctx.cache, ctx.new_cache)
+    if area.koreader_paths then
+        -- A folder really called @koreader in settings/ isn't these files.
+        for path in pairs(L) do
+            if path:sub(1, #KO) == KO then L[path] = nil end
+        end
+        for rel in pairs(rules.koreader) do
+            local attr = lfs().attributes(paths.kodir .. "/" .. rel)
+            if attr and attr.mode == "file" then
+                L[KO .. rel] = { size = attr.size, mtime = attr.modification }
+            end
+        end
+    end
+    hashScan(fullOf, L, ctx.cache, ctx.new_cache)
     manifest[area.name] = manifest[area.name] or {}
     local R = {}
     for path, e in pairs(manifest[area.name]) do
@@ -481,7 +546,7 @@ local function syncTwoWay(ctx, area, result)
         if listing == nil then listing = ctx.remote:list(area.remote) or false end
         local f = listing and listing[path]
         if not (f and f.size == l.size and f.fp) then return false end
-        return ctx.remote:contentHash(root .. "/" .. path, paths.state .. "/hash" .. TEMP_SUFFIX) == f.fp
+        return ctx.remote:contentHash(fullOf(path), paths.state .. "/hash" .. TEMP_SUFFIX) == f.fp
     end
 
     local function setRemote(path, l)
@@ -490,7 +555,7 @@ local function syncTwoWay(ctx, area, result)
     end
     local function fetch(path, r)
         if preview then return true end
-        local dest = staged and paths.staging .. "/" .. path or root .. "/" .. path
+        local dest = staged and paths.staging .. "/" .. path or fullOf(path)
         local ok, hash = download(ctx, area, path, dest)
         if not ok then return nil, hash end
         if hash and hash ~= r.h then
@@ -505,7 +570,7 @@ local function syncTwoWay(ctx, area, result)
     for _, path in ipairs(sortedKeys(all)) do
         local l, r, b = L[path], R[path], B[path]
         local lh, rh = l and l.h, r and r.h
-        local full = root .. "/" .. path
+        local full = fullOf(path)
         if l and not lh then
             fail(result, area, path, "couldn't read it")
             newB[path] = b
@@ -672,7 +737,7 @@ local function syncPullOnly(ctx, area, result)
         local l, m = L[path], M[path]
         if l and not (m and B[path] == m.h) then need[path] = l end
     end
-    hashScan(root, need, ctx.cache, ctx.new_cache)
+    hashScan(function(path) return root .. "/" .. path end, need, ctx.cache, ctx.new_cache)
 
     -- Whether a font here the same size as the server's is the same font:
     -- Dropbox's listing tells. Otherwise only for a font this device hasn't
@@ -888,7 +953,9 @@ function Engine.applyPending(paths)
     local settings = paths.kodir .. "/settings"
     local failed, lines = {}, {}
     for _, e in ipairs(entries) do
-        local dest = settings .. "/" .. (e.path or "")
+        local path = e.path or ""
+        local dest = path:sub(1, #KO) == KO and paths.kodir .. "/" .. path:sub(#KO + 1)
+            or settings .. "/" .. path
         local ok, err
         if e.op == "copy" then
             local src = paths.staging .. "/" .. e.path
