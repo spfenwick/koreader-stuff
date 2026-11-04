@@ -482,6 +482,33 @@ do
     -- Download budget
     r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, max_download_bytes = 1, full_list = true }, t)
     check(#r.downloads == 1 and r.remote_more, "download budget stops early and says there's more")
+    -- Annotations: their own numbering and probing, next to the statistics
+    local at = memTransport()
+    local apend = TMP .. "/ann-pending.jsonl.zst"
+    S.writeFile(apend, "ann")
+    r = NetJob.run({ device_id = "dev1", pending = { path = pending, size = 1 }, meta_path = meta, seen = {},
+                     tmp_dir = tmp, full_list = true, ann = { pending = { path = apend, size = 3 } } }, at)
+    check(r.uploaded and r.uploaded.name == "seg-0000000001.jsonl.zst" and r.ann_uploaded
+        and r.ann_uploaded.name == "ann-0000000001.jsonl.zst" and r.ann_uploaded.verified, "both streams uploaded, each as number 1")
+    at.files["devices/dev2"] = true
+    at.files["devices/dev2/seg-0000000001.jsonl.zst"] = "s1"
+    at.files["devices/dev2/ann-0000000001.jsonl.zst"] = "a1"
+    at.files["devices/dev2/ann-0000000002.jsonl.zst"] = "a2"
+    local aseen = { dev1 = { ["seg-0000000001.jsonl.zst"] = { size = 1 }, ["ann-0000000001.jsonl.zst"] = { size = 3 } } }
+    at.log, at.requests = {}, 0
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = aseen, tmp_dir = tmp, ann = {} }, at)
+    local by = {}
+    for _, d in ipairs(r.downloads) do by[d.device .. "/" .. d.name] = d.stream end
+    check(by["dev2/seg-0000000001.jsonl.zst"] == "stats" and by["dev2/ann-0000000001.jsonl.zst"] == "ann"
+        and by["dev2/ann-0000000002.jsonl.zst"] == "ann" and #r.downloads == 3, "probing finds each stream's next segments")
+    check(at.requests == 8, "ordinary sync with annotations: 1 listing + 3 downloads + 1 miss per stream and device (" .. at.requests .. ")")
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = aseen, tmp_dir = tmp }, at)
+    check(#r.downloads == 1 and r.downloads[1].stream == "stats", "annotation sync off: annotation segments left alone")
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, full_list = true,
+                     ann = { bad = { dev2 = { ["ann-0000000002.jsonl.zst"] = { size = 2 } } } } }, at)
+    local names2 = names(r)
+    check(names2["dev2/ann-0000000001.jsonl.zst"] and not names2["dev2/ann-0000000002.jsonl.zst"], "known-bad annotation segment skipped")
+
     -- Unreachable server
     local down = memTransport()
     down.list = function() return nil, "connection refused" end

@@ -2,6 +2,8 @@
 
 Syncs KOReader's reading statistics (the page-by-page reading times behind
 Reading statistics) between any number of devices, through a WebDAV server.
+Optionally it syncs highlights, notes and page bookmarks too (see
+[Highlights and bookmarks](#highlights-and-bookmarks)).
 
 Unlike Reading statistics' own "Cloud sync", which uploads and downloads the
 whole `statistics.sqlite3`, each device here writes only its own files, which
@@ -68,9 +70,16 @@ Tools → Statistics sync:
 - **Server**: the WebDAV server from Cloud storage to use.
 - **Folder on server**: the folder to sync in. Changing it (or the server)
   sends all of this device's statistics to the new place at the next sync.
+- **Sync highlights and bookmarks**: on/off (off until you turn it on); see
+  below.
+- **Removed highlights waiting for you**: highlights and bookmarks removed
+  in bulk on this device, waiting for you to say whether to remove them
+  everywhere (see below).
 - **Turn on Wi-Fi to sync**: for automatic syncs.
 - **Status**: server and folder, last success, last attempt and error, devices seen, entries
-  sent and received last time, totals, this device's ID.
+  sent and received last time, totals, this device's ID, and with
+  highlights and bookmarks on, their counts, changes waiting to be sent,
+  books waiting to be updated, and removals waiting for you.
 - **Rebuild from cloud**: imports every device's files again (see below).
 - **Reset device ID**: see below.
 - **Check for updates** and **Automatic updates**: see Updates.
@@ -83,6 +92,8 @@ Tools → Statistics sync:
     meta.json                     device ID, model, format version, when written
     seg-0000000001.jsonl.zst      segment files, numbered 1, 2, 3, …
     seg-0000000002.jsonl.zst
+    …
+    ann-0000000001.jsonl.zst      highlights and bookmarks (when synced), numbered apart
     …
 ```
 
@@ -167,6 +178,52 @@ This version never deletes anything anywhere:
 If you want statistics gone everywhere, delete them on every device, and
 remove the matching files from the server by hand, or start a new sync folder.
 
+## Highlights and bookmarks
+
+With **Sync highlights and bookmarks** on, KOReader's annotations (page
+bookmarks, highlights, and notes on highlights) sync too, including edits
+(note text, colour, style, adjusted ends) and removals.
+
+- **Same file, same annotations.** A book's annotations go to the devices
+  that have the same file (KOReader's partial MD5), because their positions
+  only make sense in that file. Another edition, or a copy from elsewhere,
+  doesn't share them. Reflowable books (EPUB and the like) and PDF/DjVu keep
+  separate lists, as in KOReader: opening a book with the other engine
+  doesn't touch the first list.
+- **When they arrive.** For the book you're reading, right after a sync
+  (once any menu or dialog is closed). Other books get theirs when they're
+  next opened; until then the file browser's highlight counts and exports
+  don't include them. Books first opened with KOReader's rendering from
+  before 2020 are left out.
+- **Turning it on** reads the highlights of every book in the reading
+  history, so they're sent at the next sync, not only those of books you
+  open later. That also happens on a device where it's turned on through
+  synced settings, at the next start.
+- **Newest change wins.** If the same highlight is changed on two devices,
+  the later change wins, by the devices' clocks. A removal counts as a
+  change: it wins over an earlier edit, and loses to a later one.
+- **Removing many at once asks first.** If more than 5 and more than half of
+  a book's highlights and bookmarks disappear at once, or all of them (for
+  example the book's settings were reset or its `.sdr` folder deleted),
+  they're not removed elsewhere straight away. You're asked:
+  - **Restore them here**: they're put back on this device;
+  - **Remove everywhere**: they're removed on the other devices too;
+  - **Ask later**: nothing happens; you're asked again after the next sync
+    or when the book is next opened or closed (also from the menu).
+- **Notes are sent as plain text** to your server, as statistics are.
+
+While this is on:
+
+- **Turn off KOReader's "Export annotations on book closing"** (in the
+  reader's Bookmarks settings): the import that goes with it deletes
+  highlights that aren't in the exported file.
+- **Don't sync books' settings folders** (`.sdr` folders, `docsettings/`,
+  `hash/`) with Settings sync or any other file sync: the two would undo
+  each other's changes.
+- **"Write highlights into PDF"** puts a copy of each highlight into the PDF
+  file itself. A device with that copy of the file would show it twice
+  (once from the file, once synced). Leave it off for synced PDFs.
+
 ## Recovering
 
 - **A device restored from a backup** (or a copy of another device's KOReader
@@ -186,7 +243,7 @@ remove the matching files from the server by hand, or start a new sync folder.
 In KOReader's `settings/` folder:
 
 - `statsync_settings.lua`: the settings that are the same on every device:
-  automatic sync on/off, "Turn on Wi-Fi to sync", the chosen server's name
+  automatic sync on/off, highlights and bookmarks on/off, "Turn on Wi-Fi to sync", the chosen server's name
   (no password: that stays in Cloud storage's `cloudstorage.lua`), the
   folder, and `time_limit` (seconds before the network step is stopped,
   default 180; not in the menu). **This one is meant to be synced between
@@ -194,8 +251,11 @@ In KOReader's `settings/` folder:
   `settings.txt`. A synced change takes effect at the next start.
 - `statsync_device.lua`: this device's ID and sync status. **Never sync
   it**: devices sharing it would share an ID.
-- `statsync.sqlite3`: what was sent and received. Never sync it either. Safe
-  to delete, at the cost of sending everything once more.
+- `statsync.sqlite3`: what was sent and received, and with highlights and
+  bookmarks on, the merged highlights of every book. Never sync it either.
+  Safe to delete, at the cost of sending everything once more (turn
+  highlights and bookmarks off and on again to read the reading history
+  afresh).
 
 So in `settings.txt` list `/statsync_settings.lua` exactly, not a pattern
 such as `/statsync*` that would also match the other two.
@@ -236,4 +296,5 @@ plugin and lua-ljsqlite3 from KOReader's sources: set `KOREADER_SRC` to a
 folder with `koreader/` and `koreader-base/` checkouts, or the script clones
 them into `.cache/`.
 
-See DESIGN.md for how it works and why.
+See DESIGN.md for how it works and why, and ANNOTATIONS.md for highlights
+and bookmarks.

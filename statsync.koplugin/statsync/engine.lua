@@ -24,11 +24,15 @@ Everything KOReader-specific is passed in (`deps`), so tests can drive it:
     onDone(status, run)   optional, after every cycle (e.g. tell the user)
     logger, time_limit, poll_interval, max_events, max_download_bytes
     zstd                  optional, statsync/zstd by default
+    ann                   optional, annotation sync: { store (statsync/annstore),
+                          enabled() -> bool, collect() (record the open book's
+                          changes), afterSync(run), max_records }
 
 Segments are written and read as plain .jsonl here; they're compressed
 just before upload and decompressed just before import.
 --]]
 
+local AnnFormat = require("statsync/annformat")
 local Codec = require("statsync/codec")
 local NetJob = require("statsync/netjob")
 
@@ -39,6 +43,7 @@ local DEFAULTS = {
     time_limit = 180,          -- seconds for the whole network step
     poll_interval = 1,         -- seconds between subprocess checks
     max_events = 20000,        -- events per uploaded segment (~2 MB)
+    max_ann_records = 5000,    -- annotation records per uploaded segment
     max_download_bytes = 32 * 1024 * 1024, -- per cycle
     full_list_interval = 24 * 3600, -- seconds between full listings of every device folder
 }
@@ -78,7 +83,9 @@ function Engine:request(reason, opts)
     self.running = true
     local run = { reason = reason, interactive = opts.interactive, started = self.deps.now(),
                   imported_events = 0, inserted = 0, updated = 0, uploaded_events = 0,
-                  segments_imported = 0, segments_bad = 0, affected = {} }
+                  segments_imported = 0, segments_bad = 0, affected = {},
+                  ann_uploaded_records = 0, ann_imported_records = 0, ann_applied = 0,
+                  ann_segments_imported = 0, ann_affected = {} }
     self.current = run
     self.deps.schedule(0, function() self:_step(run, "export") end)
     return "started"
@@ -177,6 +184,29 @@ function Engine:_export(run)
     end
     run.export_cpu = os.clock() - t0
 
+    local ann_params
+    if d.ann and d.ann.enabled() then
+        run.ann = true
+        local cok, cerr = pcall(d.ann.collect)
+        if not cok then self.log.warn("StatSync: recording annotation changes failed:", cerr) end
+        run.ann_pending_path = d.work_dir .. "/ann-pending.jsonl"
+        run.ann_packed_path = run.ann_pending_path .. ".zst"
+        os.remove(run.ann_pending_path)
+        os.remove(run.ann_packed_path)
+        local aexp = d.ann.store:export{ device_id = run.device_id, out_path = run.ann_pending_path, now = d.now(),
+                                         max_records = d.ann.max_records or d.max_ann_records }
+        run.ann_export = aexp
+        if aexp then
+            local packed, perr = self:_zstd().compressFile(run.ann_pending_path, run.ann_packed_path)
+            if not packed then return self:_fail(run, "compressing annotations: " .. tostring(perr)) end
+            aexp.plain_size, aexp.size = aexp.size, packed
+        end
+        ann_params = {
+            pending = aexp and { path = run.ann_packed_path, size = aexp.size } or nil,
+            bad = d.store:badSegments(AnnFormat.BAD_VERSION),
+        }
+    end
+
     local meta_path = d.work_dir .. "/meta.json"
     writeFileAtomic(meta_path, Codec.encode{
         deviceId = run.device_id, deviceName = d.device_name or "", schema = Codec.VERSION,
@@ -191,6 +221,7 @@ function Engine:_export(run)
         full_list = run.full_list,
         tmp_dir = d.tmp_dir,
         max_download_bytes = d.max_download_bytes,
+        ann = ann_params,
     }
     local result_path = run.result_path
     local makeTransport = d.makeTransport
@@ -262,6 +293,26 @@ function Engine:_collect(run)
     end
     os.remove(run.pending_path)
     os.remove(run.packed_path)
+
+    if run.ann then
+        local aup = result.ann_uploaded
+        if aup and aup.verified then
+            local ok, n = pcall(d.ann.store.markExported, d.ann.store, run.ann_pending_path, run.device_id,
+                aup.name, aup.size, aup.etag, d.now())
+            if ok then
+                run.ann_uploaded_records = n
+                run.ann_uploaded = aup.name
+            else
+                self.log.warn("StatSync: recording the annotation upload failed:", n)
+            end
+        elseif run.ann_export then
+            run.ann_upload_error = result.ann_upload_error or "upload didn't finish"
+            self.log.warn("StatSync: annotation upload failed:", run.ann_upload_error)
+        end
+        os.remove(run.ann_pending_path)
+        os.remove(run.ann_packed_path)
+    end
+
     run.queue = result.downloads or {}
     run.qi = 1
     d.schedule(0, function() self:_step(run, "import") end)
@@ -276,8 +327,15 @@ function Engine:_import(run)
     local t0 = os.clock()
     local plain = item.path .. ".jsonl"
     local summary, err, kind
+    local is_ann = item.stream == "ann"
     local uok, uerr = self:_zstd().decompressFile(item.path, plain)
-    if uok then
+    if uok and is_ann then
+        if run.ann then
+            summary, err, kind = d.ann.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
+        else
+            err, kind = "annotation sync is off", "skip"
+        end
+    elseif uok then
         summary, err, kind = d.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
     else
         err, kind = "can't decompress: " .. tostring(uerr), "format"
@@ -285,7 +343,14 @@ function Engine:_import(run)
     run.import_cpu = (run.import_cpu or 0) + (os.clock() - t0)
     os.remove(item.path)
     os.remove(plain)
-    if summary then
+    if summary and is_ann then
+        run.ann_segments_imported = run.ann_segments_imported + 1
+        run.ann_imported_records = run.ann_imported_records + summary.records
+        run.ann_applied = run.ann_applied + summary.applied
+        for id, a in pairs(summary.affected) do run.ann_affected[id] = a end
+    elseif kind == "skip" then
+        self.log.dbg("StatSync: skipping", item.name, err)
+    elseif summary then
         run.segments_imported = run.segments_imported + 1
         run.imported_events = run.imported_events + summary.events
         run.inserted = run.inserted + summary.inserted
@@ -294,7 +359,8 @@ function Engine:_import(run)
     elseif kind == "format" then
         run.segments_bad = run.segments_bad + 1
         self.log.warn("StatSync: skipping bad segment", item.device .. "/" .. item.name .. ":", err)
-        pcall(d.store.recordBad, d.store, item.device, item.name, item.size, item.etag, err)
+        pcall(d.store.recordBad, d.store, item.device, item.name, item.size, item.etag, err,
+            is_ann and AnnFormat.BAD_VERSION or nil)
     else
         -- Database trouble: stop; nothing is marked, the next sync retries.
         for i = run.qi, #run.queue do os.remove(run.queue[i].path) end
@@ -319,15 +385,23 @@ function Engine:_finish(run)
         local ok, err = pcall(d.afterImport, run.affected)
         if not ok then self.log.warn("StatSync: refreshing statistics failed:", err) end
     end
+    if run.ann and d.ann.afterSync then
+        local ok, err = pcall(d.ann.afterSync, run)
+        if not ok then self.log.warn("StatSync: applying annotations failed:", err) end
+    end
     local st = self.status
     st.last_attempt = run.started
-    st.last_error = run.error or run.upload_error
+    st.last_error = run.error or run.upload_error or run.ann_upload_error
     if run.full_listed then st.last_full_list = run.full_listed end
     if not run.error then
         st.last_success = d.now()
         st.devices = run.devices
         st.imported_events = run.imported_events
         st.uploaded_events = run.uploaded_events
+        if run.ann then
+            st.ann_imported = run.ann_imported_records
+            st.ann_uploaded = run.ann_uploaded_records
+        end
     end
     st.bytes_up = run.result and run.result.bytes_up
     st.bytes_down = run.result and run.result.bytes_down
@@ -335,6 +409,10 @@ function Engine:_finish(run)
     self.log.info(string.format("StatSync: sync (%s) %s: uploaded %d events, imported %d segments (%d events: %d new, %d longer), %d bad",
         run.reason, run.error and ("failed: " .. run.error) or "done", run.uploaded_events,
         run.segments_imported, run.imported_events, run.inserted, run.updated, run.segments_bad))
+    if run.ann then
+        self.log.info(string.format("StatSync: annotations: sent %d changes, imported %d segments (%d changes, %d new here)",
+            run.ann_uploaded_records, run.ann_segments_imported, run.ann_imported_records, run.ann_applied))
+    end
     self.running = false
     self.current = nil
     if d.onDone then pcall(d.onDone, st, run) end
@@ -344,8 +422,9 @@ function Engine:_finish(run)
     -- progress, so a big first sync carries on by itself.
     local again = self.rerun
     self.rerun = nil
-    local progressed = run.uploaded or run.segments_imported > 0
-    local unfinished = (run.export and run.export.more) or (run.result and run.result.remote_more) or run.killed
+    local progressed = run.uploaded or run.segments_imported > 0 or run.ann_uploaded or run.ann_segments_imported > 0
+    local unfinished = (run.export and run.export.more) or (run.ann_export and run.ann_export.more)
+        or (run.result and run.result.remote_more) or run.killed
     if again or (progressed and unfinished) then
         local reason = again and table.concat(again.reasons, ",") or "continue"
         d.schedule(0, function() self:request(reason, { interactive = again and again.interactive }) end)

@@ -36,10 +36,11 @@ export STATSYNC_TMP
 
 what=${1:-all}
 case "$what" in
-    unit) "$lua_bin" tests/test_statsync.lua ;;
+    unit) "$lua_bin" tests/test_statsync.lua && "$lua_bin" tests/test_statsync_ann.lua ;;
     bench) "$lua_bin" tests/bench_statsync.lua ;;
     *)
         "$lua_bin" tests/test_statsync.lua
+        "$lua_bin" tests/test_statsync_ann.lua
         "$lua_bin" tests/test_statsync_integration.lua
         "$lua_bin" tests/test_statsync_plugin.lua
         ;;

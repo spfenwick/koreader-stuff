@@ -1,10 +1,12 @@
 --[[--
-Statistics sync: syncs reading statistics between devices as a log of
-immutable per-device files on a WebDAV server.
+Statistics sync: syncs reading statistics, and optionally highlights and
+bookmarks, between devices as a log of immutable per-device files on a
+WebDAV server.
 
 statsync/engine.lua runs the sync, statsync/store.lua the databases,
 statsync/webdav.lua and statsync/netjob.lua the network (in a subprocess),
-statsync/plugin.lua connects them to KOReader. See README.md.
+statsync/plugin.lua connects them to KOReader. Annotations: statsync/annstore.lua
+(data), statsync/annsync.lua (in the reader). See README.md and ANNOTATIONS.md.
 --]]
 
 local ConfirmBox = require("ui/widget/confirmbox")
@@ -43,7 +45,14 @@ function StatSync:init()
     Plugin.onDone = function(status, run) self.showResult(status, run) end
     if not started then
         started = true
-        UIManager:scheduleIn(STARTUP_DELAY, function() self.trigger("start") end)
+        UIManager:scheduleIn(STARTUP_DELAY, function()
+            if Plugin.annotationsEnabled() and not Plugin.deviceState().ann_scanned then
+                -- Turned on elsewhere (shared settings), or the scan didn't finish.
+                Plugin.annSync():scan(function() self.trigger("start") end)
+            else
+                self.trigger("start")
+            end
+        end)
     end
     Updater.scheduleCheck(self)
 end
@@ -73,8 +82,15 @@ function StatSync.showResult(status, run)
     else
         text = T(_("Statistics synced.\nSent %1 entries, received %2 entries from %3 files."),
             run.uploaded_events or 0, run.imported_events or 0, run.segments_imported or 0)
+        if run.ann then
+            text = text .. "\n" .. T(_("Highlights and bookmarks: sent %1 changes, received %2."),
+                run.ann_uploaded_records or 0, run.ann_imported_records or 0)
+        end
         if run.upload_error then
             text = text .. "\n" .. T(_("Upload failed: %1"), run.upload_error)
+        end
+        if run.ann_upload_error then
+            text = text .. "\n" .. T(_("Upload of highlights and bookmarks failed: %1"), run.ann_upload_error)
         end
     end
     UIManager:show(InfoMessage:new{ text = text, timeout = run.error and nil or 4 })
@@ -82,7 +98,29 @@ end
 
 -- Triggers --------------------------------------------------------------------
 
+function StatSync:onReaderReady()
+    if not Plugin.annotationsEnabled() then return end
+    local ui = self.ui
+    local function ready()
+        if Plugin.annSync():onReaderReady(ui) > 0 then
+            UIManager:scheduleIn(1, function() Plugin.annSync():askHeld() end)
+        end
+    end
+    -- After KOReader's own post-load work on the annotations (sorting, page numbers).
+    if ui.registerPostReaderReadyCallback and ui.postReaderReadyCallback then
+        ui:registerPostReaderReadyCallback(ready)
+    else
+        UIManager:nextTick(ready)
+    end
+end
+
 function StatSync:onCloseDocument()
+    -- KOReader has saved the book's annotations: record its changes now,
+    -- while they're still in memory.
+    local held = Plugin.annSync():onClose(self.ui)
+    if held > 0 then
+        UIManager:scheduleIn(1, function() Plugin.annSync():askHeld() end)
+    end
     UIManager:scheduleIn(CLOSE_DELAY, function() self.trigger("close") end)
 end
 
@@ -131,6 +169,20 @@ function StatSync:showStatus()
         T(_("Files imported: %1, unreadable: %2"), counts.seen or "?", counts.bad or "?"),
         T(_("This device's ID: %1"), d.device_id or _("not yet created")),
     }
+    if Plugin.annotationsEnabled() then
+        local aok, a = pcall(function() return Plugin.annStore():counts() end)
+        a = aok and a or {}
+        table.insert(lines, "")
+        table.insert(lines, T(_("Highlights and bookmarks: %1 in %2 books"), a.annotations or "?", a.books or "?"))
+        table.insert(lines, T(_("Changes waiting to be sent: %1"), a.outbox or "?"))
+        table.insert(lines, T(_("Books to update when opened: %1"), a.pending or "?"))
+        table.insert(lines, T(_("Books with removals waiting for you: %1"), a.held or "?"))
+        table.insert(lines, T(_("Changes sent last time: %1, received: %2"), st.ann_uploaded or 0, st.ann_imported or 0))
+        table.insert(lines, T(_("Files imported: %1, unreadable: %2"), counts.ann_seen or "?", counts.ann_bad or "?"))
+        table.insert(lines, T(_("Reading history read: %1"), when(d.ann_scanned)))
+    else
+        table.insert(lines, T(_("Highlights and bookmarks: %1"), _("not synced")))
+    end
     UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
 end
 
@@ -224,6 +276,47 @@ function StatSync:menuItems()
             help_text = _([[Use the same server and folder on every device. Changing it sends all of this device's statistics to the new folder at the next sync.]]),
             keep_menu_open = true,
             callback = function(touchmenu_instance) self:editRoot(touchmenu_instance) end,
+        },
+        {
+            text = _("Sync highlights and bookmarks"),
+            help_text = _([[Also sync highlights, notes and page bookmarks, for books with the same file on each device. Changes reach a book when it's open: right away for the book you're reading, otherwise when it's next opened.
+
+Notes are stored on the server as plain text.
+
+While this is on, turn off KOReader's "Export annotations on book closing" (in the reader's Bookmarks settings): the import that goes with it deletes highlights that aren't in the exported file.]]),
+            checked_func = function() return Plugin.annotationsEnabled() end,
+            callback = function()
+                local s = Plugin.settings()
+                s.annotations = not s.annotations or nil
+                Plugin.saveSettings()
+                if s.annotations then
+                    local info = InfoMessage:new{ text = _("Reading highlights and bookmarks from the reading history…") }
+                    UIManager:show(info)
+                    Plugin.startAnnotations(function(stats)
+                        UIManager:close(info)
+                        UIManager:show(InfoMessage:new{
+                            text = T(_("Found highlights and bookmarks in %1 books. They'll be sent at the next sync."), stats.books),
+                            timeout = 4,
+                        })
+                        Plugin.annSync():askHeld()
+                        self.trigger("annotations")
+                    end)
+                end
+            end,
+        },
+        {
+            text_func = function()
+                local ok, n = pcall(function() return #Plugin.annStore():held() end)
+                return T(_("Removed highlights waiting for you: %1"), ok and n or "?")
+            end,
+            help_text = _([[When many highlights and bookmarks of a book disappear at once (for example, its settings were reset), they're not removed on the other devices until you decide.]]),
+            enabled_func = function()
+                if not Plugin.annotationsEnabled() then return false end
+                local ok, n = pcall(function() return #Plugin.annStore():held() end)
+                return ok and n > 0
+            end,
+            keep_menu_open = true,
+            callback = function() Plugin.annSync():askHeld() end,
         },
         {
             text = _("Turn on Wi-Fi to sync"),

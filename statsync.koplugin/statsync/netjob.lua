@@ -25,12 +25,19 @@ Downloads go to tmp_dir, each to a .part file renamed when complete.
 caller can save it: if the subprocess is killed for taking too long, what
 was done so far (complete downloads, a verified upload) is still used.
 
+There are two streams of segments in each device folder: statistics
+(seg-N) and, when annotation sync is on, annotations (ann-N). Each has its
+own numbering; steps 3 and 4 run for each.
+
 Result: { ok, error, stage, full_listed, uploaded = { name, size, etag,
-          verified }, upload_error, devices = { id, … }, downloads = {
-          {device, name, size, etag, path}, … }, remote_more,
-          segment_errors, bytes_up, bytes_down, requests }
+          verified }, upload_error, ann_uploaded, ann_upload_error,
+          devices = { id, … }, downloads = { {stream, device, name, size,
+          etag, path}, … }, remote_more, segment_errors, bytes_up,
+          bytes_down, requests }
+(stream is "stats" or "ann").
 --]]
 
+local AnnFormat = require("statsync/annformat")
 local Codec = require("statsync/codec")
 
 local NetJob = {}
@@ -49,10 +56,15 @@ local function fileSize(path)
     return size
 end
 
+NetJob.STREAMS = {
+    stats = { name = Codec.segmentName, seq = Codec.segmentSeq, result = "uploaded" },
+    ann = { name = AnnFormat.segmentName, seq = AnnFormat.segmentSeq, result = "ann_uploaded" },
+}
+
 --- The first segment number (from 1) for which used(name) is false.
-local function firstFree(used)
+local function firstFree(used, segmentName)
     local n = 1
-    while used(Codec.segmentName(n)) do n = n + 1 end
+    while used(segmentName(n)) do n = n + 1 end
     return n
 end
 
@@ -66,7 +78,8 @@ end
 
 --- params: device_id, pending = { path, size } | nil, meta_path,
 --  seen and bad ({ [device] = { [name] = { size, etag } } }), full_list (bool),
---  tmp_dir, max_download_bytes (optional)
+--  tmp_dir, max_download_bytes (optional), and for annotations
+--  ann = { pending = { path, size } | nil, bad } (seen is shared: names differ)
 function NetJob.run(params, transport, report)
     report = report or function() end
     local result = { stage = "start", devices = {}, downloads = {}, segment_errors = {} }
@@ -85,9 +98,13 @@ function NetJob.run(params, transport, report)
 
     local own_id = params.device_id
     local own = NetJob.DEVICES .. "/" .. own_id
-    local seen, bad = params.seen or {}, params.bad or {}
-    local function known(id)
-        local s, b = seen[id] or {}, bad[id] or {}
+    local seen = params.seen or {}
+    local streams = { { id = "stats", def = NetJob.STREAMS.stats, pending = params.pending, bad = params.bad or {} } }
+    if params.ann then
+        table.insert(streams, { id = "ann", def = NetJob.STREAMS.ann, pending = params.ann.pending, bad = params.ann.bad or {} })
+    end
+    local function known(id, stream)
+        local s, b = seen[id] or {}, stream.bad[id] or {}
         return function(name) return s[name] ~= nil or b[name] ~= nil end
     end
 
@@ -150,26 +167,28 @@ function NetJob.run(params, transport, report)
     update("listed")
 
     -- 3. Upload
-    if params.pending then
+    local function upload(stream)
+        local def = stream.def
         local used
-        if own_listing then
-            local names = listedNames(own_listing)
+        if listings[own_id] then
+            local names = listedNames(listings[own_id])
             used = function(name) return names[name] end
         else
-            used = known(own_id) -- own uploads are recorded as seen
+            used = known(own_id, stream) -- own uploads are recorded as seen
         end
-        local next_seq = firstFree(used)
+        local next_seq = firstFree(used, def.name)
+        local up, up_err
         for _ = 1, 3 do
-            local name = Codec.segmentName(next_seq)
-            local ok, uerr = transport:put_new(own .. "/" .. name, params.pending.path)
+            local name = def.name(next_seq)
+            local ok, uerr = transport:put_new(own .. "/" .. name, stream.pending.path)
             if ok then
-                result.uploaded = { name = name, size = params.pending.size, verified = false }
+                up = { name = name, size = stream.pending.size, verified = false }
                 local st = transport:stat(own .. "/" .. name)
-                if st and (st.size == nil or st.size == params.pending.size) then
-                    result.uploaded.verified = true
-                    result.uploaded.etag = st.etag
+                if st and (st.size == nil or st.size == stream.pending.size) then
+                    up.verified = true
+                    up.etag = st.etag
                 else
-                    result.upload_error = "upload not found with the right size"
+                    up_err = "upload not found with the right size"
                 end
                 break
             elseif ok == false then
@@ -178,27 +197,34 @@ function NetJob.run(params, transport, report)
                 -- device). Find the real highest number.
                 local entries, lerr = transport:list(own)
                 if not entries then
-                    result.upload_error = "listing own folder: " .. tostring(lerr)
+                    up_err = "listing own folder: " .. tostring(lerr)
                     break
                 end
                 listings[own_id] = entries
                 local names = listedNames(entries)
-                next_seq = firstFree(function(name) return names[name] end)
+                next_seq = firstFree(function(n) return names[n] end, def.name)
             else
-                result.upload_error = tostring(uerr)
+                up_err = tostring(uerr)
                 break
             end
         end
-        if not result.uploaded and not result.upload_error then
-            result.upload_error = "no free segment name"
+        if not up and not up_err then up_err = "no free segment name" end
+        result[def.result] = up
+        local err_key = stream.id == "ann" and "ann_upload_error" or "upload_error"
+        result[err_key] = up_err
+        stream.uploaded_name = up and up.name
+    end
+    for _, stream in ipairs(streams) do
+        if stream.pending then
+            upload(stream)
+            update("uploaded")
         end
-        update("uploaded")
     end
 
     -- 4. Downloads, oldest first per device
     local budget = params.max_download_bytes or math.huge
     local downloaded = 0
-    local function download(id, name, size, etag)
+    local function download(stream, id, name, size, etag)
         local final = params.tmp_dir .. "/" .. id .. "__" .. name
         local part = final .. ".part"
         local ok, info, gcode = transport:get(NetJob.DEVICES .. "/" .. id .. "/" .. name, part)
@@ -212,55 +238,59 @@ function NetJob.run(params, transport, report)
             return nil, "size mismatch"
         end
         downloaded = downloaded + got
-        table.insert(result.downloads, { device = id, name = name, size = got,
+        table.insert(result.downloads, { stream = stream.id, device = id, name = name, size = got,
                                          etag = etag or (type(info) == "table" and info.etag) or nil, path = final })
         update("downloading")
         return true
     end
-    local up_name = result.uploaded and result.uploaded.name
 
-    for _, id in ipairs(result.devices) do
-        if downloaded >= budget then result.remote_more = true; break end
-        local dev_seen, dev_bad = seen[id] or {}, bad[id] or {}
-        local entries = listings[id]
-        if entries then
-            local cands = {}
-            for _, e in ipairs(entries) do
-                local seq = not e.is_dir and Codec.segmentSeq(e.name)
-                if seq and not (id == own_id and e.name == up_name) then
-                    local s, b = dev_seen[e.name], dev_bad[e.name]
-                    if s then
-                        if s.size and e.size and s.size ~= e.size then
-                            segErr(id .. "/" .. e.name .. " changed size since it was imported")
+    local function downloadStream(stream)
+        local def = stream.def
+        local up_name = stream.uploaded_name
+        for _, id in ipairs(result.devices) do
+            if downloaded >= budget then result.remote_more = true; break end
+            local dev_seen, dev_bad = seen[id] or {}, stream.bad[id] or {}
+            local entries = listings[id]
+            if entries then
+                local cands = {}
+                for _, e in ipairs(entries) do
+                    local seq = not e.is_dir and def.seq(e.name)
+                    if seq and not (id == own_id and e.name == up_name) then
+                        local s, b = dev_seen[e.name], dev_bad[e.name]
+                        if s then
+                            if s.size and e.size and s.size ~= e.size then
+                                segErr(id .. "/" .. e.name .. " changed size since it was imported")
+                            end
+                        elseif not (b and b.size == e.size and (b.etag == nil or b.etag == e.etag)) then
+                            cands[#cands + 1] = { name = e.name, seq = seq, size = e.size, etag = e.etag }
                         end
-                    elseif not (b and b.size == e.size and (b.etag == nil or b.etag == e.etag)) then
-                        cands[#cands + 1] = { name = e.name, seq = seq, size = e.size, etag = e.etag }
                     end
                 end
-            end
-            table.sort(cands, function(a, b) return a.seq < b.seq end)
-            for _, c in ipairs(cands) do
-                if downloaded >= budget then result.remote_more = true; break end
-                local ok, derr = download(id, c.name, c.size, c.etag)
-                if not ok then segErr(id .. "/" .. c.name .. ": " .. tostring(derr)) end
-            end
-        else
-            local is_known = known(id)
-            local seq = firstFree(is_known)
-            while true do
-                if downloaded >= budget then result.remote_more = true; break end
-                local name = Codec.segmentName(seq)
-                if not (is_known(name) or (id == own_id and name == up_name)) then
-                    local ok, derr, dcode = download(id, name)
-                    if not ok then
-                        if dcode ~= 404 then segErr(id .. "/" .. name .. ": " .. tostring(derr)) end
-                        break
-                    end
+                table.sort(cands, function(a, b) return a.seq < b.seq end)
+                for _, c in ipairs(cands) do
+                    if downloaded >= budget then result.remote_more = true; break end
+                    local ok, derr = download(stream, id, c.name, c.size, c.etag)
+                    if not ok then segErr(id .. "/" .. c.name .. ": " .. tostring(derr)) end
                 end
-                seq = seq + 1
+            else
+                local is_known = known(id, stream)
+                local seq = firstFree(is_known, def.name)
+                while true do
+                    if downloaded >= budget then result.remote_more = true; break end
+                    local name = def.name(seq)
+                    if not (is_known(name) or (id == own_id and name == up_name)) then
+                        local ok, derr, dcode = download(stream, id, name)
+                        if not ok then
+                            if dcode ~= 404 then segErr(id .. "/" .. name .. ": " .. tostring(derr)) end
+                            break
+                        end
+                    end
+                    seq = seq + 1
+                end
             end
         end
     end
+    for _, stream in ipairs(streams) do downloadStream(stream) end
 
     result.full_listed = full_ok or nil
     result.ok = true

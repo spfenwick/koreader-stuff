@@ -272,5 +272,105 @@ local none, why = P.server()
 check(none == nil and why:find("no WebDAV server"), "no WebDAV server: told why")
 check(item("Server: not set"), "server shown as not set")
 
+-- Highlights and bookmarks ----------------------------------------------------------------
+writeCloudStorage({ { name = "My DAV", type = "webdav", address = server.url, username = "u", password = "p" } })
+local MD5 = string.rep("d", 32)
+local XP = "/body/DocFragment[2]/body/p[3]/text().0"
+local sidecar = { partial_md5_checksum = MD5, doc_props = { title = "Annotated" },
+                  annotations = { { datetime = "2026-02-02 02:02:02", drawer = "lighten", text = "from history",
+                                    page = XP, pos0 = XP, pos1 = "/body/DocFragment[2]/body/p[3]/text().9" } } }
+stub("readhistory", { hist = { { file = TMP .. "/annotated.epub" } } })
+S.writeFile(TMP .. "/annotated.epub", "book")
+stub("docsettings", {
+    hasSidecarFile = function(_, p) return p == TMP .. "/annotated.epub" end,
+    open = function() return { readSetting = function(_, k) return sidecar[k] end } end,
+})
+stub("libs/libkoreader-lfs", require("lfs"))
+stub("ui/event", { new = function(_, name, args) return { name = name, args = args } end })
+stub("ui/widget/multiconfirmbox", { new = function(_, o) o.multi = true; return o end })
+
+check(not item("Removed highlights waiting").enabled_func(), "no held removals: item disabled")
+item("Status").callback()
+check(shown[#shown].text:find("Highlights and bookmarks: not synced", 1, true), "status: annotations not synced")
+item("Sync highlights and bookmarks").callback()
+loop:run(30, function() return shown[#shown].text and shown[#shown].text:find("Found highlights") end)
+check(P.settings().annotations == true and fileData("statsync_settings.lua").annotations == true,
+    "annotation sync turned on, in the shared settings")
+check(shown[#shown].text:find("in 1 books", 1, true), "reading history scanned: " .. tostring(shown[#shown].text))
+check(P.deviceState().ann_scanned ~= nil, "scan recorded for this device")
+loop:run(60)
+local dev_id = P.deviceState().device_id
+local function annSegs()
+    local n = 0
+    for name in io.popen("ls " .. S.q(server.dir .. "/fresh/v2/devices/" .. dev_id)):lines() do
+        if name:match("^ann%-%d+%.jsonl%.zst$") then n = n + 1 end
+    end
+    return n
+end
+check(annSegs() == 1, "annotation segment uploaded after the scan")
+check(P.deviceState().status.ann_uploaded == 1, "one change sent")
+
+-- A book open in the reader: changes from another device applied on open,
+-- the user's own sent on close.
+local events = {}
+local reader = {
+    rolling = true, statistics = stats,
+    document = { file = TMP .. "/annotated.epub" },
+    doc_settings = { readSetting = function(_, k) return k == "partial_md5_checksum" and MD5 or nil end },
+    doc_props = { display_title = "Annotated" },
+    annotation = { annotations = {}, updateAnnotations = function() end,
+                   getNumberOfHighlightsAndNotes = function(a) return #a.annotations, 0 end },
+    handleEvent = function(_, ev) table.insert(events, ev) end,
+}
+reader.dialog = reader
+reader.annotation.annotations = { sidecar.annotations[1] }
+package.loaded["apps/reader/readerui"].instance = reader
+local other_seg = TMP .. "/other-ann.jsonl"
+local AnnFormat = require("statsync/annformat")
+local XP2 = "/body/DocFragment[5]/body/p[1]/text().0"
+S.writeFile(other_seg, table.concat({
+    AnnFormat.headerLine("otherdev", 1),
+    AnnFormat.bookLine{ md5 = MD5, title = "Annotated" },
+    AnnFormat.recordLine{ md5 = MD5, kind = "rolling", key = "2026-03-03 03:03:03", updated = 1772500000, device = "otherdev",
+                          fields_json = AnnFormat.fieldsJson{ datetime = "2026-03-03 03:03:03", drawer = "underscore",
+                                                              text = "from the other device", page = XP2, pos0 = XP2, pos1 = XP2 } },
+    AnnFormat.trailerLine(1, 1),
+}, "\n") .. "\n")
+local fresh = WebDav.new{ http = S.Http.new(), address = server.url, username = "u", password = "p", root = "fresh/v2" }
+check(require("statsync/zstd").compressFile(other_seg, other_seg .. ".zst"), "other device's annotations compressed")
+fresh:mkdir("devices/otherdev")
+check(fresh:put_new("devices/otherdev/ann-0000000001.jsonl.zst", other_seg .. ".zst"), "other device's annotations uploaded")
+item("Sync now").callback()
+loop:run(60)
+check(#reader.annotation.annotations == 2, "applied live to the open book (" .. #reader.annotation.annotations .. ")")
+local ev = events[#events]
+check(ev and ev.name == "AnnotationsModified" and ev.args.nb_highlights_added == 1, "AnnotationsModified sent")
+check(shown[#shown].text:find("received 1", 1, true), "manual sync reports annotations: " .. shown[#shown].text)
+-- The reader plugin instance: a new highlight, then the book closes
+local reader_plugin = setmetatable({ ui = reader }, StatSync)
+local XP3 = "/body/DocFragment[7]/body/p[1]/text().0"
+table.insert(reader.annotation.annotations, { datetime = "2026-04-04 04:04:04", drawer = "lighten", text = "new",
+                                              page = XP3, pos0 = XP3, pos1 = XP3 })
+reader_plugin:onCloseDocument()
+package.loaded["apps/reader/readerui"].instance = { statistics = stats }
+loop:run(60)
+check(annSegs() == 2 and P.deviceState().status.ann_uploaded == 1, "new highlight sent after closing the book")
+
+-- Opening it again with its annotations gone (book settings reset): asks
+reader.annotation.annotations = {}
+reader_plugin.ui.registerPostReaderReadyCallback = nil
+reader_plugin:onReaderReady()
+loop:run(5, function() return shown[#shown].multi end)
+local q = shown[#shown]
+check(q.multi and q.text:find("3 of 3", 1, true) and q.text:find("Annotated", 1, true), "asked about the removed highlights: " .. tostring(q.text))
+check(item("Removed highlights waiting").enabled_func(), "held removals: menu item enabled")
+item("Status").callback()
+check(shown[#shown].text:find("Books with removals waiting for you: 1", 1, true), "status shows the held book")
+package.loaded["apps/reader/readerui"].instance = reader
+q.choice1_callback() -- restore them here
+check(#reader.annotation.annotations == 3, "restored in the open book")
+check(not item("Removed highlights waiting").enabled_func(), "nothing held any more")
+package.loaded["apps/reader/readerui"].instance = { statistics = stats }
+
 server.stop()
 S.finish("statsync plugin test")

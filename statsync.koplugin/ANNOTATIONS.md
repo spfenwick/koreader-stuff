@@ -1,9 +1,14 @@
-# Annotation sync design (not implemented)
+# Annotation sync design
 
 Syncing bookmarks, highlights and notes between devices, as a second
-stream next to the statistics in statsync. This is a design only: nothing
-here is built. Written against KOReader `426e932` (20 Oct 2026); file and
-line references are to that revision.
+stream next to the statistics in statsync. Written against KOReader
+`426e932` (20 Oct 2026); file and line references are to that revision.
+
+Implemented in `statsync/annformat.lua` (records, keys, segment format),
+`statsync/annstore.lua` (merged state, change detection, held deletions,
+export and import) and `statsync/annsync.lua` (in the reader: open, close,
+live apply, history scan, the question). Where the build differs from the
+design below, it says so under "As built".
 
 ## Goals
 
@@ -186,14 +191,33 @@ Segment lines (JSON Lines, then zstd, as for statistics):
 
 ## Local state (in `statsync.sqlite3`)
 
+As built:
+
 ```
 ann_merged(md5, kind, key, updated, device, deleted, hash, fields)   -- merged truth
-ann_local(md5, kind, key, hash)        -- what this device's sidecar held last time
-ann_pending(md5, kind)                 -- books with merged changes not yet in the sidecar
-ann_files(md5, path, kind, seen)       -- where this device has each book
-ann_seen_segments(device_id, name, size, etag)
-ann_exported(md5, kind, key, updated)  -- what this device has published
+ann_local(md5, kind, key, hash, upd)   -- what this device's list held last time
+ann_books(md5, kind, title, authors, path, observed, pending, held_at)
+ann_held(md5, kind, key)               -- deletions waiting for the user
+ann_outbox(md5, kind, key, updated)    -- changes waiting to be sent
 ```
+
+- `ann_books` replaces the planned `ann_pending` and `ann_files`: per book
+  and kind, whether this device has looked at its list yet (`observed`),
+  whether merged changes are waiting for it (`pending`), and where it was
+  last seen.
+- `ann_outbox` replaces `ann_exported`: a change is queued when it's made
+  here, and leaves the queue once a confirmed upload holds it (or a newer
+  record from elsewhere replaces it). Imported records are never queued, so
+  nothing is echoed back.
+- Segments imported are recorded in the statistics' `seen_segments` and
+  `bad_segments` (the `ann-` names can't clash with `seg-`; bad ones carry
+  the annotation format's version), so "Rebuild from cloud" and a change of
+  server or folder cover both streams. A change of server or folder also
+  queues the whole merged state again, as the statistics are all sent
+  again.
+- Republished records keep the device that made the change (`dev` in each
+  record), so ties between equal timestamps are broken the same way
+  everywhere.
 
 - `ann_merged` holds the full merged state of every book, so changes can be
   applied to books opened later, and a reset sidecar can be restored.
@@ -237,9 +261,10 @@ deletion records are made straight away. The user is asked instead:
   restored; the book stays held and the question comes back at the next
   close or sync. Held books are listed in the status screen, where the
   question can be answered too.
-- The question is asked when the change is detected: on closing the book,
-  or after a sync for changes found by the initial scan. Automatic syncs
-  never decide on their own.
+- The question is asked when the change is detected: on opening or closing
+  the book (a reset sidecar is noticed on open), or after the initial scan;
+  and again after each sync while anything is held. Automatic syncs never
+  decide on their own.
 - While a book is held, its other changes (additions, edits, deletions
   below the threshold) still sync normally.
 
@@ -263,8 +288,10 @@ After an import that touched the open book's `(md5, kind)`:
    and redraw.
 3. Update `ann_local` to the result, so these changes aren't sent back.
 
-Done between page turns via `UIManager:nextTick`, never while a highlight
-dialog is open (deferred to the next close or sync).
+Never while a menu or dialog is over the reader, or text is selected: then
+it's retried every 2 seconds for up to 3 minutes (so "Sync now", which keeps
+the menu open, still applies once the menu closes), and after that left for
+the next sync, close or open.
 
 ### Other books: on next open (default)
 
@@ -309,7 +336,8 @@ flush stats → detect open book's annotation changes
 ### Initial scan
 
 Annotations of books that aren't opened would otherwise never be published.
-When annotation sync is first turned on (and from a menu item afterwards):
+When annotation sync is turned on (on a device where it was turned on
+through synced settings, at the next start):
 
 - Walk the reading history; for each file with a sidecar, read
   `partial_md5_checksum` and the `annotations` list, record the path in
@@ -336,6 +364,22 @@ When annotation sync is first turned on (and from a menu item afterwards):
 - **Statistics' highlight and note counts**: updated through
   `AnnotationsModified` for the open book; for other books, when opened.
 
+## As built: other details
+
+- **Items that don't fit their list** (an XPointer in a PDF list, a page
+  number in a reflowable one) are left out when a list is read. Sent, they
+  would make every other device reject the whole segment.
+- **Annotation fields are Lua data**, not always JSON-shaped: a multi-page
+  PDF highlight's `ext` is keyed by page number. Tables with such keys are
+  sent as `{"~lua":[[key, value], …]}` and rebuilt on reading.
+- **The other kind's list** is read by the history scan too (the sidecar
+  holds it as `annotations_rolling` or `annotations_paging`), so both are
+  published; in the reader only the loaded one is compared.
+- **Applying** changes items in place, removes, appends, then calls
+  KOReader's `updateAnnotations(true, true)` (page numbers, sort) and sends
+  `AnnotationsModified` with `index_modified` set, so KOReader doesn't stamp
+  the applied items as edited.
+
 ## Tests
 
 - Merge: every order of three devices' segments gives the same state;
@@ -353,6 +397,15 @@ When annotation sync is first turned on (and from a menu item afterwards):
 - Integration: real KOReader `ReaderAnnotation` code where it can run
   headless, real sidecars written by `DocSettings`, rclone as server.
 
+As built: `tests/test_statsync_ann.lua` runs KOReader's own
+`ReaderAnnotation` (sorting, page numbers, `AnnotationsModified`) on a
+stand-in CREngine document, with simulated sidecars;
+`tests/test_statsync_integration.lua` syncs annotations between devices
+through the real engine, subprocess and rclone; `tests/test_statsync_plugin.lua`
+covers the menu, history scan, live apply, close and the question with
+KOReader's UI stubbed. `DocSettings` itself isn't exercised (stubbed), and
+nothing ran on a device.
+
 ## Decided
 
 1. "Newest change wins", with its reliance on device clocks, is acceptable.
@@ -361,8 +414,3 @@ When annotation sync is first turned on (and from a menu item afterwards):
 3. Mass deletions are the user's choice: they're asked whether to restore
    or remove everywhere (see "Guard against mass deletion").
 
-## Estimate
-
-About as much work again as the statistics sync. Transport, format,
-segments and the cycle are reused; the new work is change detection,
-applying changes inside a running reader, the guards, and the tests.

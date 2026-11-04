@@ -8,6 +8,8 @@
 local S = dofile("tests/statsync/support.lua")
 local check = S.check
 
+local AnnFormat = require("statsync/annformat")
+local AnnStore = require("statsync/annstore")
 local Codec = require("statsync/codec")
 local Zstd = require("statsync/zstd")
 local Engine = require("statsync/engine")
@@ -52,8 +54,18 @@ end
 function Sim:makeEngine()
     local sim = self
     self.store = Store.new{ sq3 = S.SQ3, stats_path = self.db, state_path = self.state }
+    self.ann_store = AnnStore.new{ sq3 = S.SQ3, state_path = self.state }
     self.engine = Engine.new{
         store = self.store,
+        ann = {
+            store = self.ann_store,
+            enabled = function() return sim.ann_on == true end,
+            collect = function() end,
+            afterSync = function(run)
+                sim.ann_affected = sim.ann_affected or {}
+                for id in pairs(run.ann_affected) do sim.ann_affected[id] = true end
+            end,
+        },
         logger = verbose or quiet,
         work_dir = self.dir .. "/work",
         tmp_dir = self.dir .. "/work/incoming",
@@ -299,6 +311,96 @@ C.store:forgetSeen()
 local cdump = C:dump()
 sync({ C })
 check(C:dump() == cdump and C.last_run.segments_imported > 0, "rebuild from cloud re-imports everything, same result")
+
+-- 8. Annotations ------------------------------------------------------------------------------
+local ANN_BOOK = BOOKS[1].md5
+local function annItem(i, note)
+    local x = string.format("/body/DocFragment[%d]/body/p[1]/text().0", i)
+    return { datetime = string.format("2026-03-%02d 10:00:00", i), drawer = "lighten", color = "yellow",
+             text = "passage " .. i, note = note, page = x, pos0 = x,
+             pos1 = string.format("/body/DocFragment[%d]/body/p[1]/text().9", i) }
+end
+local function observe(d, items)
+    return d.ann_store:observe{ md5 = ANN_BOOK, kind = "rolling", items = items, now = os.time(), device = d.id,
+                                title = BOOKS[1].title }
+end
+local function annMerged(d)
+    local c = S.SQ3.open(d.state)
+    local rows = {}
+    for r in c:prepare("SELECT md5, kind, key, updated, device, deleted, hash FROM ann_merged ORDER BY md5, kind, key"):rows() do
+        rows[#rows + 1] = table.concat({ r[1], r[2], r[3], tonumber(r[4]), r[5], tonumber(r[6]), r[7] }, "|")
+    end
+    c:close()
+    return table.concat(rows, "\n"), #rows
+end
+local function annConverge(label, list)
+    sync(list); sync(list)
+    local first, n = annMerged(list[1])
+    local same = true
+    for _, d in ipairs(list) do
+        if annMerged(d) ~= first then same = false end
+        check(d.last_run and not d.last_run.error and not d.last_run.ann_upload_error,
+            label .. ": " .. d.name .. " synced without error " .. tostring(d.last_run and (d.last_run.error or d.last_run.ann_upload_error)))
+    end
+    check(same, label .. ": all devices have the same merged annotations (" .. n .. ")")
+    return first, n
+end
+
+A.ann_on, B.ann_on = true, true
+local a_items = { annItem(1), annItem(2, "a note"), annItem(3) }
+observe(A, a_items)
+observe(B, { annItem(4), annItem(5) })
+local _, n_ann = annConverge("annotations from two devices", { A, B })
+check(n_ann == 5, "five annotations merged")
+check(B.ann_affected and B.ann_affected[ANN_BOOK .. "\0rolling"], "B told which book changed")
+local function annRemote(id)
+    local out = {}
+    for name in io.popen("ls " .. S.q(REMOTE .. "/devices/" .. id) .. " 2>/dev/null"):lines() do
+        if AnnFormat.segmentSeq(name) then out[#out + 1] = name end
+    end
+    return out
+end
+check(#annRemote(A.id) == 1 and #annRemote(B.id) == 1, "one annotation segment each, next to the statistics ones")
+-- C has annotation sync off: statistics still sync, annotation segments aren't fetched
+readSome(C, BOOKS[2], 3)
+sync({ C })
+local cs = S.SQ3.open(C.state)
+check(tonumber(cs:rowexec("SELECT count(*) FROM seen_segments WHERE name LIKE 'ann-%'")) == 0, "annotation sync off: nothing fetched")
+cs:close()
+-- Turned on: gets everything
+C.ann_on = true
+annConverge("third device turned on", { A, B, C })
+-- An edit on A and a deletion on B
+a_items[2].note = "edited"
+a_items[2].datetime_updated = os.date("%Y-%m-%d %H:%M:%S", os.time() + 1)
+observe(A, a_items)
+local b_list = {}
+for _, op in ipairs(B.ann_store:plan(ANN_BOOK, "rolling", {})) do b_list[#b_list + 1] = op.item end
+B.ann_store:applied(ANN_BOOK, "rolling", b_list)
+table.remove(b_list, 1)
+local res = observe(B, b_list)
+check(res.deleted == 1 and res.held == 0, "B deletes one (not a mass deletion)")
+local merged = annConverge("edit and deletion", { A, B, C })
+check(select(2, merged:gsub("|1|", "")) == 1, "one deletion in the merged state")
+local plan = C.ann_store:plan(ANN_BOOK, "rolling", {})
+local notes = {}
+for _, op in ipairs(plan) do if op.item.note then notes[#notes + 1] = op.item.note end end
+check(#plan == 4 and #notes == 1 and notes[1] == "edited", "C would apply 4 annotations, with the edited note")
+-- A corrupt annotation segment: recorded as bad, the sync carries on
+local nextAnn = #annRemote(A.id) + 1
+check(dav:put("devices/" .. A.id .. "/" .. AnnFormat.segmentName(nextAnn), TMP .. "/junk.jsonl"), "corrupt annotation segment uploaded")
+sync({ C })
+local cb = S.SQ3.open(C.state)
+check(tonumber(cb:rowexec("SELECT count(*) FROM bad_segments WHERE name LIKE 'ann-%'")) == 1, "corrupt annotation segment recorded as bad")
+cb:close()
+check(not C.last_run.error, "and doesn't fail the sync")
+observe(A, { annItem(1), annItem(3), annItem(6) }) -- A's next one goes after the corrupt name
+annConverge("after a corrupt annotation segment", { A, B, C })
+-- Rebuild from cloud: same merged state again
+local cmerged = annMerged(C)
+C.store:forgetSeen()
+sync({ C })
+check(annMerged(C) == cmerged and C.last_run.ann_segments_imported > 0, "rebuild re-imports annotations, same result")
 
 server.stop()
 S.finish("statsync integration test")

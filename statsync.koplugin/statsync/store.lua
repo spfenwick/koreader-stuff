@@ -280,12 +280,13 @@ function Store:seenSegments()
 end
 
 --- Segments that failed to import with this format version, same shape.
-function Store:badSegments()
+-- `version`: another stream's (annotations'), default the statistics'.
+function Store:badSegments(version)
     local conn = self:openState()
     return withConn(conn, function()
         local bad = {}
         local stmt = conn:prepare("SELECT device_id, name, size, etag, reason FROM bad_segments WHERE version = ?;")
-        stmt:bind(Codec.VERSION * 1000 + Codec.MINOR)
+        stmt:bind(version or (Codec.VERSION * 1000 + Codec.MINOR))
         for row in stmt:rows() do
             bad[row[1]] = bad[row[1]] or {}
             bad[row[1]][row[2]] = { size = num(row[3]), etag = row[4], reason = row[5] }
@@ -294,11 +295,11 @@ function Store:badSegments()
     end)
 end
 
-function Store:recordBad(device_id, name, size, etag, reason)
+function Store:recordBad(device_id, name, size, etag, reason, version)
     local conn = self:openState()
     return withConn(conn, function()
         conn:prepare("INSERT OR REPLACE INTO bad_segments VALUES (?, ?, ?, ?, ?, ?);")
-            :bind(device_id, name, size, etag, Codec.VERSION * 1000 + Codec.MINOR, reason):step()
+            :bind(device_id, name, size, etag, version or (Codec.VERSION * 1000 + Codec.MINOR), reason):step()
     end)
 end
 
@@ -341,8 +342,10 @@ function Store:counts()
     return withConn(conn, function()
         return {
             exported = num(conn:rowexec("SELECT count(*) FROM exported;")),
-            seen = num(conn:rowexec("SELECT count(*) FROM seen_segments;")),
-            bad = num(conn:rowexec("SELECT count(*) FROM bad_segments;")),
+            seen = num(conn:rowexec("SELECT count(*) FROM seen_segments WHERE name LIKE 'seg-%';")),
+            bad = num(conn:rowexec("SELECT count(*) FROM bad_segments WHERE name LIKE 'seg-%';")),
+            ann_seen = num(conn:rowexec("SELECT count(*) FROM seen_segments WHERE name LIKE 'ann-%';")),
+            ann_bad = num(conn:rowexec("SELECT count(*) FROM bad_segments WHERE name LIKE 'ann-%';")),
         }
     end)
 end

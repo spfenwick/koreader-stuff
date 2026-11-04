@@ -14,6 +14,8 @@ local UIManager = require("ui/uimanager")
 local ffiutil = require("ffi/util")
 local logger = require("logger")
 
+local AnnStore = require("statsync/annstore")
+local AnnSync = require("statsync/annsync")
 local Engine = require("statsync/engine")
 local Store = require("statsync/store")
 
@@ -24,8 +26,9 @@ local Plugin = {}
 --   statsync_settings.lua  the same on every device (fine to sync between
 --                          devices, e.g. with Settings sync): enabled,
 --                          allow_wifi, server ({name, type} of a Cloud
---                          storage server, no credentials), root, time_limit
---   statsync_device.lua    this device's own: device_id, status
+--                          storage server, no credentials), root, time_limit,
+--                          annotations (sync highlights and bookmarks too)
+--   statsync_device.lua    this device's own: device_id, status, ann_scanned
 --
 -- Earlier versions kept the shared settings in statsync.lua with the whole
 -- server entry (password included), and before that everything under
@@ -36,7 +39,7 @@ Plugin.SHARED_FILE = "statsync_settings.lua"
 Plugin.DEVICE_FILE = "statsync_device.lua"
 local OLD_SHARED_FILE = "statsync.lua"
 local LEGACY_KEY = "statsync"
-local DEVICE_KEYS = { device_id = true, status = true }
+local DEVICE_KEYS = { device_id = true, status = true, ann_scanned = true }
 
 --- Folder on the server when none is set, like Settings sync's /KOReader/Settings.
 Plugin.DEFAULT_ROOT = "/KOReader/Statistics"
@@ -235,6 +238,49 @@ local function makeStore()
 end
 Plugin.makeStore = makeStore
 
+local ann_store, ann_sync
+
+function Plugin.annStore()
+    if not ann_store then
+        ann_store = AnnStore.new{ sq3 = require("lua-ljsqlite3/init"), state_path = paths().state }
+    end
+    return ann_store
+end
+
+function Plugin.annotationsEnabled()
+    return Plugin.settings().annotations == true
+end
+
+--- The process-wide annotation sync (KOReader side).
+function Plugin.annSync()
+    if ann_sync then return ann_sync end
+    ann_sync = AnnSync.new{
+        store = Plugin.annStore(),
+        getDeviceId = Plugin.deviceId,
+        now = os.time,
+        logger = logger,
+        ui_manager = UIManager,
+        enabled = Plugin.annotationsEnabled,
+        schedule = function(delay, fn)
+            if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
+        end,
+        saveScanned = function(t)
+            Plugin.deviceState().ann_scanned = t
+            Plugin.saveDeviceState()
+        end,
+    }
+    return ann_sync
+end
+
+--- Annotation sync turned on: send everything known again, and read the
+-- reading history afresh. done(stats) after the scan.
+function Plugin.startAnnotations(done)
+    Plugin.annStore():requeueAll()
+    Plugin.deviceState().ann_scanned = nil
+    Plugin.saveDeviceState()
+    return Plugin.annSync():scan(done)
+end
+
 local controller
 
 --- The process-wide engine.
@@ -265,7 +311,11 @@ function Plugin.engine()
             local location = Plugin.serverLocation()
             local lok, changed = pcall(store.useLocation, store, location)
             if not lok then return false, "state database: " .. tostring(changed) end
-            if changed then logger.info("StatSync: server or folder changed, syncing everything with", location) end
+            if changed then
+                logger.info("StatSync: server or folder changed, syncing everything with", location)
+                local aok, aerr = pcall(function() Plugin.annStore():requeueAll() end)
+                if not aok then return false, "state database: " .. tostring(aerr) end
+            end
             local stats_settings = G_reader_settings:readSetting("statistics")
             if stats_settings and stats_settings.is_enabled == false then
                 return false, "reading statistics are disabled"
@@ -322,6 +372,12 @@ function Plugin.engine()
                 end
             end
         end,
+        ann = {
+            store = Plugin.annStore(),
+            enabled = Plugin.annotationsEnabled,
+            collect = function() Plugin.annSync():collect() end,
+            afterSync = function(run) Plugin.annSync():afterSync(run) end,
+        },
         saveStatus = function(status)
             Plugin.deviceState().status = status
             Plugin.saveDeviceState()

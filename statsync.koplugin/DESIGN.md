@@ -15,6 +15,11 @@ description, and what couldn't be verified. Written against KOReader
 | `statsync/netjob.lua` | subprocess | Upload, discovery, downloads |
 | `statsync/webdav.lua` | subprocess | WebDAV transport (`list`, `stat`, `get`, `put`, `put_new`, `mkdir`, `delete`) |
 | `statsync/codec.lua` | both | JSON, segment format, validation |
+| `statsync/annformat.lua` | both | Annotation records, keys, annotation segment format |
+| `statsync/annstore.lua` | main | Annotations' merged state, change detection, held deletions, export/import |
+| `statsync/annsync.lua` | main | Annotations in the reader: on open/close, live apply, history scan, the question |
+
+Highlights and bookmarks are designed in ANNOTATIONS.md.
 
 ## Where the KOReader source differs from the task description
 
