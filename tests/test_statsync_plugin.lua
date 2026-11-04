@@ -118,6 +118,22 @@ stub("gettext", setmetatable({}, { __call = function(_, s) return s end }))
 stub("ui/widget/container/widgetcontainer", {
     extend = function(_, o) o.__index = o; return o end,
 })
+-- Reading history and book settings, for the highlights scan.
+local MD5 = string.rep("d", 32)
+local XP = "/body/DocFragment[2]/body/p[3]/text().0"
+local sidecar = { partial_md5_checksum = MD5, doc_props = { title = "Annotated" },
+                  annotations = { { datetime = "2026-02-02 02:02:02", drawer = "lighten", text = "from history",
+                                    page = XP, pos0 = XP, pos1 = "/body/DocFragment[2]/body/p[3]/text().9" } } }
+stub("readhistory", { hist = { { file = TMP .. "/annotated.epub" } } })
+S.writeFile(TMP .. "/annotated.epub", "book")
+stub("docsettings", {
+    hasSidecarFile = function(_, p) return p == TMP .. "/annotated.epub" end,
+    open = function() return { readSetting = function(_, k) return sidecar[k] end } end,
+})
+stub("libs/libkoreader-lfs", require("lfs"))
+stub("ui/event", { new = function(_, name, args) return { name = name, args = args } end })
+stub("ui/widget/multiconfirmbox", { new = function(_, o) o.multi = true; return o end })
+
 package.path = "statsync.koplugin/?.lua;" .. package.path
 
 local StatSync = dofile("statsync.koplugin/main.lua")
@@ -274,22 +290,23 @@ check(item("Server: not set"), "server shown as not set")
 
 -- Highlights and bookmarks ----------------------------------------------------------------
 writeCloudStorage({ { name = "My DAV", type = "webdav", address = server.url, username = "u", password = "p" } })
-local MD5 = string.rep("d", 32)
-local XP = "/body/DocFragment[2]/body/p[3]/text().0"
-local sidecar = { partial_md5_checksum = MD5, doc_props = { title = "Annotated" },
-                  annotations = { { datetime = "2026-02-02 02:02:02", drawer = "lighten", text = "from history",
-                                    page = XP, pos0 = XP, pos1 = "/body/DocFragment[2]/body/p[3]/text().9" } } }
-stub("readhistory", { hist = { { file = TMP .. "/annotated.epub" } } })
-S.writeFile(TMP .. "/annotated.epub", "book")
-stub("docsettings", {
-    hasSidecarFile = function(_, p) return p == TMP .. "/annotated.epub" end,
-    open = function() return { readSetting = function(_, k) return sidecar[k] end } end,
-})
-stub("libs/libkoreader-lfs", require("lfs"))
-stub("ui/event", { new = function(_, name, args) return { name = name, args = args } end })
-stub("ui/widget/multiconfirmbox", { new = function(_, o) o.multi = true; return o end })
 
+local dev_id = P.deviceState().device_id
+local function annSegs()
+    local n = 0
+    for name in io.popen("ls " .. S.q(server.dir .. "/fresh/v2/devices/" .. dev_id)):lines() do
+        if name:match("^ann%-%d+%.jsonl%.zst$") then n = n + 1 end
+    end
+    return n
+end
+local segs0 = annSegs()
+check(segs0 == 1, "highlights from the history sent to the new folder (" .. segs0 .. ")")
 check(not item("Removed highlights waiting").enabled_func(), "no held removals: item disabled")
+check(P.settings().annotations == nil and item("Sync highlights and bookmarks").checked_func(), "highlights synced by default")
+check(P.deviceState().ann_scanned ~= nil, "reading history read before the first sync")
+item("Sync highlights and bookmarks").callback()
+check(P.settings().annotations == false and fileData("statsync_settings.lua").annotations == false,
+    "turned off, in the shared settings")
 item("Status").callback()
 check(shown[#shown].text:find("Highlights and bookmarks: not synced", 1, true), "status: annotations not synced")
 item("Sync highlights and bookmarks").callback()
@@ -299,15 +316,7 @@ check(P.settings().annotations == true and fileData("statsync_settings.lua").ann
 check(shown[#shown].text:find("in 1 books", 1, true), "reading history scanned: " .. tostring(shown[#shown].text))
 check(P.deviceState().ann_scanned ~= nil, "scan recorded for this device")
 loop:run(60)
-local dev_id = P.deviceState().device_id
-local function annSegs()
-    local n = 0
-    for name in io.popen("ls " .. S.q(server.dir .. "/fresh/v2/devices/" .. dev_id)):lines() do
-        if name:match("^ann%-%d+%.jsonl%.zst$") then n = n + 1 end
-    end
-    return n
-end
-check(annSegs() == 1, "annotation segment uploaded after the scan")
+check(annSegs() == segs0 + 1, "turned on again: everything sent again after the scan")
 check(P.deviceState().status.ann_uploaded == 1, "one change sent")
 
 -- A book open in the reader: changes from another device applied on open,
@@ -354,7 +363,7 @@ table.insert(reader.annotation.annotations, { datetime = "2026-04-04 04:04:04", 
 reader_plugin:onCloseDocument()
 package.loaded["apps/reader/readerui"].instance = { statistics = stats }
 loop:run(60)
-check(annSegs() == 2 and P.deviceState().status.ann_uploaded == 1, "new highlight sent after closing the book")
+check(annSegs() == segs0 + 2 and P.deviceState().status.ann_uploaded == 1, "new highlight sent after closing the book")
 
 -- Opening it again with its annotations gone (book settings reset): asks
 reader.annotation.annotations = {}

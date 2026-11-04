@@ -2,7 +2,7 @@
 
 Syncs KOReader's reading statistics (the page-by-page reading times behind
 Reading statistics) between any number of devices, through a WebDAV server.
-Optionally it syncs highlights, notes and page bookmarks too (see
+It syncs highlights, notes and page bookmarks too, unless turned off (see
 [Highlights and bookmarks](#highlights-and-bookmarks)).
 
 Unlike Reading statistics' own "Cloud sync", which uploads and downloads the
@@ -70,8 +70,8 @@ Tools → Statistics sync:
 - **Server**: the WebDAV server from Cloud storage to use.
 - **Folder on server**: the folder to sync in. Changing it (or the server)
   sends all of this device's statistics to the new place at the next sync.
-- **Sync highlights and bookmarks**: on/off (off until you turn it on); see
-  below.
+- **Sync highlights and bookmarks**: on/off (on unless you turn it off);
+  see below.
 - **Removed highlights waiting for you**: highlights and bookmarks removed
   in bulk on this device, waiting for you to say whether to remove them
   everywhere (see below).
@@ -180,7 +180,7 @@ remove the matching files from the server by hand, or start a new sync folder.
 
 ## Highlights and bookmarks
 
-With **Sync highlights and bookmarks** on, KOReader's annotations (page
+With **Sync highlights and bookmarks** on (the default), KOReader's annotations (page
 bookmarks, highlights, and notes on highlights) sync too, including edits
 (note text, colour, style, adjusted ends) and removals.
 
@@ -195,10 +195,9 @@ bookmarks, highlights, and notes on highlights) sync too, including edits
   next opened; until then the file browser's highlight counts and exports
   don't include them. Books first opened with KOReader's rendering from
   before 2020 are left out.
-- **Turning it on** reads the highlights of every book in the reading
-  history, so they're sent at the next sync, not only those of books you
-  open later. That also happens on a device where it's turned on through
-  synced settings, at the next start.
+- **The first sync** with it on (after installing or updating, or turning
+  it on again) first reads the highlights of every book in the reading
+  history, so they're sent too, not only those of books you open later.
 - **Newest change wins.** If the same highlight is changed on two devices,
   the later change wins, by the devices' clocks. A removal counts as a
   change: it wins over an earlier edit, and loses to a later one.
@@ -243,7 +242,7 @@ While this is on:
 In KOReader's `settings/` folder:
 
 - `statsync_settings.lua`: the settings that are the same on every device:
-  automatic sync on/off, highlights and bookmarks on/off, "Turn on Wi-Fi to sync", the chosen server's name
+  automatic sync on/off, highlights and bookmarks off (if turned off), "Turn on Wi-Fi to sync", the chosen server's name
   (no password: that stays in Cloud storage's `cloudstorage.lua`), the
   folder, and `time_limit` (seconds before the network step is stopped,
   default 180; not in the menu). **This one is meant to be synced between

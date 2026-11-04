@@ -27,7 +27,8 @@ local Plugin = {}
 --                          devices, e.g. with Settings sync): enabled,
 --                          allow_wifi, server ({name, type} of a Cloud
 --                          storage server, no credentials), root, time_limit,
---                          annotations (sync highlights and bookmarks too)
+--                          annotations (sync highlights and bookmarks too;
+--                          on unless false)
 --   statsync_device.lua    this device's own: device_id, status, ann_scanned
 --
 -- Earlier versions kept the shared settings in statsync.lua with the whole
@@ -247,8 +248,15 @@ function Plugin.annStore()
     return ann_store
 end
 
+--- Highlights and bookmarks sync too, unless turned off.
 function Plugin.annotationsEnabled()
-    return Plugin.settings().annotations == true
+    return Plugin.settings().annotations ~= false
+end
+
+--- The reading history hasn't been read on this device yet (first sync with
+-- annotations, or turned on again).
+function Plugin.annotationsNeedScan()
+    return Plugin.annotationsEnabled() and not Plugin.deviceState().ann_scanned
 end
 
 --- The process-wide annotation sync (KOReader side).

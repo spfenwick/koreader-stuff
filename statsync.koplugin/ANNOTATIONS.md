@@ -328,16 +328,18 @@ flush stats → detect open book's annotation changes
 ```
 
 - One subprocess, one time limit, one single-flight lock for both streams.
-- Annotation sync has its own on/off switch, **off by default**: notes are
-  personal and go to the server in plain text (as statistics do).
+- Annotation sync has its own on/off switch. **As built: on by default**
+  (the design had it off, as notes go to the server in plain text, as
+  statistics do; changed at the user's request). Turning it off is kept
+  in the shared settings as `annotations = false`.
 - "Rebuild from cloud" re-imports both streams. A changed server or folder
   resets both streams' records.
 
 ### Initial scan
 
 Annotations of books that aren't opened would otherwise never be published.
-When annotation sync is turned on (on a device where it was turned on
-through synced settings, at the next start):
+Before the first sync with annotation sync on (after installing or
+updating, or turning it on again), triggered by whatever starts that sync:
 
 - Walk the reading history; for each file with a sidecar, read
   `partial_md5_checksum` and the `annotations` list, record the path in

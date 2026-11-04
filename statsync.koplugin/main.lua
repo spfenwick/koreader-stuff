@@ -45,19 +45,17 @@ function StatSync:init()
     Plugin.onDone = function(status, run) self.showResult(status, run) end
     if not started then
         started = true
-        UIManager:scheduleIn(STARTUP_DELAY, function()
-            if Plugin.annotationsEnabled() and not Plugin.deviceState().ann_scanned then
-                -- Turned on elsewhere (shared settings), or the scan didn't finish.
-                Plugin.annSync():scan(function() self.trigger("start") end)
-            else
-                self.trigger("start")
-            end
-        end)
+        UIManager:scheduleIn(STARTUP_DELAY, function() self.trigger("start") end)
     end
     Updater.scheduleCheck(self)
 end
 
-function StatSync.trigger(reason, interactive)
+function StatSync.trigger(reason, interactive, scanned)
+    if not scanned and Plugin.annotationsNeedScan() then
+        -- Before the first sync with highlights and bookmarks: read the
+        -- reading history, so books not opened since get sent too.
+        if Plugin.annSync():scan(function() StatSync.trigger(reason, interactive, true) end) then return end
+    end
     local engine = Plugin.engine()
     if interactive and not engine.running and not NetworkMgr:isConnected() then
         -- Asked for by the user: do what KOReader does for other network actions.
@@ -287,7 +285,7 @@ While this is on, turn off KOReader's "Export annotations on book closing" (in t
             checked_func = function() return Plugin.annotationsEnabled() end,
             callback = function()
                 local s = Plugin.settings()
-                s.annotations = not s.annotations or nil
+                s.annotations = not Plugin.annotationsEnabled()
                 Plugin.saveSettings()
                 if s.annotations then
                     local info = InfoMessage:new{ text = _("Reading highlights and bookmarks from the reading history…") }
@@ -299,7 +297,7 @@ While this is on, turn off KOReader's "Export annotations on book closing" (in t
                             timeout = 4,
                         })
                         Plugin.annSync():askHeld()
-                        self.trigger("annotations")
+                        self.trigger("annotations", false, true)
                     end)
                 end
             end,
