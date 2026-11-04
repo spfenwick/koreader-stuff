@@ -185,9 +185,15 @@ function Plugin.root()
     return (root and root ~= "") and root or Plugin.DEFAULT_ROOT
 end
 
+--- Subfolder of the folder for this version's (compressed) segments. 0.2.2
+-- wrote uncompressed ones straight into the folder; devices still on it
+-- carry on there undisturbed, and an updated device sends everything it has
+-- to the new subfolder (a new location, see Store:useLocation).
+Plugin.FORMAT_DIR = "v2"
+
 --- The folder for the WebDAV client: relative to the server's address.
 function Plugin.remoteRoot()
-    return require("statsync/webdav").join(Plugin.root(), "")
+    return require("statsync/webdav").join(Plugin.root(), Plugin.FORMAT_DIR)
 end
 
 --- Where statsync syncs to, for showing and for noticing a change: the

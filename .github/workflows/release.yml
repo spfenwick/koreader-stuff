@@ -1,6 +1,6 @@
 # Publishes a release of one plugin for its updater, either
 #
-# - when a <plugin>-vX.Y.Z tag is pushed (e.g. statsync-v0.2.2; the version
+# - when a <plugin>-vX.Y.Z tag is pushed (e.g. statsync-v0.2.3; the version
 #   must match the plugin's _meta.lua), or
 # - by hand (Actions → Release plugin → Run workflow, on main, choosing the
 #   plugin), which tags the commit with the version in its _meta.lua.
@@ -93,7 +93,7 @@ jobs:
       - name: Test
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y luajit lua-filesystem libsqlite3-0 rclone
+          sudo apt-get install --no-install-recommends -y luajit lua-filesystem libsqlite3-0 libzstd1 rclone
           sh scripts/test.sh
           sh scripts/test-statsync.sh
 

@@ -39,9 +39,18 @@ description, and what couldn't be verified. Written against KOReader
    and `ö`.
 5. **zlib can't do gzip.** koreader-base's `ffi/zlib.lua` wraps only
    `compress2`/`uncompress` (zlib format, and decompression needs the
-   output size up front); no `deflateInit2`/`inflateInit2`. So segments are
-   **plain `.jsonl`**, as the task said to do in that case. See
-   "Recommendations" for zstd.
+   output size up front); no `deflateInit2`/`inflateInit2`. Until 0.2.2
+   segments were plain `.jsonl`. Since 0.2.3 they're **zstd**
+   (`seg-N.jsonl.zst`), with the libzstd koreader-base ships (used by
+   `persist.lua` and coverbrowser), through statsync's own small wrapper
+   (`zstd.lua`): `ffi/zstd.lua` raises on bad input and allocates whatever
+   size a frame claims, and a downloaded file can be anything. Unpacking
+   is refused above 32 MB. Compression happens in the main process after
+   export, decompression just before each import (a few ms per segment).
+   The segment format inside is unchanged (`v` 1); the compressed files go
+   in a `v2/` subfolder, so 0.2.2 devices never see them, and updated
+   devices republish everything there (a new location resets the sync
+   record, see Store:useLocation).
 6. **`insertDB` doesn't save the page on screen.** Its duration isn't known
    until the page is turned, so the flush before export (calling the
    statistics plugin's `insertDB()`, as its own `onSuspend` does) writes
@@ -166,7 +175,8 @@ description, and what couldn't be verified. Written against KOReader
 
 ### Process model
 
-- **Main process:** flush, export (writes `cache/statsync/pending.jsonl`),
+- **Main process:** flush, export (writes `cache/statsync/pending.jsonl`, and
+  `pending.jsonl.zst` to upload),
   then fork. The child gets everything it needs (paths, the seen list) in
   its copied memory and writes its progress to `cache/statsync/result.json`
   (written to a temp name and renamed, after every step), so if it's killed
@@ -217,13 +227,15 @@ server, three devices with ~100k events each (5 years, 40 books):
 
 | Sync | Data up | Data down | Requests | Main-process CPU |
 |---|---|---|---|---|
-| First sync, publishing 100k events (6 cycles) | 9.5 MB | 7 KB | 34 | export 0.8 s |
-| New device importing 300k events (1 cycle) | 1 KB | 28.4 MB | 25 | import 4.9 s |
-| Incremental, one 30-page session, sender | 3.4 KB | 2.2 KB | 8 | export 0.37 s |
-| Incremental, receiver | 0.1 KB | 5.0 KB | 6 | 0.09 s |
+| First sync, publishing 100k events (6 cycles) | 0.8 MB | 7 KB | 34 | export 0.8 s |
+| New device importing 300k events (1 cycle) | 1 KB | 2.4 MB | 25 | import 5.0 s |
+| Incremental, one 30-page session, sender | 0.6 KB | 2.2 KB | 8 | export 0.41 s |
+| Incremental, receiver | 0.1 KB | 2.2 KB | 6 | 0.07 s |
 | Incremental, nothing new | 0.1 KB | 1.9 KB | 5 | 0.03 s |
 
-~97 bytes per event uncompressed. An e-reader's CPU and flash are several
+~97 bytes per event uncompressed, ~8 compressed (the benchmark's data is
+regular; real reading compresses about 8–11×). Before compression (0.2.2)
+the first two rows were 9.5 MB and 28.4 MB. An e-reader's CPU and flash are several
 times slower: expect each 20,000-event segment import to block the screen
 for a couple of seconds during a first sync. Not measured on a device.
 
@@ -281,17 +293,11 @@ snapshot and segments is harmless.
 
 Not implemented because it saves little: events from different devices
 rarely share keys, so a snapshot is about as big as all segments together
-(28 MB for the benchmark's new device); it only saves requests (25 → 1).
-Compression would save far more (below).
+(2.4 MB compressed for the benchmark's new device); it only saves requests
+(25 → 1).
 
 ## Recommendations and things I think are a bad idea
 
-- **Compress with zstd (your call; changes the remote format).** gzip shrinks
-  a 2 MB segment to 170 KB (11×). zlib can't do it (above), but koreader-base
-  ships `ffi/zstd.lua` (`zstd_compress`/`zstd_uncompress`, frames that carry
-  their size), used on every platform by `persist.lua` and coverbrowser. A
-  `seg-N.jsonl.zst` (format version 2) would make first syncs about ten
-  times smaller.
 - **Running both syncs on the same devices** is a bad idea: the built-in one
   deletes, statsync doesn't, and they pick different `total_pages` (see 9).
 - **"Higher `last_open` wins" for title/authors** would break KOReader's

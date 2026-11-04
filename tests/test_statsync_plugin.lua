@@ -171,9 +171,9 @@ S.mkdirp(server.dir .. "/books")
 check(item("Server: My DAV") and not item("not in Cloud storage"), "server found in Cloud storage")
 local sub = item("Server:").sub_item_table_func()
 check(#sub == 1 and sub[1].text == "My DAV" and sub[1].checked_func(), "only WebDAV servers offered, chosen one checked")
-check(P0.serverLocation() == server.url .. "/books/statsync/", "location: " .. tostring(P0.serverLocation()))
+check(P0.serverLocation() == server.url .. "/books/statsync/v2/", "location: " .. tostring(P0.serverLocation()))
 check(P0.serverLocation({ address = "https://me:secret@dav.example.com/dav/" })
-    == "https://dav.example.com/dav/books/statsync/", "location shown without credentials")
+    == "https://dav.example.com/dav/books/statsync/v2/", "location shown without credentials")
 
 -- Automatic sync is off by default: the start-up trigger does nothing
 loop:run(30)
@@ -201,10 +201,10 @@ check(fileData("statsync_device.lua").device_id == id and fileData("statsync_set
     "device ID saved in statsync_device.lua only")
 check(id and #id == 16, "device ID created")
 local segs = 0
-for name in io.popen("ls " .. S.q(server.dir .. "/books/statsync/devices/" .. id)):lines() do
+for name in io.popen("ls " .. S.q(server.dir .. "/books/statsync/v2/devices/" .. id)):lines() do
     if Codec.segmentSeq(name) then segs = segs + 1 end
 end
-check(segs == 1, "segment on the server under books/statsync")
+check(segs == 1, "compressed segment on the server under books/statsync/v2")
 
 -- Offline: automatic triggers skip quietly
 connected = false
@@ -222,9 +222,10 @@ local WebDav = require("statsync/webdav")
 local ost = Store.new{ sq3 = S.SQ3, stats_path = other.db, state_path = other.state }
 local seg = TMP .. "/other.jsonl"
 ost:export{ device_id = "otherdev", out_path = seg, now = 1, max_events = 1000 }
-local dav = WebDav.new{ http = S.Http.new(), address = server.url, username = "u", password = "p", root = "books/statsync" }
+local dav = WebDav.new{ http = S.Http.new(), address = server.url, username = "u", password = "p", root = "books/statsync/v2" }
+check(require("statsync/zstd").compressFile(seg, seg .. ".zst"), "other device's segment compressed")
 dav:mkdir("devices/otherdev")
-check(dav:put_new("devices/otherdev/seg-0000000001.jsonl", seg), "other device's segment uploaded")
+check(dav:put_new("devices/otherdev/seg-0000000001.jsonl.zst", seg .. ".zst"), "other device's segment uploaded")
 local time_before = stats.book_read_time
 stats.page_stat = {}
 item("Sync now").callback()
@@ -238,7 +239,7 @@ check(P.deviceState().status.devices == 2, "two devices seen")
 -- Status, rebuild, reset device ID
 item("Status").callback()
 check(shown[#shown].text:find("Devices seen: 2", 1, true), "status shows devices seen")
-check(shown[#shown].text:find("Folder: " .. server.url .. "/books/statsync/", 1, true), "status shows the folder")
+check(shown[#shown].text:find("Folder: " .. server.url .. "/books/statsync/v2/", 1, true), "status shows the folder")
 item("Rebuild from cloud").callback()
 shown[#shown].ok_callback()
 loop:run(60)
@@ -254,13 +255,13 @@ folder_input = "/fresh"
 item("Folder on server").callback()
 shown[#shown].buttons[1][2].callback()
 check(fileData("statsync_settings.lua").root == "/fresh", "folder saved to statsync_settings.lua")
-check(P.serverLocation() == server.url .. "/fresh/", "new location")
+check(P.serverLocation() == server.url .. "/fresh/v2/", "new location")
 item("Sync now").callback()
 loop:run(60)
 local st2 = P.deviceState().status
 check(st2.uploaded_events == 5 and not st2.last_error,
     "all 5 entries sent to the new folder (" .. tostring(st2.uploaded_events) .. ", " .. tostring(st2.last_error) .. ")")
-check(io.open(server.dir .. "/fresh/devices/" .. P.deviceState().device_id .. "/seg-0000000001.jsonl") ~= nil,
+check(io.open(server.dir .. "/fresh/v2/devices/" .. P.deviceState().device_id .. "/seg-0000000001.jsonl.zst") ~= nil,
     "segment in the new folder")
 
 -- No server chosen: the first WebDAV server in Cloud storage

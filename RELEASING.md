@@ -12,7 +12,7 @@ updates".
 1. Set `version` in the plugin's `_meta.lua` (semantic versioning: the
    updater only installs a higher version).
 2. Commit and push to main.
-3. Either push a tag `<plugin>-v<version>` (e.g. `statsync-v0.2.2`), or run
+3. Either push a tag `<plugin>-v<version>` (e.g. `statsync-v0.2.3`), or run
    Actions → "Release plugin" → Run workflow on main, choosing the plugin
    (this creates the tag).
 

@@ -78,15 +78,16 @@ Tools → Statistics sync:
 ## What's on the server
 
 ```
-<folder on server>/              /KOReader/Statistics unless changed
-  devices/<device-id>/
-    meta.json                  device ID, model, format version, when written
-    seg-0000000001.jsonl       segment files, numbered 1, 2, 3, …
-    seg-0000000002.jsonl
+<folder on server>/                 /KOReader/Statistics unless changed
+  v2/devices/<device-id>/
+    meta.json                     device ID, model, format version, when written
+    seg-0000000001.jsonl.zst      segment files, numbered 1, 2, 3, …
+    seg-0000000002.jsonl.zst
     …
 ```
 
-A segment is a text file, one JSON object per line: a header (format and
+A segment is a text file compressed with zstd (`zstd -d` unpacks it), one
+JSON object per line: a header (format and
 version, device, time), one line per book (`md5`, title, authors, series,
 language, pages, last opened), one line per page reading, and a trailer with
 the counts:
@@ -101,7 +102,16 @@ the counts:
 A page reading ("event") is one row of KOReader's `page_stat_data`:
 book (by KOReader's partial MD5 of the file), page, start time, duration, and
 the book's page count at the time. Segments hold at most 20,000 events
-(about 2 MB). They are not compressed (see DESIGN.md).
+(about 2 MB, about 170 KB compressed).
+
+**0.2.2 and earlier** wrote uncompressed `seg-N.jsonl` files straight into
+the folder (`<folder on server>/devices/…`). 0.2.3 doesn't read or write
+those: when a device is updated, its next syncs send everything it has
+(its own statistics and what it got from the others) to `v2/`. Devices
+still on 0.2.2 carry on in the old place, and the two groups don't see each
+other's new reading until every device is updated; nothing is lost, it
+arrives once they are. Delete the old `devices/` folder once all devices
+have synced with 0.2.3.
 
 ## Guarantees
 

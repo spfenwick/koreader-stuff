@@ -388,13 +388,14 @@ function Codec.readSegment(path, handlers)
     return header
 end
 
---- Segment file names: seg-<10-digit sequence>.jsonl
+--- Segment file names: seg-<10-digit sequence>.jsonl.zst (zstd-compressed;
+-- uncompressed .jsonl segments were 0.2.2's, in another folder).
 function Codec.segmentName(seq)
-    return string.format("seg-%010d.jsonl", seq)
+    return string.format("seg-%010d.jsonl.zst", seq)
 end
 
 function Codec.segmentSeq(name)
-    local n = type(name) == "string" and name:match("^seg%-(%d+)%.jsonl$")
+    local n = type(name) == "string" and name:match("^seg%-(%d+)%.jsonl%.zst$")
     return n and tonumber(n)
 end
 

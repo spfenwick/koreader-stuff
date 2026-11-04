@@ -9,6 +9,7 @@ local S = dofile("tests/statsync/support.lua")
 local check = S.check
 
 local Codec = require("statsync/codec")
+local Zstd = require("statsync/zstd")
 local Engine = require("statsync/engine")
 local Store = require("statsync/store")
 local WebDav = require("statsync/webdav")
@@ -135,7 +136,10 @@ local function allRemoteSegmentsValid(except)
     for _, d in ipairs(devices) do
         for _, name in ipairs(remoteSegments(d.id)) do
             if Codec.segmentSeq(name) and not (except and except[d.id .. "/" .. name]) then
-                local ok, err = Codec.readSegment(REMOTE .. "/devices/" .. d.id .. "/" .. name)
+                local plain = TMP .. "/check.jsonl"
+                local zok, zerr = Zstd.decompressFile(REMOTE .. "/devices/" .. d.id .. "/" .. name, plain)
+                if not zok then return false, d.id .. "/" .. name .. ": " .. zerr end
+                local ok, err = Codec.readSegment(plain)
                 if not ok then return false, d.id .. "/" .. name .. ": " .. err end
             end
         end
@@ -206,10 +210,12 @@ converge("offline device catches up")
 
 -- 4. Upload killed partway --------------------------------------------------------
 local sessions = {}
-for i = 1, 6000 do clock = clock + 31; sessions[i] = { (i % 150) + 1, clock, 40 } end
+-- Varied durations and gaps, so the segment doesn't compress to almost nothing.
+math.randomseed(6)
+for i = 1, 6000 do clock = clock + math.random(20, 400); sessions[i] = { (i % 150) + 1, clock, math.random(5, 300) } end
 B:read(BOOKS[6], sessions)
 local before_segs = #remoteSegments(B.id)
-B.http_opts.chunk_delay = 0.25 -- about 64 KB/s
+B.http_opts.chunk_delay = 2 -- about 8 KB/s
 B.engine.deps.time_limit = 1
 sync({ B })
 check(B.last_run.error and B.last_run.error:find("timed out"), "slow upload stopped at the time limit")
@@ -244,7 +250,7 @@ local NEXT_GOOD = Codec.segmentName(nextA + 3)
 check(dav:put("devices/" .. A.id .. "/" .. BAD1, TMP .. "/half.jsonl")
     and dav:put("devices/" .. A.id .. "/" .. BAD2, TMP .. "/junk.jsonl"), "corrupt segments uploaded")
 -- And one far out of sequence: only a full listing finds it.
-check(dav:put("devices/" .. A.id .. "/seg-0000000900.jsonl", TMP .. "/junk.jsonl"), "stray segment uploaded")
+check(dav:put("devices/" .. A.id .. "/seg-0000000900.jsonl.zst", TMP .. "/junk.jsonl"), "stray segment uploaded")
 local first = "devices/" .. A.id .. "/" .. firstSegment(A.id)
 local before = S.readFile(REMOTE .. "/" .. first)
 check(dav:put_new(first, TMP .. "/junk.jsonl") == false, "put_new refuses an existing name (MOVE, Overwrite: F)")
@@ -280,7 +286,7 @@ B:makeEngine()
 readSome(B, BOOKS[3], 7) -- new reading after the restore
 converge("restored from backup")
 check(#remoteSegments(B.id) == b_segs_before + 1, "restored device wrote a new segment, after its existing ones")
-check(allRemoteSegmentsValid({ [A.id .. "/seg-0000000900.jsonl"] = true, [A.id .. "/" .. BAD1] = true, [A.id .. "/" .. BAD2] = true }),
+check(allRemoteSegmentsValid({ [A.id .. "/seg-0000000900.jsonl.zst"] = true, [A.id .. "/" .. BAD1] = true, [A.id .. "/" .. BAD2] = true }),
     "no segment overwritten")
 
 -- 7. Two devices syncing at the same moment ------------------------------------------------

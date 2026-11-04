@@ -53,8 +53,23 @@ do
     check(Codec.parseLine('{"t":"e","md5":"x","page":1,"start":1,"dur":1.5,"tp":1}') == nil, "fractional duration rejected")
     check(Codec.parseLine('{"t":"e","md5":"x","page":1,"start":1,"dur":1}') == nil, "missing field rejected")
     check(Codec.parseLine('{"t":"b","md5":"x","title":5}') == nil, "non-string title rejected")
-    check(Codec.segmentName(7) == "seg-0000000007.jsonl" and Codec.segmentSeq("seg-0000000007.jsonl") == 7, "segment names")
+    check(Codec.segmentName(7) == "seg-0000000007.jsonl.zst" and Codec.segmentSeq("seg-0000000007.jsonl.zst") == 7, "segment names")
     check(Codec.segmentSeq("seg-1.jsonl.part") == nil and Codec.segmentSeq("meta.json") == nil, "non-segments ignored")
+    check(Codec.segmentSeq("seg-0000000007.jsonl") == nil, "0.2.2's uncompressed segments not taken for these")
+
+    -- zstd
+    local Zstd = require("statsync/zstd")
+    local text = string.rep('{"t":"e","md5":"0123456789abcdef0123456789abcdef","page":1,"start":1,"dur":5,"tp":9}\n', 500)
+    local packed = assert(Zstd.compress(text))
+    check(#packed < #text / 10 and Zstd.decompress(packed) == text, "zstd round trip (" .. #text .. " -> " .. #packed .. ")")
+    check(Zstd.decompress("") == nil and Zstd.decompress("this is not a segment\n") == nil, "not zstd: refused")
+    check(Zstd.decompress(packed:sub(1, #packed - 5)) == nil, "truncated zstd: refused")
+    local small_ok, small_err = Zstd.decompress(packed, 1000)
+    check(small_ok == nil and small_err:find("more than"), "too big to unpack: refused before allocating")
+    local zin, zout, zback = TMP .. "/z.jsonl", TMP .. "/z.jsonl.zst", TMP .. "/z2.jsonl"
+    S.writeFile(zin, text)
+    check(Zstd.compressFile(zin, zout) == #packed and Zstd.decompressFile(zout, zback) and S.readFile(zback) == text,
+        "zstd file round trip")
     check(WebDav._base64("user:pässword") == "dXNlcjpww6Rzc3dvcmQ=" and WebDav._base64("ab") == "YWI="
         and WebDav._base64("abc") == "YWJj" and WebDav._base64("a") == "YQ==", "base64")
 end
@@ -405,38 +420,38 @@ do
     local t = memTransport()
     local r = NetJob.run({ device_id = "dev1", pending = { path = pending, size = 1 }, meta_path = meta,
                            seen = {}, tmp_dir = tmp, full_list = true }, t)
-    check(r.ok and r.uploaded and r.uploaded.name == "seg-0000000001.jsonl" and r.uploaded.verified,
+    check(r.ok and r.uploaded and r.uploaded.name == "seg-0000000001.jsonl.zst" and r.uploaded.verified,
         "empty server: folders made, first segment uploaded and verified")
     check(t.files["devices/dev1/meta.json"] == "{}", "meta.json written")
     check(r.full_listed, "full listing done")
 
     -- Full listing: restored device continues after its highest segment, gets its lost ones back
-    t.files["devices/dev1/seg-0000000005.jsonl"] = "old"
+    t.files["devices/dev1/seg-0000000005.jsonl.zst"] = "old"
     t.files["devices/dev1/.upload-dead.part"] = "half"
     t.files["devices/dev2"] = true
-    t.files["devices/dev2/seg-0000000001.jsonl"] = "abc"
-    t.files["devices/dev2/seg-0000000002.jsonl"] = "abcd"
+    t.files["devices/dev2/seg-0000000001.jsonl.zst"] = "abc"
+    t.files["devices/dev2/seg-0000000002.jsonl.zst"] = "abcd"
     t.files["devices/bad id!"] = true
-    local seen = { dev1 = { ["seg-0000000001.jsonl"] = { size = 1 } }, dev2 = { ["seg-0000000001.jsonl"] = { size = 3 } } }
+    local seen = { dev1 = { ["seg-0000000001.jsonl.zst"] = { size = 1 } }, dev2 = { ["seg-0000000001.jsonl.zst"] = { size = 3 } } }
     r = NetJob.run({ device_id = "dev1", pending = { path = pending, size = 1 }, meta_path = meta, seen = seen, tmp_dir = tmp,
                      full_list = true,
-                     bad = { dev2 = { ["seg-0000000002.jsonl"] = { size = 99 } } } }, t)
-    check(r.uploaded and r.uploaded.name == "seg-0000000002.jsonl", "upload takes the first unused number")
+                     bad = { dev2 = { ["seg-0000000002.jsonl.zst"] = { size = 99 } } } }, t)
+    check(r.uploaded and r.uploaded.name == "seg-0000000002.jsonl.zst", "upload takes the first unused number")
     check(t.files["devices/dev1/.upload-dead.part"] == nil, "leftover temporary upload deleted")
     local got = names(r)
-    check(got["dev1/seg-0000000005.jsonl"] == "old", "own unseen segment downloaded (restore from backup)")
-    check(got["dev2/seg-0000000002.jsonl"] == "abcd", "bad entry with another size is retried")
-    check(not got["dev2/seg-0000000001.jsonl"] and not got["dev1/seg-0000000002.jsonl"], "seen and just-uploaded segments skipped")
+    check(got["dev1/seg-0000000005.jsonl.zst"] == "old", "own unseen segment downloaded (restore from backup)")
+    check(got["dev2/seg-0000000002.jsonl.zst"] == "abcd", "bad entry with another size is retried")
+    check(not got["dev2/seg-0000000001.jsonl.zst"] and not got["dev1/seg-0000000002.jsonl.zst"], "seen and just-uploaded segments skipped")
     check(#r.devices == 2, "invalid device folder names ignored")
 
     -- Ordinary sync: no folder listings, next segments asked for by name
-    t.files["devices/dev2/seg-0000000003.jsonl"] = "three"
-    t.files["devices/dev2/seg-0000000004.jsonl"] = "four"
+    t.files["devices/dev2/seg-0000000003.jsonl.zst"] = "three"
+    t.files["devices/dev2/seg-0000000004.jsonl.zst"] = "four"
     t.log, t.requests = {}, 0
     r = NetJob.run({ device_id = "dev1", meta_path = meta, tmp_dir = tmp,
                      seen = seenSet{ dev1 = { 1, 2, 5 }, dev2 = { 1, 2 } } }, t)
     got = names(r)
-    check(got["dev2/seg-0000000003.jsonl"] == "three" and got["dev2/seg-0000000004.jsonl"] == "four" and #r.downloads == 2,
+    check(got["dev2/seg-0000000003.jsonl.zst"] == "three" and got["dev2/seg-0000000004.jsonl.zst"] == "four" and #r.downloads == 2,
         "probing downloads the next segments in order")
     check(t.requests == 5 and not r.full_listed, "ordinary sync: 1 listing + 2 downloads + 1 miss per device (" .. t.requests .. " requests)")
     -- Nothing new: one listing plus one miss per device
@@ -446,24 +461,24 @@ do
     check(#r.downloads == 0 and t.requests == 3, "nothing new: 3 small requests")
 
     -- Own record behind (restored), ordinary sync: name taken, so list and continue after the highest
-    t.files["devices/dev1/seg-0000000003.jsonl"] = "lost"
+    t.files["devices/dev1/seg-0000000003.jsonl.zst"] = "lost"
     r = NetJob.run({ device_id = "dev1", pending = { path = pending, size = 1 }, meta_path = meta, tmp_dir = tmp,
                      seen = seenSet{ dev1 = { 1, 2, 5 }, dev2 = { 1, 2, 3, 4 } } }, t)
-    check(r.uploaded and r.uploaded.name == "seg-0000000004.jsonl" and t.files["devices/dev1/seg-0000000003.jsonl"] == "lost",
+    check(r.uploaded and r.uploaded.name == "seg-0000000004.jsonl.zst" and t.files["devices/dev1/seg-0000000003.jsonl.zst"] == "lost",
         "taken name: not overwritten, upload takes the next unused number")
-    check(names(r)["dev1/seg-0000000003.jsonl"] == "lost" and #r.downloads == 1, "and the lost own segment is downloaded")
+    check(names(r)["dev1/seg-0000000003.jsonl.zst"] == "lost" and #r.downloads == 1, "and the lost own segment is downloaded")
     -- A stray number far ahead doesn't make readers skip the real next ones
-    t.files["devices/dev2/seg-0000000900.jsonl"] = "stray"
-    t.files["devices/dev2/seg-0000000005.jsonl"] = "five"
+    t.files["devices/dev2/seg-0000000900.jsonl.zst"] = "stray"
+    t.files["devices/dev2/seg-0000000005.jsonl.zst"] = "five"
     r = NetJob.run({ device_id = "dev1", meta_path = meta, tmp_dir = tmp,
                      seen = seenSet{ dev1 = { 1, 2, 3, 4, 5 }, dev2 = { 1, 2, 3, 4 } },
                      bad = seenSet{ dev2 = { 900 } } }, t)
-    check(names(r)["dev2/seg-0000000005.jsonl"] == "five", "probing continues from the first unseen number")
+    check(names(r)["dev2/seg-0000000005.jsonl.zst"] == "five", "probing continues from the first unseen number")
 
     -- Same size as the known-bad copy: skipped
     r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, full_list = true,
-                     bad = { dev2 = { ["seg-0000000002.jsonl"] = { size = 4 } } } }, t)
-    check(not names(r)["dev2/seg-0000000002.jsonl"], "known-bad segment not downloaded again")
+                     bad = { dev2 = { ["seg-0000000002.jsonl.zst"] = { size = 4 } } } }, t)
+    check(not names(r)["dev2/seg-0000000002.jsonl.zst"], "known-bad segment not downloaded again")
     -- Download budget
     r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, max_download_bytes = 1, full_list = true }, t)
     check(#r.downloads == 1 and r.remote_more, "download budget stops early and says there's more")

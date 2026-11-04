@@ -9,6 +9,9 @@ A transport is an object with:
     put(path, local_path)    -> true | nil, err, code     (create or replace)
     put_new(path, local_path)-> true | false (name taken) | nil, err, code
     mkdir(path)              -> true (created or already there) | nil, err, code
+    mkdir_root()             -> the same, for the root folder and every
+                                missing folder above it (optional; without
+                                it, mkdir("") is used)
     delete(path)             -> true | nil, err, code
 
 Paths are relative to the transport's root folder, "/"-separated and not
@@ -249,6 +252,19 @@ function WebDav:mkdir(path)
     -- 405: already exists. 301: some servers redirect to the slashed URL of an existing folder.
     if code and ((code >= 200 and code <= 299) or code == 405 or code == 301) then return true end
     return fail(code, err)
+end
+
+function WebDav:mkdir_root()
+    local prefix = ""
+    for part in self.root:gmatch("[^/]+") do
+        prefix = prefix == "" and part or prefix .. "/" .. part
+        local url = self.address .. "/" .. urlEncodePath(prefix) .. "/"
+        local code, err = self:request{ method = "MKCOL", url = url }
+        if not (code and ((code >= 200 and code <= 299) or code == 405 or code == 301)) then
+            return fail(code, err)
+        end
+    end
+    return true
 end
 
 function WebDav:delete(path)

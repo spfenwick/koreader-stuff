@@ -96,7 +96,9 @@ function NetJob.run(params, transport, report)
     if not dev_entries then
         if code ~= 404 and code ~= 409 then return failed("listing devices: " .. tostring(err)) end
         for _, dir in ipairs({ "", NetJob.DEVICES }) do
-            local ok, merr = transport:mkdir(dir)
+            local ok, merr
+            if dir == "" and transport.mkdir_root then ok, merr = transport:mkdir_root()
+            else ok, merr = transport:mkdir(dir) end
             if not ok then return failed("creating " .. (dir == "" and "statsync folder" or dir) .. ": " .. tostring(merr)) end
         end
         dev_entries = {}

@@ -23,6 +23,10 @@ Everything KOReader-specific is passed in (`deps`), so tests can drive it:
     saveStatus(status)    persist the status table
     onDone(status, run)   optional, after every cycle (e.g. tell the user)
     logger, time_limit, poll_interval, max_events, max_download_bytes
+    zstd                  optional, statsync/zstd by default
+
+Segments are written and read as plain .jsonl here; they're compressed
+just before upload and decompressed just before import.
 --]]
 
 local Codec = require("statsync/codec")
@@ -133,6 +137,11 @@ function Engine:_step(run, stage)
     end
 end
 
+function Engine:_zstd()
+    if not self.deps.zstd then self.deps.zstd = require("statsync/zstd") end
+    return self.deps.zstd
+end
+
 function Engine:_export(run)
     local d = self.deps
     local fok, ferr = pcall(d.flush)
@@ -143,8 +152,10 @@ function Engine:_export(run)
     for _, name in ipairs((listDir(d.tmp_dir))) do os.remove(d.tmp_dir .. "/" .. name) end
     run.device_id = d.getDeviceId()
     run.pending_path = d.work_dir .. "/pending.jsonl"
+    run.packed_path = run.pending_path .. ".zst"
     run.result_path = d.work_dir .. "/result.json"
     os.remove(run.pending_path)
+    os.remove(run.packed_path)
     os.remove(run.result_path)
 
     -- Listing every device folder costs more as segments accumulate, so
@@ -159,6 +170,11 @@ function Engine:_export(run)
     if eerr then return self:_fail(run, "export: " .. tostring(eerr)) end
     run.export_skipped = why
     run.export = exp
+    if exp then
+        local packed, perr = self:_zstd().compressFile(run.pending_path, run.packed_path)
+        if not packed then return self:_fail(run, "compressing: " .. tostring(perr)) end
+        exp.plain_size, exp.size = exp.size, packed
+    end
     run.export_cpu = os.clock() - t0
 
     local meta_path = d.work_dir .. "/meta.json"
@@ -168,7 +184,7 @@ function Engine:_export(run)
     })
     local params = {
         device_id = run.device_id,
-        pending = exp and { path = run.pending_path, size = exp.size } or nil,
+        pending = exp and { path = run.packed_path, size = exp.size } or nil,
         meta_path = meta_path,
         seen = d.store:seenSegments(),
         bad = d.store:badSegments(),
@@ -245,6 +261,7 @@ function Engine:_collect(run)
         self.log.warn("StatSync: upload failed:", run.upload_error)
     end
     os.remove(run.pending_path)
+    os.remove(run.packed_path)
     run.queue = result.downloads or {}
     run.qi = 1
     d.schedule(0, function() self:_step(run, "import") end)
@@ -257,9 +274,17 @@ function Engine:_import(run)
     if not item then return self:_finish(run) end
     run.qi = run.qi + 1
     local t0 = os.clock()
-    local summary, err, kind = d.store:importSegment(item.path, item.device, item.name, item.size, item.etag, d.now())
+    local plain = item.path .. ".jsonl"
+    local summary, err, kind
+    local uok, uerr = self:_zstd().decompressFile(item.path, plain)
+    if uok then
+        summary, err, kind = d.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
+    else
+        err, kind = "can't decompress: " .. tostring(uerr), "format"
+    end
     run.import_cpu = (run.import_cpu or 0) + (os.clock() - t0)
     os.remove(item.path)
+    os.remove(plain)
     if summary then
         run.segments_imported = run.segments_imported + 1
         run.imported_events = run.imported_events + summary.events
