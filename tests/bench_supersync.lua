@@ -1,4 +1,4 @@
--- Benchmark for statsync.koplugin: three devices with about five years of
+-- Benchmark for supersync.koplugin: three devices with about five years of
 -- synthetic history each (~100k page_stat_data rows), against a local
 -- WebDAV server (rclone). Reports time and data moved for:
 --   1. a device publishing its whole history for the first time,
@@ -7,11 +7,11 @@
 -- Run with scripts/test-statsync.sh bench. Desktop timings: an e-reader's
 -- CPU and storage are several times slower.
 
-local S = dofile("tests/statsync/support.lua")
+local S = dofile("tests/supersync/support.lua")
 
-local Engine = require("statsync/engine")
-local Store = require("statsync/store")
-local WebDav = require("statsync/webdav")
+local Engine = require("supersync/engine")
+local Store = require("supersync/store")
+local WebDav = require("supersync/webdav")
 
 local TMP = assert(os.getenv("STATSYNC_TMP")) .. "/bench"
 S.rmrf(TMP)

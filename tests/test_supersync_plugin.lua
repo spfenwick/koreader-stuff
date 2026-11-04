@@ -1,20 +1,22 @@
--- Exercises statsync.koplugin's KOReader glue (main.lua, statsync/plugin.lua)
--- with KOReader's UI modules stubbed, but the rest real: KOReader's
--- statistics plugin as the open book's, forked subprocesses, and a WebDAV
--- server (rclone). Checks the flush of unsaved page times, the server
--- taken from Cloud storage by name, the folder setting, the menu, and the
+-- Exercises supersync.koplugin's KOReader glue for statistics and
+-- highlights (main.lua, supersync/plugin.lua, supersync/migrate.lua) with
+-- KOReader's UI modules stubbed, but the rest real: KOReader's statistics
+-- plugin as the open book's, forked subprocesses, and a WebDAV server
+-- (rclone). Checks the flush of unsaved page times, the server taken from
+-- Cloud storage by name, separate syncs of statistics and highlights, the
+-- automatic sync settings, taking over Statistics sync's data, and the
 -- refresh of the open book's totals.
 
-local S = dofile("tests/statsync/support.lua")
+local S = dofile("tests/supersync/support.lua")
 local check = S.check
-local Codec = require("statsync/codec")
+local Codec = require("supersync/codec")
 
 local TMP = assert(os.getenv("STATSYNC_TMP")) .. "/plugin"
 S.rmrf(TMP)
 S.mkdirp(TMP)
 local server, serr = S.startWebDav(TMP .. "/server", "u", "p")
 if not server then
-    print("statsync plugin test: skipped (" .. serr .. ")")
+    print("supersync plugin test: skipped (" .. serr .. ")")
     os.exit(0)
 end
 
@@ -32,17 +34,11 @@ _G.G_reader_settings = {
     saveSetting = function(_, k, v) settings_data[k] = v end,
     delSetting = function(_, k) settings_data[k] = nil end,
 }
--- Settings from earlier versions, copied on first use: this device's status
--- from settings.reader.lua, the shared ones from statsync.lua (written
--- below), which has a whole Cloud storage entry, password and all, synced to
--- its folder + /statsync. Both are left as they were, for older versions.
-settings_data.statsync = { allow_wifi = true, status = { last_success = 5 } }
-local OLD_SHARED = 'return { allow_wifi = false, time_limit = 120, server = { name = "My DAV", type = "webdav", '
-    .. string.format("address = %q, ", server.url) .. 'username = "u", password = "p", url = "/books" } }\n'
 
 -- The open book: KOReader's statistics plugin, with page times not yet written.
 local dev = S.newDevice("reader", TMP .. "/settings")
-S.writeFile(dev.dir .. "/statsync.lua", OLD_SHARED)
+-- Statistics sync's shared settings: some are taken over.
+S.writeFile(dev.dir .. "/statsync_settings.lua", 'return { allow_wifi = false, time_limit = 120, enabled = false, root = "/x" }\n')
 local book = { md5 = string.rep("c", 32), title = "Open book", authors = "Someone", pages = 200 }
 dev:read(book, { { 1, 1000, 30 } })
 local stats = dev.stats
@@ -51,6 +47,7 @@ stats.curr_page = 4
 
 local function stub(name, value) package.loaded[name] = value end
 stub("datastorage", { getDataDir = function() return TMP .. "/data" end, getSettingsDir = function() return dev.dir end })
+S.mkdirp(TMP .. "/data")
 stub("device", { model = "Test device" })
 stub("logger", { info = function() end, warn = function(...) if os.getenv("STATSYNC_VERBOSE") then print(...) end end,
                  dbg = function() end, err = print })
@@ -104,7 +101,7 @@ stub("luasettings", {
 })
 stub("socket.http", S.Http.new())
 stub("apps/reader/readerui", { instance = { statistics = stats } })
-stub("ui/widget/confirmbox", { new = function(_, o) return o end })
+stub("ui/widget/confirmbox", { new = function(_, o) o.confirm = true; return o end })
 stub("ui/widget/infomessage", { new = function(_, o) return o end })
 local folder_input
 stub("ui/widget/inputdialog", { new = function(_, o)
@@ -134,40 +131,8 @@ stub("libs/libkoreader-lfs", require("lfs"))
 stub("ui/event", { new = function(_, name, args) return { name = name, args = args } end })
 stub("ui/widget/multiconfirmbox", { new = function(_, o) o.multi = true; return o end })
 
-package.path = "statsync.koplugin/?.lua;" .. package.path
+package.path = "supersync.koplugin/?.lua;" .. package.path
 
-local StatSync = dofile("statsync.koplugin/main.lua")
-local menu_items = {}
-local ui = { menu = { registerToMainMenu = function(_, p) p:addToMainMenu(menu_items) end } }
-local plugin = setmetatable({ ui = ui }, StatSync)
-plugin:init()
-
-local menu = menu_items.statsync
-check(menu and menu.sorting_hint == "tools", "menu entry under Tools")
-local function item(text)
-    for _, it in ipairs(menu.sub_item_table) do
-        local t = it.text or (it.text_func and it.text_func())
-        if t and t:find(text, 1, true) then return it end
-    end
-end
-check(item("Check for updates") and item("Automatic updates"), "update items in the menu")
-
--- The old server entry became a reference by name, with the same folder.
-local P0 = require("statsync/plugin")
-local function fileData(name) return dofile(dev.dir .. "/" .. name) end
-local saved = fileData("statsync_settings.lua")
-check(saved.server and saved.server.name == "My DAV" and saved.server.password == nil and saved.server.address == nil,
-    "statsync_settings.lua keeps the server's name only, no credentials")
-check(saved.root == "/books/statsync", "same folder as before: " .. tostring(saved.root))
-check(item("Folder on server: /books/statsync"), "folder shown in the menu")
-
--- Not (yet) in Cloud storage: told why
-check(item("Server: My DAV (not in Cloud storage)"), "missing server shown")
-item("Sync now").callback()
-loop:run(10)
-check(shown[#shown] and shown[#shown].text:find("not found in Cloud storage"), "manual sync without the server explains why")
-
--- Cloud storage's servers: only WebDAV ones offered, credentials from there.
 local function writeCloudStorage(servers)
     local f = assert(io.open(dev.dir .. "/cloudstorage.lua", "w"))
     local parts = {}
@@ -183,44 +148,72 @@ writeCloudStorage({
     { name = "Box", type = "dropbox", address = "x", password = "y" },
     { name = "My DAV", type = "webdav", address = server.url, username = "u", password = "p", url = "/elsewhere" },
 })
-S.mkdirp(server.dir .. "/books")
-check(item("Server: My DAV") and not item("not in Cloud storage"), "server found in Cloud storage")
-local sub = item("Server:").sub_item_table_func()
-check(#sub == 1 and sub[1].text == "My DAV" and sub[1].checked_func(), "only WebDAV servers offered, chosen one checked")
-check(P0.serverLocation() == server.url .. "/books/statsync/v2/", "location: " .. tostring(P0.serverLocation()))
-check(P0.serverLocation({ address = "https://me:secret@dav.example.com/dav/" })
-    == "https://dav.example.com/dav/books/statsync/v2/", "location shown without credentials")
 
--- Automatic sync is off by default: the start-up trigger does nothing
-loop:run(30)
-local P = require("statsync/plugin")
--- The old settings were copied: shared ones and this device's own apart,
--- statsync.lua's shared ones over settings.reader.lua's.
-local shared, own = fileData("statsync_settings.lua"), fileData("statsync_device.lua")
-check(shared.allow_wifi == false and shared.time_limit == 120 and shared.status == nil and shared.device_id == nil,
-    "statsync_settings.lua: shared settings only")
-check(S.readFile(dev.dir .. "/statsync.lua") == OLD_SHARED and settings_data.statsync.allow_wifi == true,
-    "old settings left alone for older versions")
-check(own.status and own.status.last_success == 5, "statsync_device.lua: this device's status")
-check(not P.deviceState().status.last_attempt, "automatic sync off by default")
-
--- Turn it on; a network-connected trigger syncs, and flushes the open book first
-item("Sync automatically").callback()
-check(P.settings().enabled == true and fileData("statsync_settings.lua").enabled == true, "automatic sync turned on, saved to statsync_settings.lua")
-plugin:onNetworkConnected()
-loop:run(60)
-local st = P.deviceState().status
-check(st and st.last_success and not st.last_error, "automatic sync succeeded: " .. tostring(st and st.last_error))
-check(st and st.uploaded_events == 3, "the unsaved page times were flushed and sent (" .. tostring(st and st.uploaded_events) .. ")")
-local id = P.deviceState().device_id
-check(fileData("statsync_device.lua").device_id == id and fileData("statsync_settings.lua").device_id == nil,
-    "device ID saved in statsync_device.lua only")
-check(id and #id == 16, "device ID created")
-local segs = 0
-for name in io.popen("ls " .. S.q(server.dir .. "/books/statsync/v2/devices/" .. id)):lines() do
-    if Codec.segmentSeq(name) then segs = segs + 1 end
+local SuperSync = dofile("supersync.koplugin/main.lua")
+local menu_items = {}
+local ui = { menu = { registerToMainMenu = function(_, p) p:addToMainMenu(menu_items) end } }
+local plugin = setmetatable({ ui = ui }, SuperSync)
+plugin:init()
+local function wasShown(text)
+    for _, w in ipairs(shown) do
+        if w.text and w.text:find(text, 1, true) then return true end
+    end
 end
-check(segs == 1, "compressed segment on the server under books/statsync/v2")
+
+local menu = menu_items.supersync
+check(menu and menu.sorting_hint == "tools", "menu entry under Tools")
+local function item(text)
+    for _, it in ipairs(menu.sub_item_table_func()) do
+        local t = it.text or (it.text_func and it.text_func())
+        if t and t:find(text, 1, true) then return it end
+    end
+end
+check(item("Check for updates") and item("Automatic updates"), "update items in the menu")
+
+local P = require("supersync/plugin")
+local function fileData(name) return dofile(dev.dir .. "/" .. name) end
+local saved = fileData("supersync_settings.lua")
+check(saved.allow_wifi == false and saved.time_limit == 120 and saved.enabled == nil and saved.root == nil,
+    "Statistics sync's Wi-Fi and time limit taken over, not its folder or automatic sync")
+check(item("Folder on server: /KOReader"), "default folder shown in the menu")
+check(P.autoStats() and P.autoAnnotations(), "automatic syncs on by default")
+
+-- The first server is Dropbox: fine for settings, not for statistics.
+check(item("Server: Box (Dropbox)"), "first server used when none chosen")
+item("Sync statistics").callback()
+check(wasShown("need a WebDAV server"), "statistics on Dropbox: told why")
+local sub = item("Server:").sub_item_table_func()
+check(#sub == 2 and sub[1].checked_func() and not sub[2].checked_func(), "Dropbox and WebDAV servers offered")
+sub[2].callback()
+check(fileData("supersync_settings.lua").server.name == "My DAV" and fileData("supersync_settings.lua").server.password == nil,
+    "chosen server kept by name, no credentials")
+check(item("Server: My DAV (WebDAV)"), "chosen server shown")
+check(P.serverLocation() == server.url .. "/KOReader/Statistics/v2/", "location: " .. tostring(P.serverLocation()))
+check(P.serverLocation({ address = "https://me:secret@dav.example.com/dav/" })
+    == "https://dav.example.com/dav/KOReader/Statistics/v2/", "location shown without credentials")
+
+-- Automatic sync is on: the start-up trigger syncs both, flushing the open book first.
+loop:run(60)
+check(wasShown("took over"), "taking over Statistics sync's data reported")
+local st = P.deviceState().status
+check(st and st.last_success and not st.last_error, "automatic sync at start succeeded: " .. tostring(st and st.last_error))
+check(st and st.uploaded_events == 3, "the unsaved page times were flushed and sent (" .. tostring(st and st.uploaded_events) .. ")")
+check(st.stats_last_success and st.ann_last_success and st.ann_uploaded == 1, "statistics and highlights both synced")
+check(P.deviceState().ann_scanned ~= nil, "reading history read before the first sync of highlights")
+local id = P.deviceState().device_id
+check(fileData("supersync_device.lua").device_id == id and fileData("supersync_settings.lua").device_id == nil,
+    "device ID saved in supersync_device.lua only")
+check(id and #id == 16, "device ID created")
+local function count(dir, pattern)
+    local n = 0
+    for name in io.popen("ls " .. S.q(dir) .. " 2>/dev/null"):lines() do
+        if name:match(pattern) then n = n + 1 end
+    end
+    return n
+end
+local DAVDIR = server.dir .. "/KOReader/Statistics/v2/devices/"
+check(count(DAVDIR .. id, "^seg%-") == 1 and count(DAVDIR .. id, "^ann%-") == 1,
+    "compressed segments on the server under KOReader/Statistics/v2")
 
 -- Offline: automatic triggers skip quietly
 connected = false
@@ -233,91 +226,123 @@ connected = true
 -- Another device's reading of the open book shows up in the open book's totals
 local other = S.newDevice("other", TMP .. "/other")
 other:read(book, { { 10, 5000, 100 }, { 11, 5100, 100 } })
-local Store = require("statsync/store")
-local WebDav = require("statsync/webdav")
+local Store = require("supersync/store")
+local WebDav = require("supersync/webdav")
 local ost = Store.new{ sq3 = S.SQ3, stats_path = other.db, state_path = other.state }
 local seg = TMP .. "/other.jsonl"
 ost:export{ device_id = "otherdev", out_path = seg, now = 1, max_events = 1000 }
-local dav = WebDav.new{ http = S.Http.new(), address = server.url, username = "u", password = "p", root = "books/statsync/v2" }
-check(require("statsync/zstd").compressFile(seg, seg .. ".zst"), "other device's segment compressed")
+local dav = WebDav.new{ http = S.Http.new(), address = server.url, username = "u", password = "p", root = "KOReader/Statistics/v2" }
+check(require("supersync/zstd").compressFile(seg, seg .. ".zst"), "other device's segment compressed")
 dav:mkdir("devices/otherdev")
 check(dav:put_new("devices/otherdev/seg-0000000001.jsonl.zst", seg .. ".zst"), "other device's segment uploaded")
 local time_before = stats.book_read_time
 stats.page_stat = {}
-item("Sync now").callback()
+local ann_success = P.deviceState().status.ann_last_success
+S.sleep(1.1)
+item("Sync statistics").callback()
 loop:run(60)
-check(shown[#shown] and shown[#shown].text:find("Statistics synced"), "manual sync reports success")
+check(shown[#shown] and shown[#shown].text:find("^Statistics synced") and not shown[#shown].text:find("Highlights"),
+    "statistics sync reports statistics only: " .. tostring(shown[#shown] and shown[#shown].text))
 check(P.deviceState().status.imported_events == 2, "two events imported")
+check(P.deviceState().status.ann_last_success == ann_success, "highlights not synced with statistics")
 check(stats.book_read_time > time_before, "open book's cached totals refreshed ("
     .. tostring(time_before) .. " -> " .. tostring(stats.book_read_time) .. ")")
 check(P.deviceState().status.devices == 2, "two devices seen")
 
--- Status, rebuild, reset device ID
+-- Automatic statistics off: automatic syncs do highlights only.
+item("Sync statistics automatically").callback()
+check(fileData("supersync_settings.lua").auto_stats == false, "automatic statistics off, saved")
+local stats_success = P.deviceState().status.stats_last_success
+S.sleep(1.1)
+plugin:onNetworkConnected()
+loop:run(60)
+st = P.deviceState().status
+check(st.stats_last_success == stats_success and st.ann_last_success > ann_success and not st.last_error,
+    "automatic sync: highlights only")
+item("Sync highlights and bookmarks automatically").callback()
+before = st.last_attempt
+S.sleep(1.1)
+plugin:onNetworkConnected()
+loop:run(10)
+check(P.deviceState().status.last_attempt == before, "both automatic syncs off: nothing synced")
+item("Sync statistics automatically").callback()
+item("Sync highlights and bookmarks automatically").callback()
+check(P.autoStats() and P.autoAnnotations(), "both on again")
+
+-- Status, rebuild
 item("Status").callback()
 check(shown[#shown].text:find("Devices seen: 2", 1, true), "status shows devices seen")
-check(shown[#shown].text:find("Folder: " .. server.url .. "/books/statsync/v2/", 1, true), "status shows the folder")
-item("Rebuild from cloud").callback()
+check(shown[#shown].text:find("Statistics folder: " .. server.url .. "/KOReader/Statistics/v2/", 1, true),
+    "status shows the folder")
+item("Rebuild statistics and highlights from cloud").callback()
 shown[#shown].ok_callback()
 loop:run(60)
 check(P.deviceState().status.imported_events == 5, "rebuild re-imported both devices' segments (3 + 2 events, got "
     .. tostring(P.deviceState().status.imported_events) .. ")")
 check(dev:totalsMatch(), "totals still match after rebuild")
-item("Reset device ID").callback()
-shown[#shown].ok_callback()
-check(P.deviceState().device_id ~= id, "device ID reset")
 
--- Another folder: everything this device has is sent there.
-folder_input = "/fresh"
-item("Folder on server").callback()
-shown[#shown].buttons[1][2].callback()
-check(fileData("statsync_settings.lua").root == "/fresh", "folder saved to statsync_settings.lua")
-check(P.serverLocation() == server.url .. "/fresh/v2/", "new location")
-item("Sync now").callback()
+-- Taking over Statistics sync's data -----------------------------------------------
+-- As if this device had used Statistics sync: its database and device ID
+-- in its files, and its server folder copied by hand to SuperSync's.
+local function cp(from, to) os.execute("cp -r " .. S.q(from) .. " " .. S.q(to)) end
+cp(dev.dir .. "/supersync.sqlite3", dev.dir .. "/statsync.sqlite3")
+cp(dev.dir .. "/supersync_device.lua", dev.dir .. "/statsync_device.lua")
+os.remove(dev.dir .. "/supersync.sqlite3")
+os.remove(dev.dir .. "/supersync_device.lua")
+S.mkdirp(server.dir .. "/Moved")
+cp(server.dir .. "/KOReader/Statistics", server.dir .. "/Moved/Statistics")
+local own_files = count(server.dir .. "/Moved/Statistics/v2/devices/" .. id, "%.zst$")
+dofile("supersync.koplugin/main.lua") -- KOReader starting
+check(S.readFile(dev.dir .. "/supersync.sqlite3") and P.deviceState().device_id == id
+    and P.deviceState().ann_scanned ~= nil, "database and device ID taken over")
+check(S.readFile(dev.dir .. "/statsync.sqlite3"), "Statistics sync's database left alone")
+-- First a folder without this device's files (the copy not made yet, or
+-- the wrong folder): stopped before writing anything, and asked.
+P.settings().root = "/Empty"
+P.saveSettings()
+item("Sync statistics").callback()
 loop:run(60)
-local st2 = P.deviceState().status
-check(st2.uploaded_events == 5 and not st2.last_error,
-    "all 5 entries sent to the new folder (" .. tostring(st2.uploaded_events) .. ", " .. tostring(st2.last_error) .. ")")
-check(io.open(server.dir .. "/fresh/v2/devices/" .. P.deviceState().device_id .. "/seg-0000000001.jsonl.zst") ~= nil,
+local q0 = shown[#shown]
+check(q0 and q0.confirm and q0.text:find("files aren't in the folder"), "folder without this device's files: asked: "
+    .. tostring(q0 and q0.text))
+check(not io.open(server.dir .. "/Empty/Statistics/v2/devices/" .. id), "nothing written there")
+-- Then the folder with the copied files.
+P.settings().root = "/Moved"
+P.saveSettings()
+item("Sync statistics").callback()
+loop:run(60)
+st = P.deviceState().status
+check(not st.last_error and st.uploaded_events == 0, "nothing sent again to the copied folder: "
+    .. tostring(st.uploaded_events) .. ", " .. tostring(st.last_error))
+check(count(server.dir .. "/Moved/Statistics/v2/devices/" .. id, "%.zst$") == own_files, "no new files")
+item("Sync highlights and bookmarks").callback()
+loop:run(60)
+st = P.deviceState().status
+check(not st.last_error and st.ann_uploaded == 0, "no highlights sent again either")
+
+-- Asked again for another folder without its files, the user sends everything there.
+Store.new{ sq3 = S.SQ3, stats_path = dev.db, state_path = dev.dir .. "/supersync.sqlite3" }:forgetLocation()
+P.settings().root = "/Fresh"
+P.saveSettings()
+item("Sync statistics").callback()
+loop:run(60)
+q0 = shown[#shown]
+check(q0 and q0.confirm and q0.ok_text == "Send everything", "asked again")
+q0.ok_callback()
+loop:run(60)
+st = P.deviceState().status
+check(not st.last_error and st.uploaded_events == 5, "send everything: all 5 entries sent ("
+    .. tostring(st.uploaded_events) .. ", " .. tostring(st.last_error) .. ")")
+check(io.open(server.dir .. "/Fresh/Statistics/v2/devices/" .. id .. "/seg-0000000001.jsonl.zst") ~= nil,
     "segment in the new folder")
 
--- No server chosen: the first WebDAV server in Cloud storage
-P.settings().server = nil
-check(P.server() and P.server().name == "My DAV", "first WebDAV server used when none chosen")
-writeCloudStorage({ { name = "Box", type = "dropbox" } })
-local none, why = P.server()
-check(none == nil and why:find("no WebDAV server"), "no WebDAV server: told why")
-check(item("Server: not set"), "server shown as not set")
-
 -- Highlights and bookmarks ----------------------------------------------------------------
-writeCloudStorage({ { name = "My DAV", type = "webdav", address = server.url, username = "u", password = "p" } })
-
-local dev_id = P.deviceState().device_id
-local function annSegs()
-    local n = 0
-    for name in io.popen("ls " .. S.q(server.dir .. "/fresh/v2/devices/" .. dev_id)):lines() do
-        if name:match("^ann%-%d+%.jsonl%.zst$") then n = n + 1 end
-    end
-    return n
-end
+local FRESH = "Fresh/Statistics/v2"
+local dev_id = id
+local function annSegs() return count(server.dir .. "/" .. FRESH .. "/devices/" .. dev_id, "^ann%-%d+%.jsonl%.zst$") end
 local segs0 = annSegs()
-check(segs0 == 1, "highlights from the history sent to the new folder (" .. segs0 .. ")")
+check(segs0 == 1, "highlights sent to the new folder (" .. segs0 .. ")")
 check(not item("Removed highlights waiting").enabled_func(), "no held removals: item disabled")
-check(P.settings().annotations == nil and item("Sync highlights and bookmarks").checked_func(), "highlights synced by default")
-check(P.deviceState().ann_scanned ~= nil, "reading history read before the first sync")
-item("Sync highlights and bookmarks").callback()
-check(P.settings().annotations == false and fileData("statsync_settings.lua").annotations == false,
-    "turned off, in the shared settings")
-item("Status").callback()
-check(shown[#shown].text:find("Highlights and bookmarks: not synced", 1, true), "status: annotations not synced")
-item("Sync highlights and bookmarks").callback()
-loop:run(30, function() return shown[#shown].text and shown[#shown].text:find("Found highlights") end)
-check(P.settings().annotations == true and fileData("statsync_settings.lua").annotations == true,
-    "annotation sync turned on, in the shared settings")
-check(shown[#shown].text:find("in 1 books", 1, true), "reading history scanned: " .. tostring(shown[#shown].text))
-check(P.deviceState().ann_scanned ~= nil, "scan recorded for this device")
-loop:run(60)
-check(annSegs() == segs0 + 1, "turned on again: everything sent again after the scan")
-check(P.deviceState().status.ann_uploaded == 1, "one change sent")
 
 -- A book open in the reader: changes from another device applied on open,
 -- the user's own sent on close.
@@ -335,7 +360,7 @@ reader.dialog = reader
 reader.annotation.annotations = { sidecar.annotations[1] }
 package.loaded["apps/reader/readerui"].instance = reader
 local other_seg = TMP .. "/other-ann.jsonl"
-local AnnFormat = require("statsync/annformat")
+local AnnFormat = require("supersync/annformat")
 local XP2 = "/body/DocFragment[5]/body/p[1]/text().0"
 S.writeFile(other_seg, table.concat({
     AnnFormat.headerLine("otherdev", 1),
@@ -345,25 +370,25 @@ S.writeFile(other_seg, table.concat({
                                                               text = "from the other device", page = XP2, pos0 = XP2, pos1 = XP2 } },
     AnnFormat.trailerLine(1, 1),
 }, "\n") .. "\n")
-local fresh = WebDav.new{ http = S.Http.new(), address = server.url, username = "u", password = "p", root = "fresh/v2" }
-check(require("statsync/zstd").compressFile(other_seg, other_seg .. ".zst"), "other device's annotations compressed")
+local fresh = WebDav.new{ http = S.Http.new(), address = server.url, username = "u", password = "p", root = FRESH }
+check(require("supersync/zstd").compressFile(other_seg, other_seg .. ".zst"), "other device's annotations compressed")
 fresh:mkdir("devices/otherdev")
 check(fresh:put_new("devices/otherdev/ann-0000000001.jsonl.zst", other_seg .. ".zst"), "other device's annotations uploaded")
-item("Sync now").callback()
+item("Sync highlights and bookmarks").callback()
 loop:run(60)
 check(#reader.annotation.annotations == 2, "applied live to the open book (" .. #reader.annotation.annotations .. ")")
 local ev = events[#events]
 check(ev and ev.name == "AnnotationsModified" and ev.args.nb_highlights_added == 1, "AnnotationsModified sent")
 check(shown[#shown].text:find("received 1", 1, true), "manual sync reports annotations: " .. shown[#shown].text)
 -- The reader plugin instance: a new highlight, then the book closes
-local reader_plugin = setmetatable({ ui = reader }, StatSync)
+local reader_plugin = setmetatable({ ui = reader }, SuperSync)
 local XP3 = "/body/DocFragment[7]/body/p[1]/text().0"
 table.insert(reader.annotation.annotations, { datetime = "2026-04-04 04:04:04", drawer = "lighten", text = "new",
                                               page = XP3, pos0 = XP3, pos1 = XP3 })
 reader_plugin:onCloseDocument()
 package.loaded["apps/reader/readerui"].instance = { statistics = stats }
 loop:run(60)
-check(annSegs() == segs0 + 2 and P.deviceState().status.ann_uploaded == 1, "new highlight sent after closing the book")
+check(annSegs() == segs0 + 1 and P.deviceState().status.ann_uploaded == 1, "new highlight sent after closing the book")
 
 -- Opening it again with its annotations gone (book settings reset): asks
 reader.annotation.annotations = {}
@@ -382,4 +407,9 @@ check(not item("Removed highlights waiting").enabled_func(), "nothing held any m
 package.loaded["apps/reader/readerui"].instance = { statistics = stats }
 
 server.stop()
-S.finish("statsync plugin test")
+-- Reset device ID
+item("Reset device ID").callback()
+shown[#shown].ok_callback()
+check(P.deviceState().device_id ~= id, "device ID reset")
+
+S.finish("supersync plugin test")

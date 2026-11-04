@@ -4,18 +4,23 @@ The sync cycle, and making sure only one runs at a time.
     flush -> export -> network (subprocess) -> mark exported -> import -> refresh
 
 At most one cycle runs at a time. A request while one runs is remembered,
-and exactly one more cycle runs after it (however many requests came).
+and exactly one more cycle runs after it (however many requests came), for
+everything they asked for.
+
+A request is for statistics, annotations or both (opts.stats, opts.ann:
+each on unless false; annotations only with deps.ann).
 
 Everything KOReader-specific is passed in (`deps`), so tests can drive it:
 
-    store                 statsync/store instance
+    store                 supersync/store instance
     makeTransport()       -> transport (called in the subprocess)
     spawn(fn)             -> handle | nil, err     run fn in a subprocess
     isDone(handle)        -> bool                  (reaps it when done)
     kill(handle)
     schedule(delay, fn)   run fn later on the UI loop
     now()                 -> seconds
-    canRun(reason)        -> bool, why             e.g. network is up
+    canRun(reason, opts)  -> bool, why             e.g. network is up (may
+                                                   set opts.stats = false)
     flush()               make the statistics plugin write its pending data
     afterImport(ids)      refresh what's shown for these book ids
     getDeviceId()         -> id
@@ -23,18 +28,18 @@ Everything KOReader-specific is passed in (`deps`), so tests can drive it:
     saveStatus(status)    persist the status table
     onDone(status, run)   optional, after every cycle (e.g. tell the user)
     logger, time_limit, poll_interval, max_events, max_download_bytes
-    zstd                  optional, statsync/zstd by default
-    ann                   optional, annotation sync: { store (statsync/annstore),
-                          enabled() -> bool, collect() (record the open book's
+    zstd                  optional, supersync/zstd by default
+    ann                   optional, annotation sync: { store (supersync/annstore),
+                          enabled() -> bool (optional), collect() (record the open book's
                           changes), afterSync(run), max_records }
 
 Segments are written and read as plain .jsonl here; they're compressed
 just before upload and decompressed just before import.
 --]]
 
-local AnnFormat = require("statsync/annformat")
-local Codec = require("statsync/codec")
-local NetJob = require("statsync/netjob")
+local AnnFormat = require("supersync/annformat")
+local Codec = require("supersync/codec")
+local NetJob = require("supersync/netjob")
 
 local Engine = {}
 Engine.__index = Engine
@@ -60,7 +65,15 @@ function Engine.new(deps)
     return self
 end
 
---- Asks for a sync. opts.interactive: a user asked (shown in onDone).
+--- Which streams opts asks for: stats, ann (booleans).
+function Engine:_wants(opts)
+    local a = self.deps.ann
+    return opts.stats ~= false,
+        opts.ann ~= false and a ~= nil and (a.enabled == nil or a.enabled()) or false
+end
+
+--- Asks for a sync. opts.interactive: a user asked (shown in onDone);
+-- opts.stats, opts.ann: what to sync (both unless false).
 -- Returns "started", "queued" or "skipped".
 function Engine:request(reason, opts)
     opts = opts or {}
@@ -68,20 +81,26 @@ function Engine:request(reason, opts)
         local r = self.rerun or { reasons = {} }
         table.insert(r.reasons, reason)
         r.interactive = r.interactive or opts.interactive
+        local stats, ann = self:_wants(opts)
+        r.stats, r.ann = r.stats or stats, r.ann or ann
         self.rerun = r
         self.log.dbg("StatSync: sync running, queued one more for", reason)
         return "queued"
     end
     local ok, why = self.deps.canRun(reason, opts)
+    local stats, ann = self:_wants(opts)
+    if ok and not stats and not ann then ok, why = false, "nothing to sync" end
     if not ok then
         self.log.info("StatSync: not syncing (" .. reason .. "):", why)
         if opts.interactive and self.deps.onDone then
-            self.deps.onDone({ last_error = why }, { interactive = true, skipped = true })
+            self.deps.onDone({ last_error = why },
+                { interactive = true, skipped = true, stats = stats, ann = ann, error = why })
         end
         return "skipped"
     end
     self.running = true
     local run = { reason = reason, interactive = opts.interactive, started = self.deps.now(),
+                  stats = stats, ann = ann,
                   imported_events = 0, inserted = 0, updated = 0, uploaded_events = 0,
                   segments_imported = 0, segments_bad = 0, affected = {},
                   ann_uploaded_records = 0, ann_imported_records = 0, ann_applied = 0,
@@ -145,14 +164,16 @@ function Engine:_step(run, stage)
 end
 
 function Engine:_zstd()
-    if not self.deps.zstd then self.deps.zstd = require("statsync/zstd") end
+    if not self.deps.zstd then self.deps.zstd = require("supersync/zstd") end
     return self.deps.zstd
 end
 
 function Engine:_export(run)
     local d = self.deps
-    local fok, ferr = pcall(d.flush)
-    if not fok then self.log.warn("StatSync: flushing statistics failed:", ferr) end
+    if run.stats then
+        local fok, ferr = pcall(d.flush)
+        if not fok then self.log.warn("StatSync: flushing statistics failed:", ferr) end
+    end
 
     ensureDir(d.work_dir)
     ensureDir(d.tmp_dir)
@@ -167,16 +188,25 @@ function Engine:_export(run)
 
     -- Listing every device folder costs more as segments accumulate, so
     -- ordinary syncs ask for each device's next segments by name instead.
-    run.full_list = run.interactive or not self.status.last_full_list
-        or d.now() - self.status.last_full_list >= d.full_list_interval or nil
+    -- Each stream keeps its own time of its last full listing.
+    local function due(key)
+        local last = self.status[key]
+        return not last or d.now() - last >= d.full_list_interval
+    end
+    run.full_list = run.interactive or (run.stats and due("last_full_list"))
+        or (run.ann and due("ann_last_full_list")) or nil
     local t0 = os.clock()
-    local exp, eerr, why = d.store:export{
-        device_id = run.device_id, out_path = run.pending_path, now = d.now(), max_events = d.max_events,
-        force_diff = run.full_list,
-    }
-    if eerr then return self:_fail(run, "export: " .. tostring(eerr)) end
-    run.export_skipped = why
-    run.export = exp
+    local exp
+    if run.stats then
+        local eerr, why
+        exp, eerr, why = d.store:export{
+            device_id = run.device_id, out_path = run.pending_path, now = d.now(), max_events = d.max_events,
+            force_diff = run.full_list,
+        }
+        if eerr then return self:_fail(run, "export: " .. tostring(eerr)) end
+        run.export_skipped = why
+        run.export = exp
+    end
     if exp then
         local packed, perr = self:_zstd().compressFile(run.pending_path, run.packed_path)
         if not packed then return self:_fail(run, "compressing: " .. tostring(perr)) end
@@ -185,8 +215,7 @@ function Engine:_export(run)
     run.export_cpu = os.clock() - t0
 
     local ann_params
-    if d.ann and d.ann.enabled() then
-        run.ann = true
+    if run.ann then
         local cok, cerr = pcall(d.ann.collect)
         if not cok then self.log.warn("StatSync: recording annotation changes failed:", cerr) end
         run.ann_pending_path = d.work_dir .. "/ann-pending.jsonl"
@@ -212,11 +241,15 @@ function Engine:_export(run)
         deviceId = run.device_id, deviceName = d.device_name or "", schema = Codec.VERSION,
         createdAt = d.now(),
     })
+    -- This device has sent files to the folder before: they must be there.
+    local seen = d.store:seenSegments()
     local params = {
+        stats = run.stats,
+        expect_own = next(seen[run.device_id] or {}) ~= nil,
         device_id = run.device_id,
         pending = exp and { path = run.packed_path, size = exp.size } or nil,
         meta_path = meta_path,
-        seen = d.store:seenSegments(),
+        seen = seen,
         bad = d.store:badSegments(),
         full_list = run.full_list,
         tmp_dir = d.tmp_dir,
@@ -274,6 +307,7 @@ function Engine:_collect(run)
         run.error = result.error or "network step failed"
     end
     run.devices = result.devices and #result.devices or nil
+    run.missing_own = result.missing_own
     if result.full_listed and not run.killed then run.full_listed = d.now() end
     for _, e in ipairs(result.segment_errors or {}) do self.log.warn("StatSync:", e) end
 
@@ -287,7 +321,7 @@ function Engine:_collect(run)
         else
             self.log.warn("StatSync: recording the upload failed:", merr)
         end
-    elseif run.export then
+    elseif run.export and not run.error then
         run.upload_error = result.upload_error or "upload didn't finish"
         self.log.warn("StatSync: upload failed:", run.upload_error)
     end
@@ -305,7 +339,7 @@ function Engine:_collect(run)
             else
                 self.log.warn("StatSync: recording the annotation upload failed:", n)
             end
-        elseif run.ann_export then
+        elseif run.ann_export and not run.error then
             run.ann_upload_error = result.ann_upload_error or "upload didn't finish"
             self.log.warn("StatSync: annotation upload failed:", run.ann_upload_error)
         end
@@ -389,16 +423,29 @@ function Engine:_finish(run)
         local ok, err = pcall(d.ann.afterSync, run)
         if not ok then self.log.warn("StatSync: applying annotations failed:", err) end
     end
+    if run.missing_own then
+        -- Not this device's folder after all (see netjob.lua): don't take it
+        -- as where segments go, so the right one, once set, isn't new.
+        local ok, err = pcall(d.store.forgetLocation, d.store)
+        if not ok then self.log.warn("StatSync: forgetting the folder failed:", err) end
+    end
     local st = self.status
     st.last_attempt = run.started
     st.last_error = run.error or run.upload_error or run.ann_upload_error
-    if run.full_listed then st.last_full_list = run.full_listed end
+    if run.full_listed then
+        if run.stats then st.last_full_list = run.full_listed end
+        if run.ann then st.ann_last_full_list = run.full_listed end
+    end
     if not run.error then
         st.last_success = d.now()
         st.devices = run.devices
-        st.imported_events = run.imported_events
-        st.uploaded_events = run.uploaded_events
+        if run.stats then
+            st.stats_last_success = st.last_success
+            st.imported_events = run.imported_events
+            st.uploaded_events = run.uploaded_events
+        end
         if run.ann then
+            st.ann_last_success = st.last_success
             st.ann_imported = run.ann_imported_records
             st.ann_uploaded = run.ann_uploaded_records
         end
@@ -406,9 +453,9 @@ function Engine:_finish(run)
     st.bytes_up = run.result and run.result.bytes_up
     st.bytes_down = run.result and run.result.bytes_down
     pcall(d.saveStatus, st)
-    self.log.info(string.format("StatSync: sync (%s) %s: uploaded %d events, imported %d segments (%d events: %d new, %d longer), %d bad",
-        run.reason, run.error and ("failed: " .. run.error) or "done", run.uploaded_events,
-        run.segments_imported, run.imported_events, run.inserted, run.updated, run.segments_bad))
+    self.log.info(string.format("StatSync: sync (%s%s) %s: uploaded %d events, imported %d segments (%d events: %d new, %d longer), %d bad",
+        run.reason, run.stats and "" or ", annotations only", run.error and ("failed: " .. run.error) or "done",
+        run.uploaded_events, run.segments_imported, run.imported_events, run.inserted, run.updated, run.segments_bad))
     if run.ann then
         self.log.info(string.format("StatSync: annotations: sent %d changes, imported %d segments (%d changes, %d new here)",
             run.ann_uploaded_records, run.ann_segments_imported, run.ann_imported_records, run.ann_applied))
@@ -427,7 +474,13 @@ function Engine:_finish(run)
         or (run.result and run.result.remote_more) or run.killed
     if again or (progressed and unfinished) then
         local reason = again and table.concat(again.reasons, ",") or "continue"
-        d.schedule(0, function() self:request(reason, { interactive = again and again.interactive }) end)
+        local opts = { interactive = again and again.interactive,
+                       stats = run.stats or (again and again.stats) or false,
+                       ann = run.ann or (again and again.ann) or false }
+        if again and not (progressed and unfinished) then
+            opts.stats, opts.ann = again.stats or false, again.ann or false
+        end
+        d.schedule(0, function() self:request(reason, opts) end)
     end
 end
 

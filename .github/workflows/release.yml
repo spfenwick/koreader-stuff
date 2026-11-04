@@ -1,6 +1,6 @@
 # Publishes a release of one plugin for its updater, either
 #
-# - when a <plugin>-vX.Y.Z tag is pushed (e.g. statsync-v0.2.3; the version
+# - when a <plugin>-vX.Y.Z tag is pushed (e.g. supersync-v1.0.0; the version
 #   must match the plugin's _meta.lua), or
 # - by hand (Actions → Release plugin → Run workflow, on main, choosing the
 #   plugin), which tags the commit with the version in its _meta.lua.
@@ -26,7 +26,7 @@ on:
       plugin:
         description: Plugin to release
         type: choice
-        options: [knuthplass, rclonesync, statsync]
+        options: [knuthplass, supersync]
 
 permissions:
   contents: write
@@ -62,7 +62,7 @@ jobs:
             fi
           fi
           case "$plugin" in
-            knuthplass|rclonesync|statsync) ;;
+            knuthplass|supersync) ;;
             *) echo "::error::unknown plugin '$plugin'"; exit 1 ;;
           esac
           meta="$plugin.koplugin/_meta.lua"
@@ -95,7 +95,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y luajit lua-filesystem libsqlite3-0 libzstd1 rclone
           sh scripts/test.sh
-          sh scripts/test-statsync.sh
+          sh scripts/test-supersync.sh
 
       - name: Package
         run: |

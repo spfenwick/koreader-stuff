@@ -17,7 +17,7 @@ end
 S.koreader = src .. "/koreader"
 S.base = src .. "/koreader-base"
 
-package.path = "statsync.koplugin/?.lua;" .. S.base .. "/?.lua;" .. package.path
+package.path = "supersync.koplugin/?.lua;" .. S.base .. "/?.lua;" .. package.path
 
 local ffi = require("ffi")
 -- What KOReader's ffi/loadlib sets up, enough for its posix_h and ljsqlite3.
@@ -384,7 +384,7 @@ function S.startWebDav(dir, user, pass)
     local port = 20000 + (tonumber(S.sh("echo $$")) or 0) % 20000
     local log = dir .. ".log"
     local pidfile = dir .. ".pid"
-    os.execute(string.format("rclone serve webdav %s --addr 127.0.0.1:%d --user %s --pass %s >%s 2>&1 & echo $! >%s",
+    os.execute(string.format("rclone serve webdav %s --dir-cache-time 0s --addr 127.0.0.1:%d --user %s --pass %s >%s 2>&1 & echo $! >%s",
         S.q(dir), port, S.q(user), S.q(pass), S.q(log), S.q(pidfile)))
     local url = "http://127.0.0.1:" .. port
     local http = Http.new()

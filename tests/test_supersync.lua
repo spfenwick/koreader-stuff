@@ -1,19 +1,19 @@
--- Unit tests for statsync.koplugin: the segment codec, the merge, book
+-- Unit tests for supersync.koplugin: the segment codec, the merge, book
 -- identity, the export diff, segment validation, the network job against an
 -- in-memory server, and the engine's one-at-a-time rule.
 --
 -- Statistics databases are created and written by KOReader's own
--- statistics.koplugin code (see tests/statsync/support.lua).
+-- statistics.koplugin code (see tests/supersync/support.lua).
 -- Run through scripts/test-statsync.sh, which sets KOREADER_SRC.
 
-local S = dofile("tests/statsync/support.lua")
+local S = dofile("tests/supersync/support.lua")
 local check = S.check
 
-local Codec = require("statsync/codec")
-local Store = require("statsync/store")
-local NetJob = require("statsync/netjob")
-local Engine = require("statsync/engine")
-local WebDav = require("statsync/webdav")
+local Codec = require("supersync/codec")
+local Store = require("supersync/store")
+local NetJob = require("supersync/netjob")
+local Engine = require("supersync/engine")
+local WebDav = require("supersync/webdav")
 
 local TMP = assert(os.getenv("STATSYNC_TMP"), "STATSYNC_TMP not set")
 S.rmrf(TMP)
@@ -58,7 +58,7 @@ do
     check(Codec.segmentSeq("seg-0000000007.jsonl") == nil, "0.2.2's uncompressed segments not taken for these")
 
     -- zstd
-    local Zstd = require("statsync/zstd")
+    local Zstd = require("supersync/zstd")
     local text = string.rep('{"t":"e","md5":"0123456789abcdef0123456789abcdef","page":1,"start":1,"dur":5,"tp":9}\n', 500)
     local packed = assert(Zstd.compress(text))
     check(#packed < #text / 10 and Zstd.decompress(packed) == text, "zstd round trip (" .. #text .. " -> " .. #packed .. ")")
@@ -554,4 +554,4 @@ do
     check(runs == 3, "and runs once")
 end
 
-S.finish("statsync unit tests")
+S.finish("supersync unit tests")

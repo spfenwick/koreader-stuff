@@ -1,9 +1,9 @@
 #!/bin/sh
-# Tests for statsync.koplugin.
+# Tests for supersync.koplugin's statistics and annotations sync.
 #
-#   scripts/test-statsync.sh            unit tests + integration test
-#   scripts/test-statsync.sh unit       unit tests only
-#   scripts/test-statsync.sh bench      5-year benchmark (slow)
+#   scripts/test-supersync.sh           unit tests + integration test
+#   scripts/test-supersync.sh unit      unit tests only
+#   scripts/test-supersync.sh bench     5-year benchmark (slow)
 #
 # Needs LuaJIT, libsqlite3, LuaFileSystem, and for the integration test and
 # benchmark, rclone (as the WebDAV server). KOReader's sources are used for
@@ -15,7 +15,7 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
 lua_bin=${LUA:-$(command -v luajit || true)}
 if [ -z "$lua_bin" ]; then
-    echo "statsync tests need LuaJIT (or set LUA=)." >&2
+    echo "supersync tests need LuaJIT (or set LUA=)." >&2
     exit 1
 fi
 
@@ -32,16 +32,16 @@ export KOREADER_SRC
 STATSYNC_TMP=${STATSYNC_TMP:-$(mktemp -d "${TMPDIR:-/tmp}/statsync-test.XXXXXX")}
 export STATSYNC_TMP
 
-"$lua_bin" tests/check_lua_syntax.lua statsync.koplugin/*.lua statsync.koplugin/statsync/*.lua
+"$lua_bin" tests/check_lua_syntax.lua supersync.koplugin/*.lua supersync.koplugin/supersync/*.lua
 
 what=${1:-all}
 case "$what" in
-    unit) "$lua_bin" tests/test_statsync.lua && "$lua_bin" tests/test_statsync_ann.lua ;;
-    bench) "$lua_bin" tests/bench_statsync.lua ;;
+    unit) "$lua_bin" tests/test_supersync.lua && "$lua_bin" tests/test_supersync_ann.lua ;;
+    bench) "$lua_bin" tests/bench_supersync.lua ;;
     *)
-        "$lua_bin" tests/test_statsync.lua
-        "$lua_bin" tests/test_statsync_ann.lua
-        "$lua_bin" tests/test_statsync_integration.lua
-        "$lua_bin" tests/test_statsync_plugin.lua
+        "$lua_bin" tests/test_supersync.lua
+        "$lua_bin" tests/test_supersync_ann.lua
+        "$lua_bin" tests/test_supersync_integration.lua
+        "$lua_bin" tests/test_supersync_plugin.lua
         ;;
 esac

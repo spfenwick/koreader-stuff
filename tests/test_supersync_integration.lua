@@ -1,20 +1,20 @@
--- Integration test for statsync.koplugin against a real WebDAV server
+-- Integration test for supersync.koplugin against a real WebDAV server
 -- (rclone serve webdav), with simulated devices: each has its own
 -- statistics.sqlite3 written by KOReader's statistics plugin code, and runs
 -- the real sync engine, with the network step in a forked subprocess as in
 -- KOReader. After each scenario every device's page_stat_data (keyed by
 -- md5) must be identical, and stored totals must match KOReader's.
 
-local S = dofile("tests/statsync/support.lua")
+local S = dofile("tests/supersync/support.lua")
 local check = S.check
 
-local AnnFormat = require("statsync/annformat")
-local AnnStore = require("statsync/annstore")
-local Codec = require("statsync/codec")
-local Zstd = require("statsync/zstd")
-local Engine = require("statsync/engine")
-local Store = require("statsync/store")
-local WebDav = require("statsync/webdav")
+local AnnFormat = require("supersync/annformat")
+local AnnStore = require("supersync/annstore")
+local Codec = require("supersync/codec")
+local Zstd = require("supersync/zstd")
+local Engine = require("supersync/engine")
+local Store = require("supersync/store")
+local WebDav = require("supersync/webdav")
 
 local TMP = assert(os.getenv("STATSYNC_TMP"), "STATSYNC_TMP not set") .. "/integration"
 S.rmrf(TMP)
@@ -23,7 +23,7 @@ S.mkdirp(TMP)
 local USER, PASS = "reader", "p%ss:wörd"
 local server, serr = S.startWebDav(TMP .. "/server", USER, PASS)
 if not server then
-    print("statsync integration: skipped (" .. serr .. ")")
+    print("supersync integration: skipped (" .. serr .. ")")
     os.exit(0)
 end
 S.mkdirp(server.dir .. "/books") -- the configured folder
@@ -403,4 +403,4 @@ sync({ C })
 check(annMerged(C) == cmerged and C.last_run.ann_segments_imported > 0, "rebuild re-imports annotations, same result")
 
 server.stop()
-S.finish("statsync integration test")
+S.finish("supersync integration test")

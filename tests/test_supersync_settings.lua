@@ -1,11 +1,11 @@
--- Exercises rclonesync.koplugin: list patterns, JSON, the sync engine with
+-- Exercises supersync.koplugin's settings sync: list patterns, JSON, the sync engine with
 -- simulated devices and a folder standing in for the server, the Dropbox
 -- and WebDAV clients against a fake HTTP layer, and the plugin's flow
 -- against stubbed KOReader modules.
 --
 -- Needs LuaFileSystem and md5sum; skipped without them.
 
-package.path = "rclonesync.koplugin/?.lua;" .. package.path
+package.path = "supersync.koplugin/?.lua;" .. package.path
 
 local function sh(cmd)
     local pipe = io.popen(cmd)
@@ -16,7 +16,7 @@ end
 
 local have_lfs, lfs = pcall(require, "lfs")
 if not have_lfs or sh("command -v md5sum") == "" then
-    print("rclonesync: skipped (needs LuaFileSystem and md5sum)")
+    print("supersync settings: skipped (needs LuaFileSystem and md5sum)")
     return
 end
 package.loaded["libs/libkoreader-lfs"] = lfs
@@ -47,8 +47,8 @@ end
 local function exists(path) return lfs.attributes(path) ~= nil end
 local function touch(path, t) lfs.touch(path, t, t) end
 
-local Engine = require("rclonesync_engine")
-local Remote = require("rclonesync_remote")
+local Engine = require("supersync/settings_engine")
+local Remote = require("supersync/remote")
 
 -- Patterns ------------------------------------------------------------------
 
@@ -425,9 +425,9 @@ end
 -- folder, such as a plugin's configuration.
 do
     local rules = Engine.compile({ "//plugins/a.koplugin/configuration.lua", "//plugins/*.lua",
-        "//../x.lua", "//settings/x.lua", "//rclonesync/state.tsv", "//a//b", "//" })
+        "//../x.lua", "//settings/x.lua", "//supersync/state.tsv", "//a//b", "//" })
     check(rules.koreader["plugins/a.koplugin/configuration.lua"], "// path compiled")
-    check(#rules.bad == 6, "patterns, .., settings/, rclonesync/ and empty paths refused: " .. #rules.bad)
+    check(#rules.bad == 6, "patterns, .., settings/, supersync/ and empty paths refused: " .. #rules.bad)
     check(Engine.matches(rules, "@koreader/plugins/a.koplugin/configuration.lua"), "// path matches")
     check(not Engine.matches(Engine.compile({ "/**" }), "@koreader/plugins/x.lua"),
         "other patterns don't match // paths")
@@ -588,15 +588,35 @@ check(not listed and err:find("/KOReader/Settings/fonts", 1, true) and err:find(
     "WebDAV listing error says where and what the server said: " .. tostring(err))
 Remote.request = real_request
 
+-- A folder without a manifest (moved, not copied there yet): what the
+-- device remembers about the old one doesn't make its files look deleted.
+do
+    local G = device("MovedDev")
+    write(G.paths.state .. "/settings.txt", "/gestures.lua\n")
+    write(G.kodir .. "/settings/gestures.lua", "return { g = 1 }\n")
+    write(G.paths.state .. "/state.tsv", "settings\tgestures.lua\t" .. md5(G.kodir .. "/settings/gestures.lua") .. "\n"
+        .. "lists\tsettings.txt\t" .. md5(G.paths.state .. "/settings.txt") .. "\n")
+    local r = Engine.sync({ paths = G.paths, remote = assert(Remote.new(server, "/Moved")), device = "G" })
+    check(exists(G.kodir .. "/settings/gestures.lua") and exists(G.paths.state .. "/settings.txt")
+        and r.deleted_here == 0 and r.uploaded == 2 and exists(server_dir .. "/Moved/settings/gestures.lua"),
+        "no manifest: nothing deleted here, files uploaded\n" .. r.log)
+end
+
 -- The plugin ----------------------------------------------------------------------
 
+-- A device that used Settings sync and Statistics sync: SuperSync takes
+-- over their data the first time it starts.
 local P = device("P")
-write(P.paths.state .. "/settings.txt", "/gestures.lua\n")
+local old_state = P.kodir .. "/rclonesync"
+write(old_state .. "/settings.txt", "/gestures.lua\n")
+write(old_state .. "/state.tsv", "")
+write(P.kodir .. "/settings/statsync_device.lua", 'return { device_id = "abcdef0123456789", status = { last_success = 7 } }\n')
+write(P.kodir .. "/settings/statsync_settings.lua", 'return { allow_wifi = true, enabled = false, root = "/old" }\n')
 write(P.kodir .. "/settings/gestures.lua", "return { p = 1 }\n")
 touch(P.kodir .. "/settings/gestures.lua", os.time() - 7200) -- the server's is newer
 
 local shown, notified, restarts, flushed, broadcast = {}, {}, {}, 0, {}
-local saved = {}
+local saved = { statsync_updates = { mode = "install", last_check = 5 } }
 _G.G_reader_settings = {
     readSetting = function(_, key) return saved[key] end,
     saveSetting = function(_, key, value) saved[key] = value end,
@@ -612,7 +632,24 @@ local cs_servers = {
     { name = "Box", type = "dropbox", password = "x", address = "k:s" },
 }
 Remote.TYPES.folder = "Folder"
-stub("luasettings", { open = function() return { readSetting = function() return cs_servers end } end })
+-- LuaSettings: Cloud storage's servers, and other files read with dofile
+-- and written as a Lua table.
+local function serialize(v)
+    if type(v) == "table" then
+        local out = {}
+        for k, x in pairs(v) do table.insert(out, string.format("[%q] = %s", k, serialize(x))) end
+        return "{ " .. table.concat(out, ", ") .. " }"
+    end
+    return type(v) == "string" and string.format("%q", v) or tostring(v)
+end
+stub("luasettings", { open = function(_, path)
+    if path:find("cloudstorage%.lua$") then return { readSetting = function() return cs_servers end } end
+    local ok, data = pcall(dofile, path)
+    return {
+        data = ok and type(data) == "table" and data or {},
+        flush = function(self) write(path, "return " .. serialize(self.data) .. "\n") end,
+    }
+end })
 stub("dispatcher", { registerAction = function() end })
 stub("ui/event", { new = function(_, name) return { name = name } end })
 -- Messages that stay until tapped (no timeout) are what the user is told.
@@ -622,11 +659,13 @@ stub("ui/widget/infomessage", {
         return o
     end,
 })
+stub("ui/widget/confirmbox", { new = function(_, o) return o end })
 stub("ui/widget/textviewer", { new = function(_, o) o.viewer = true return o end })
-stub("ui/network/manager", { runWhenOnline = function(_, fn) fn() end })
+stub("ui/network/manager", { runWhenOnline = function(_, fn) fn() end, isConnected = function() return false end })
 -- Notifications time out, so the plugin shouldn't use them.
 stub("ui/widget/notification", { notify = function() error("a notification that times out") end })
 stub("device", { model = "Test" })
+stub("datetime", { secondsToDateTime = function(t) return tostring(t) end })
 stub("ui/trapper", {
     wrap = function(_, fn) fn() end,
     dismissableRunInSubprocess = function(_, task) return true, task() end,
@@ -634,6 +673,7 @@ stub("ui/trapper", {
 stub("ui/uimanager", {
     show = function(_, w) table.insert(shown, w) end,
     nextTick = function(_, fn) fn() end,
+    scheduleIn = function() end,
     broadcastEvent = function(_, ev) table.insert(broadcast, ev.name) end,
     askForRestart = function(_, text) table.insert(restarts, text) end,
 })
@@ -645,7 +685,8 @@ function WidgetContainer:new(o)
     return o
 end
 stub("ui/widget/container/widgetcontainer", WidgetContainer)
-stub("logger", { info = function() end, warn = function() end, dbg = function() end })
+stub("logger", { info = function() end, warn = function(...) if os.getenv("VERBOSE") then print(...) end end,
+                 dbg = function() end })
 stub("gettext", setmetatable({}, { __call = function(_, s) return s end }))
 stub("ffi/util", {
     template = function(fmt, ...)
@@ -654,10 +695,11 @@ stub("ffi/util", {
     end,
 })
 
--- A copy of the plugin, with a file left from an earlier version.
-local plugin_copy = base .. "/plugins/rclonesync.koplugin"
-os.execute("mkdir -p " .. q(plugin_copy) .. " && cp rclonesync.koplugin/*.lua " .. q(plugin_copy))
-write(plugin_copy .. "/rclonesync_sync.lua", "-- old\n")
+-- A copy of the plugin, next to the old ones.
+local plugin_copy = base .. "/plugins/supersync.koplugin"
+os.execute("mkdir -p " .. q(plugin_copy) .. " && cp -r supersync.koplugin/. " .. q(plugin_copy))
+write(base .. "/plugins/statsync.koplugin/main.lua", "-- old\n")
+write(base .. "/plugins/rclonesync.koplugin/main.lua", "-- old\n")
 
 local function loadPlugin()
     local Plugin = dofile(plugin_copy .. "/main.lua")
@@ -665,19 +707,62 @@ local function loadPlugin()
 end
 
 local plugin = loadPlugin()
-check(not exists(plugin_copy .. "/rclonesync_sync.lua") and exists(plugin_copy .. "/main.lua"),
-    "file from an earlier version removed at start")
+local Settings = require("supersync/plugin")
+check(not exists(old_state) and read(P.paths.state .. "/settings.txt") == "/gestures.lua\n",
+    "migrated: Settings sync's folder moved to koreader/supersync")
+check(Settings.deviceState().device_id == "abcdef0123456789" and Settings.deviceState().status.last_success == 7,
+    "migrated: Statistics sync's device ID and status")
+check(exists(P.kodir .. "/settings/statsync_device.lua"), "migrated: Statistics sync's own files left alone")
+local shared = Settings.settings()
+check(shared.allow_wifi == true and shared.enabled == nil and shared.root == nil and shared.auto_stats == nil,
+    "migrated: Wi-Fi setting, not the folder or automatic sync")
+check(Settings.autoStats() and Settings.autoAnnotations(), "automatic syncs on by default")
+check(saved.supersync_updates and saved.supersync_updates.mode == "install" and not saved.supersync_updates.last_check,
+    "migrated: update mode")
+check(saved.plugins_disabled and saved.plugins_disabled.statsync and saved.plugins_disabled.rclonesync,
+    "migrated: old plugins turned off")
+check(notified[1] and notified[1]:find("took over"), "migration reported: " .. tostring(notified[1]))
+-- Only once.
+write(P.kodir .. "/rclonesync/settings.txt", "/other.lua\n")
+saved.plugins_disabled = nil
+local before_notes = #notified
+loadPlugin()
+check(read(P.paths.state .. "/settings.txt") == "/gestures.lua\n" and saved.plugins_disabled
+    and saved.plugins_disabled.statsync, "a second start migrates nothing again but keeps the old plugins off")
+os.execute("rm -rf " .. q(P.kodir .. "/rclonesync"))
+notified = {}
+plugin = loadPlugin()
+check(#notified == 0, "nothing more to report")
+
 local menu_items = {}
 plugin:addToMainMenu(menu_items)
-check(#menu_items.rclonesync.sub_item_table_func() >= 5, "menu")
-check(plugin:server().name == "Mine", "first server by default")
-saved.rclonesync = { server = { name = "Box", type = "dropbox" } }
-plugin.settings = saved.rclonesync
-check(plugin:server().name == "Box", "chosen server")
-saved.rclonesync.server = { name = "Mine", type = "folder" }
+local function item(text)
+    for _, it in ipairs(menu_items.supersync.sub_item_table_func()) do
+        local t = it.text or (it.text_func and it.text_func())
+        if t and t:find(text, 1, true) then return it end
+    end
+end
+check(item("Sync settings") and item("Sync statistics") and item("Sync highlights and bookmarks")
+    and item("Preview settings sync"), "a sync item each for settings, statistics and highlights")
+check(item("Sync statistics automatically").checked_func() and item("Sync highlights and bookmarks automatically").checked_func(),
+    "automatic syncs shown on")
+item("Sync statistics automatically").callback()
+check(Settings.settings().auto_stats == false and not Settings.autoStats() and Settings.autoAnnotations(),
+    "statistics' automatic sync turned off alone")
+item("Sync statistics automatically").callback()
+check(Settings.autoStats(), "and on again")
+check(item("Folder on server: /KOReader"), "folder shown")
+check(Settings.settingsRoot() == "/KOReader/Settings", "settings in <folder>/Settings")
+check(Settings.remoteRoot() == "KOReader/Statistics/v2", "statistics in <folder>/Statistics/v2")
+check(Settings.server().name == "Mine", "first server by default")
+Settings.settings().server = { name = "Box", type = "dropbox" }
+check(Settings.server().name == "Box", "chosen server")
+local none, why = Settings.statsServer()
+check(none == nil and why:find("WebDAV"), "statistics need WebDAV: " .. tostring(why))
+Settings.settings().server = { name = "Mine", type = "folder" }
 
 -- Preview, then its Sync now button.
-plugin:sync(true)
+plugin:syncSettings(true)
 local viewer = shown[#shown]
 check(viewer and viewer.viewer and viewer.title:find("would make") and #broadcast == 0,
     "preview shows what would change")
@@ -693,40 +778,34 @@ check(#restarts == 1, "sync asks to restart for pulled settings")
 check(Engine.isPending(P.paths), "settings waiting")
 check(read(P.kodir .. "/settings/gestures.lua") == "return { p = 1 }\n", "not in place before restart")
 
-plugin:onRcloneSync()
+plugin:onSuperSyncSettings()
 check(#restarts == 2 and #broadcast == 1, "sync refused while settings wait")
-
-local discard = false
-for _, item in ipairs(plugin:menu()) do
-    if item.text and item.text:find("^Discard") then discard = true end
-end
-check(discard, "menu offers to discard")
+check(item("Discard pulled settings"), "menu offers to discard")
 
 -- The next start puts them in place.
 plugin = loadPlugin()
-plugin.settings = saved.rclonesync
 check(read(P.kodir .. "/settings/gestures.lua") ~= "return { p = 1 }\n", "put in place at start")
 check(notified[#notified] == "Pulled settings put in place.", "start reports it")
 
-plugin:onRcloneSync()
-check(notified[#notified] == "Already up to date." or (notified[#notified] or ""):find("^Uploaded"),
+plugin:onSuperSyncSettings()
+check(notified[#notified] == "Settings already up to date." or (notified[#notified] or ""):find("^Uploaded"),
     "sync after the restart: " .. tostring(notified[#notified]))
 local before = #notified
-plugin:onRcloneSync()
-check(#notified == before + 1 and notified[#notified] == "Already up to date.",
+plugin:onSuperSyncSettings()
+check(#notified == before + 1 and notified[#notified] == "Settings already up to date.",
     "nothing to sync: says so: " .. tostring(notified[#notified]))
 
-saved.rclonesync.server = { name = "Box", type = "dropbox" }
+Settings.settings().server = { name = "Box", type = "dropbox" }
 Remote.request = function() return 401, {}, "{}" end
-plugin:onRcloneSync()
-check(shown[#shown] and shown[#shown].text and shown[#shown].text:find("Dropbox login failed"),
-    "login failure reported: " .. tostring(shown[#shown] and shown[#shown].text))
+plugin:onSuperSyncSettings()
+check(notified[#notified] and notified[#notified]:find("Dropbox login failed"),
+    "login failure reported: " .. tostring(notified[#notified]))
 Remote.request = real_request
 
 cs_servers = {}
-plugin:onRcloneSync()
-check(shown[#shown].text:find("Cloud storage"), "no server: points to Cloud storage")
+plugin:onSuperSyncSettings()
+check(notified[#notified]:find("Cloud storage"), "no server: points to Cloud storage")
 
 os.execute("rm -rf " .. q(base:match("^(.*)/[^/]+$")))
-print(string.format("rclonesync: %d checks, %d failures", count, failures))
+print(string.format("supersync settings: %d checks, %d failures", count, failures))
 if failures > 0 then os.exit(1) end

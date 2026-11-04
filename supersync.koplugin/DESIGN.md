@@ -1,4 +1,4 @@
-# statsync design notes
+# SuperSync design notes: statistics and annotations
 
 Decisions, alternatives rejected, where the build differs from the task
 description, and what couldn't be verified. Written against KOReader
@@ -9,15 +9,15 @@ description, and what couldn't be verified. Written against KOReader
 | File | Runs in | Does |
 |---|---|---|
 | `main.lua` | main | Menu, event triggers, user messages |
-| `statsync/plugin.lua` | main | Wires the engine to KOReader: settings, server, subprocess, network state, the statistics plugin |
-| `statsync/engine.lua` | main | The sync cycle; one at a time plus one re-run |
-| `statsync/store.lua` | main | Export diff, merge/import, totals, local state DB |
-| `statsync/netjob.lua` | subprocess | Upload, discovery, downloads |
-| `statsync/webdav.lua` | subprocess | WebDAV transport (`list`, `stat`, `get`, `put`, `put_new`, `mkdir`, `delete`) |
-| `statsync/codec.lua` | both | JSON, segment format, validation |
-| `statsync/annformat.lua` | both | Annotation records, keys, annotation segment format |
-| `statsync/annstore.lua` | main | Annotations' merged state, change detection, held deletions, export/import |
-| `statsync/annsync.lua` | main | Annotations in the reader: on open/close, live apply, history scan, the question |
+| `supersync/plugin.lua` | main | Wires the engine to KOReader: settings, server, subprocess, network state, the statistics plugin |
+| `supersync/engine.lua` | main | The sync cycle; one at a time plus one re-run |
+| `supersync/store.lua` | main | Export diff, merge/import, totals, local state DB |
+| `supersync/netjob.lua` | subprocess | Upload, discovery, downloads |
+| `supersync/webdav.lua` | subprocess | WebDAV transport (`list`, `stat`, `get`, `put`, `put_new`, `mkdir`, `delete`) |
+| `supersync/codec.lua` | both | JSON, segment format, validation |
+| `supersync/annformat.lua` | both | Annotation records, keys, annotation segment format |
+| `supersync/annstore.lua` | main | Annotations' merged state, change detection, held deletions, export/import |
+| `supersync/annsync.lua` | main | Annotations in the reader: on open/close, live apply, history scan, the question |
 
 Highlights and bookmarks are designed in ANNOTATIONS.md.
 
@@ -32,14 +32,14 @@ Highlights and bookmarks are designed in ANNOTATIONS.md.
    files KOReader can't open (anything not a document, so every `.jsonl`)
    unless the user turned on "show unsupported files", and returns no ETags.
    `uploadFile` always names the remote file after the local file and can't
-   do a conditional create. So statsync has its own small client
+   do a conditional create. So SuperSync has its own small client
    (`webdav.lua`), using the same `socket.http` and the same server entries
    (`{name, type, address, username, password, url}`) as Cloud storage.
 3. **`Cloud:sync` runs on the UI thread** (download, merge, upload, all
    synchronous). Not used.
 4. **LuaSocket unescapes passwords**: with `user`/`password` fields,
    `http.lua` sends `url.unescape(password)`, so a password containing `%`
-   is mangled (this affects the WebDAV provider too). statsync builds the
+   is mangled (this affects the WebDAV provider too). SuperSync builds the
    `Authorization` header itself; the tests use a password with `%`, `:`
    and `ö`.
 5. **zlib can't do gzip.** koreader-base's `ffi/zlib.lua` wraps only
@@ -47,7 +47,7 @@ Highlights and bookmarks are designed in ANNOTATIONS.md.
    output size up front); no `deflateInit2`/`inflateInit2`. Until 0.2.2
    segments were plain `.jsonl`. Since 0.2.3 they're **zstd**
    (`seg-N.jsonl.zst`), with the libzstd koreader-base ships (used by
-   `persist.lua` and coverbrowser), through statsync's own small wrapper
+   `persist.lua` and coverbrowser), through SuperSync's own small wrapper
    (`zstd.lua`): `ffi/zstd.lua` raises on bad input and allocates whatever
    size a frame claims, and a downloaded file can be anything. Unpacking
    is refused above 32 MB. Compression happens in the main process after
@@ -61,7 +61,7 @@ Highlights and bookmarks are designed in ANNOTATIONS.md.
    statistics plugin's `insertDB()`, as its own `onSuspend` does) writes
    everything except the current page; that's picked up by a later sync.
 7. **`insertDB` opens the database without a busy timeout.** It would throw
-   if another process held a write lock. statsync only writes from the main
+   if another process held a write lock. SuperSync only writes from the main
    process, synchronously, in transactions that begin and end within one
    call, so the two can't overlap. The subprocess never opens a database.
 8. **`page_stat` rescales by `book.pages`**, the book's page count on this
@@ -72,7 +72,7 @@ Highlights and bookmarks are designed in ANNOTATIONS.md.
    computes" can mean.
 9. **The built-in `onSync` merge keeps the local `total_pages`** when it
    takes the longer duration (`DO UPDATE SET duration = MAX(...)`).
-   statsync takes the `total_pages` of the row with the longer duration, as
+   SuperSync takes the `total_pages` of the row with the longer duration, as
    specified. Mixing both syncs could flip `total_pages` back and forth;
    another reason not to run both.
 
@@ -97,12 +97,12 @@ Highlights and bookmarks are designed in ANNOTATIONS.md.
   already exists under another row of the same md5 is updated there, never
   duplicated.
 - **Deviation:** the task said metadata from the copy with the higher
-  `last_open` wins. For books KOReader uses on this device, statsync keeps
+  `last_open` wins. For books KOReader uses on this device, SuperSync keeps
   the local **title and authors** (KOReader's `getIdBookDB` finds the row by
   them: renaming it would make KOReader start a new, empty row next time
   the book is opened) and the local **`pages`** (see 8 above). Series,
   language and `last_open` follow the newer copy.
-- Books **only known from other devices** (rows statsync created, recorded in
+- Books **only known from other devices** (rows SuperSync created, recorded in
   `foreign_books`) follow the newest copy completely, with a tie-break on the
   metadata itself, so they converge whatever the order. Once KOReader opens
   the book here (its `last_open` changes), it's local. Limitation: that is
@@ -114,13 +114,13 @@ Highlights and bookmarks are designed in ANNOTATIONS.md.
 
 ### Export diff
 
-- `exported(md5, page, start_time, duration)` in `statsync.sqlite3`; an
+- `exported(md5, page, start_time, duration)` in `supersync.sqlite3`; an
   event is unexported if missing there or longer locally. One query with a
   `LEFT JOIN` on the attached state database. Neither `start_time` nor
   `rowid` decides what's exported.
 - **Fingerprint shortcut (addition):** the diff scans everything (0.34 s on
   a desktop for 300k events, several times that on an e-reader), on every
-  sync. Before it, statsync reads `count(*), max(rowid), total(duration)` of
+  sync. Before it, SuperSync reads `count(*), max(rowid), total(duration)` of
   `page_stat_data` (0.03 s). If it equals the value recorded when
   everything was last known to be exported, the diff is skipped. The value
   is taken before the diff, so rows written during an upload change it; an
@@ -180,10 +180,10 @@ Highlights and bookmarks are designed in ANNOTATIONS.md.
 
 ### Process model
 
-- **Main process:** flush, export (writes `cache/statsync/pending.jsonl`, and
+- **Main process:** flush, export (writes `cache/supersync/pending.jsonl`, and
   `pending.jsonl.zst` to upload),
   then fork. The child gets everything it needs (paths, the seen list) in
-  its copied memory and writes its progress to `cache/statsync/result.json`
+  its copied memory and writes its progress to `cache/supersync/result.json`
   (written to a temp name and renamed, after every step), so if it's killed
   at the **time limit (180 s)**, finished downloads and a verified upload
   still count. The main process polls every second with
@@ -206,28 +206,43 @@ Highlights and bookmarks are designed in ANNOTATIONS.md.
   **Assumption:** "Sync now" always uses `runWhenConnected`, i.e. follows
   KOReader's own "action when Wi-Fi is off" setting, like other network
   actions the user starts.
-- **Automatic sync is off by default** (assumption: no network activity
-  before the user has chosen to).
-- **The server comes from Cloud storage, by name** (as in Settings sync):
-  `statsync_settings.lua` keeps `{name, type}` and a folder (default
-  `/KOReader/Statistics`, relative to the server's address), and the address
-  and credentials are read from `cloudstorage.lua` when syncing. Nothing is
+- **Automatic syncs are on by default**, for statistics and for
+  annotations, each with its own setting. A sync is for statistics,
+  annotations or both: the engine runs only the streams asked for (requests
+  queued during a sync are merged), and each stream keeps its own time of
+  its last full listing and last success.
+- **The server comes from Cloud storage, by name**, and is the one settings
+  sync uses: `supersync_settings.lua` keeps `{name, type}` and a folder
+  (default `/KOReader`, relative to the server's address; statistics and
+  annotations go in its `Statistics/v2/`), and the address and credentials
+  are read from `cloudstorage.lua` when syncing. Statistics and annotations
+  need a WebDAV server (settings sync also works with Dropbox). Nothing is
   shared with Reading statistics' own Cloud sync setting. With no server
-  chosen, the first WebDAV server is used; a chosen one that's gone is an
-  error, not a fallback to another (that could be a different place).
+  chosen, the first Dropbox or WebDAV server is used; a chosen one that's
+  gone is an error, not a fallback to another (that could be a different
+  place).
 - **A changed server or folder resets the sync record.** The state database
   remembers the location (address without credentials, and folder). When it
   differs, `exported`, `seen_segments` and `bad_segments` are cleared, so
   the device publishes everything it has to the new place and imports
   everything there. Statistics themselves are untouched.
+- **A moved folder isn't a new one.** Taking over Statistics sync's
+  database (`supersync/migrate.lua`) forgets the location instead, so the
+  next folder is taken as the same place, its files copied there by hand.
+  Writing to a folder that doesn't have this device's files would start
+  numbering segments from 1 again, clashing with the copies; so a device
+  that has segments on record (in `seen_segments`) and doesn't find its
+  folder there stops before writing anything (`missing_own`), and forgets
+  the location again. Asked for by the user, it offers to send everything
+  instead (the location is set to a placeholder, so the next one is new).
 - The subprocess keeps the garbage collector running (stopping it would let
-  a big download pile up garbage on a 512 MB e-reader). statsync closes all
+  a big download pile up garbage on a 512 MB e-reader). SuperSync closes all
   its database connections before forking, so the child can't finalize any
   of them; KOReader's own subprocesses don't do anything special here either.
 
 ## Measurements
 
-`scripts/test-statsync.sh bench`, desktop (x86-64), local rclone WebDAV
+`scripts/test-supersync.sh bench`, desktop (x86-64), local rclone WebDAV
 server, three devices with ~100k events each (5 years, 40 books):
 
 | Sync | Data up | Data down | Requests | Main-process CPU |
@@ -256,7 +271,7 @@ for a couple of seconds during a first sync. Not measured on a device.
   behaviour, but servers vary (Nextcloud, Apache mod_dav, nginx dav,
   Synology). A server that ignores `Overwrite: F` could replace a segment
   in the (rare) case of a name clash. HTTPS (via LuaSec) wasn't tested.
-- **KOReader's UI modules are stubbed** in `tests/test_statsync_plugin.lua`;
+- **KOReader's UI modules are stubbed** in `tests/test_supersync_plugin.lua`;
   the statistics plugin, ljsqlite3, subprocesses and server are real. The
   HTTP client in the tests is a small FFI one with LuaSocket's
   `http.request` interface (LuaSocket couldn't be built here), so
@@ -274,7 +289,7 @@ deleted whatever order files arrive in.
   importing a `del`, delete matching local rows and record it; on importing
   events, drop those covered by a recorded deletion. "Events minus all
   deletions" is still idempotent and order-independent.
-- Writers: KOReader's "Reset statistics" deletes rows; statsync could detect
+- Writers: KOReader's "Reset statistics" deletes rows; SuperSync could detect
   that as keys in `exported` missing from `page_stat_data`, and emit `del`
   for the book with `before` = the newest deleted `start_time` + 1. Partial
   resets (a date range of a book) need a range form:
@@ -304,17 +319,14 @@ rarely share keys, so a snapshot is about as big as all segments together
 ## Recommendations and things I think are a bad idea
 
 - **Running both syncs on the same devices** is a bad idea: the built-in one
-  deletes, statsync doesn't, and they pick different `total_pages` (see 9).
+  deletes, SuperSync doesn't, and they pick different `total_pages` (see 9).
 - **"Higher `last_open` wins" for title/authors** would break KOReader's
   lookup of the book on the device that loses (see Book identity).
 - **Comparing totals across devices** isn't meaningful for pages read
   (see 8); comparing `page_stat_data` is.
-- **Device IDs live in `settings/statsync_device.lua`**, apart from the
-  shared settings (`settings/statsync_settings.lua`) so the latter can be
-  synced between devices. That file is new in 0.2.2 (with the server kept
-  by name): earlier versions' `statsync.lua` is copied once and left alone,
-  so devices on different versions syncing their settings don't read a
-  format they don't know. Copying a whole KOReader folder to a new device still
+- **Device IDs live in `settings/supersync_device.lua`**, apart from the
+  shared settings (`settings/supersync_settings.lua`) so the latter can be
+  synced between devices. Copying a whole KOReader folder to a new device still
   copies the ID. Two devices sharing an ID is safe here (no overwrites,
   unknown own segments get imported), but "Reset device ID" is still worth
   doing.

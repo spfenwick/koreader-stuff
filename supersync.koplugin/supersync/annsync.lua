@@ -1,14 +1,14 @@
 --[[--
 Annotation sync inside KOReader: reading the open book's annotations,
 applying merged changes to it, scanning the reading history, and asking the
-user about held deletions. The data side is statsync/annstore.lua.
+user about held deletions. The data side is supersync/annstore.lua.
 
 Changes reach a book only while it's open: live for the open book after a
 sync, otherwise when it's next opened. Sidecars of closed books are only
 read (by the history scan), never written.
 --]]
 
-local AnnFormat = require("statsync/annformat")
+local AnnFormat = require("supersync/annformat")
 
 local AnnSync = {}
 AnnSync.__index = AnnSync

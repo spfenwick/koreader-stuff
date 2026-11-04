@@ -14,7 +14,7 @@ On the server, under the sync folder:
     dict/            data/dict/
     styletweaks/
 
-On the device, in koreader/rclonesync/: the lists, state.tsv (what each file
+On the device, in koreader/supersync/: the lists, state.tsv (what each file
 was when this device last synced), cache.tsv (hashes, so unchanged files
 aren't read again), pending.tsv and staging/ (pulled settings waiting for
 the next start), conflicts/, last.log and apply.log.
@@ -32,17 +32,17 @@ KOReader starts, before any plugin has read them.
 This runs in a separate process during a sync: no UI here.
 --]]--
 
-local Remote = require("rclonesync_remote")
+local Remote = require("supersync/remote")
 
 local Engine = {}
 
-local TEMP_SUFFIX = ".rclonesync-part"
+local TEMP_SUFFIX = ".supersync-part"
 -- Files named with // in settings.txt: their paths in the sync.
 local KO = "@koreader/"
 local MANIFEST = "manifest.tsv"
 
 -- In the order they're synced: the lists first, so the rest use the new ones.
---   dir:       under KOReader's folder (lists: koreader/rclonesync/)
+--   dir:       under KOReader's folder (lists: koreader/supersync/)
 --   list:      only what this list names; without the list, not synced
 --   koreader_paths: the list can name files anywhere in KOReader's folder
 --              with //, kept under @koreader/
@@ -164,7 +164,7 @@ local function badKoreaderPath(rel)
     end
     local top = rel:match("^[^/]+")
     if top == "settings" then return "files in settings/ are listed with a single /" end
-    if top == "rclonesync" then return "Settings sync's own folder" end
+    if top == "supersync" then return "SuperSync's own folder" end
     return nil
 end
 
@@ -349,7 +349,7 @@ end
 -- Paths -------------------------------------------------------------------
 
 function Engine.paths(kodir)
-    local state = kodir .. "/rclonesync"
+    local state = kodir .. "/supersync"
     return {
         kodir = kodir,
         state = state,
@@ -867,6 +867,21 @@ local function runOnce(ctx, opts)
     elseif version == "not_found" then
         ctx.manifest = {}
         version = nil
+        -- A folder without a manifest is new (or not copied over yet, after
+        -- moving): what this device remembers is about another folder, and
+        -- would make every file look deleted on the server. Sync as if for
+        -- the first time: upload, never delete. (Fonts are never deleted
+        -- here, and their state says which were deleted on this device.)
+        local forgot = false
+        for _, area in ipairs(Engine.AREAS) do
+            if not area.pull_only and next(ctx.state[area.name] or {}) then
+                ctx.state[area.name] = nil
+                forgot = true
+            end
+        end
+        if forgot then
+            say(result, "No " .. MANIFEST .. " on the server: syncing as for the first time (nothing is deleted).")
+        end
     else
         result.fatal = "Couldn't reach the server: " .. tostring(version)
         return result

@@ -1,16 +1,16 @@
 -- Unit tests for statsync's annotation sync: the record format, keys, the
--- merge, change detection and held deletions (statsync/annstore.lua), and
--- applying changes inside a reader (statsync/annsync.lua) with KOReader's
+-- merge, change detection and held deletions (supersync/annstore.lua), and
+-- applying changes inside a reader (supersync/annsync.lua) with KOReader's
 -- own ReaderAnnotation code on a stand-in document.
 -- Run through scripts/test-statsync.sh, which sets KOREADER_SRC.
 
-local S = dofile("tests/statsync/support.lua")
+local S = dofile("tests/supersync/support.lua")
 local check = S.check
 
-local AnnFormat = require("statsync/annformat")
-local AnnStore = require("statsync/annstore")
-local AnnSync = require("statsync/annsync")
-local Codec = require("statsync/codec")
+local AnnFormat = require("supersync/annformat")
+local AnnStore = require("supersync/annstore")
+local AnnSync = require("supersync/annsync")
+local Codec = require("supersync/codec")
 
 local TMP = assert(os.getenv("STATSYNC_TMP"), "STATSYNC_TMP not set") .. "/ann"
 S.rmrf(TMP)
@@ -561,4 +561,4 @@ do -- status counts and requeue
     check(A:outbox() == 2, "requeue: everything to send again")
 end
 
-S.finish("statsync annotation tests")
+S.finish("supersync annotation tests")

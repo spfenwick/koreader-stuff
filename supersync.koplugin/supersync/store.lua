@@ -13,7 +13,7 @@ has it; on equal durations the larger total_pages wins (so the result
 doesn't depend on order).
 --]]
 
-local Codec = require("statsync/codec")
+local Codec = require("supersync/codec")
 
 local Store = {}
 Store.__index = Store
@@ -335,6 +335,20 @@ function Store:useLocation(location)
         if not ok then rollback(conn); error(err, 0) end
     end)
     return old ~= nil
+end
+
+--- Forgets where segments went. Without `resend`, the next location is
+-- taken as the same place (the folder was moved, files and all), so nothing
+-- is sent again. With `resend`, everything is sent to it and imported again.
+function Store:forgetLocation(resend)
+    local conn = self:openState()
+    return withConn(conn, function()
+        if resend then
+            conn:exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('location', '(send everything again)');")
+        else
+            conn:exec("DELETE FROM meta WHERE key = 'location';")
+        end
+    end)
 end
 
 function Store:counts()

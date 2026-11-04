@@ -26,19 +26,26 @@ caller can save it: if the subprocess is killed for taking too long, what
 was done so far (complete downloads, a verified upload) is still used.
 
 There are two streams of segments in each device folder: statistics
-(seg-N) and, when annotation sync is on, annotations (ann-N). Each has its
-own numbering; steps 3 and 4 run for each.
+(seg-N) and annotations (ann-N). Each has its own numbering; steps 3 and 4
+run for each stream the sync is for (params.stats unless false, params.ann
+when given).
+
+params.expect_own: this device has files in the folder already (it has
+sent some). If its folder isn't there, the folder is a different one, for
+example a new one the old files haven't been copied to yet: writing there
+would start numbering from 1 again, and clash with the copies. So the step
+stops with result.missing_own, before creating anything.
 
 Result: { ok, error, stage, full_listed, uploaded = { name, size, etag,
-          verified }, upload_error, ann_uploaded, ann_upload_error,
+          verified }, upload_error, ann_uploaded, ann_upload_error, missing_own,
           devices = { id, … }, downloads = { {stream, device, name, size,
           etag, path}, … }, remote_more, segment_errors, bytes_up,
           bytes_down, requests }
 (stream is "stats" or "ann").
 --]]
 
-local AnnFormat = require("statsync/annformat")
-local Codec = require("statsync/codec")
+local AnnFormat = require("supersync/annformat")
+local Codec = require("supersync/codec")
 
 local NetJob = {}
 
@@ -78,7 +85,8 @@ end
 
 --- params: device_id, pending = { path, size } | nil, meta_path,
 --  seen and bad ({ [device] = { [name] = { size, etag } } }), full_list (bool),
---  tmp_dir, max_download_bytes (optional), and for annotations
+--  tmp_dir, max_download_bytes (optional), stats (false: annotations only),
+--  expect_own, and for annotations
 --  ann = { pending = { path, size } | nil, bad } (seen is shared: names differ)
 function NetJob.run(params, transport, report)
     report = report or function() end
@@ -99,7 +107,10 @@ function NetJob.run(params, transport, report)
     local own_id = params.device_id
     local own = NetJob.DEVICES .. "/" .. own_id
     local seen = params.seen or {}
-    local streams = { { id = "stats", def = NetJob.STREAMS.stats, pending = params.pending, bad = params.bad or {} } }
+    local streams = {}
+    if params.stats ~= false then
+        table.insert(streams, { id = "stats", def = NetJob.STREAMS.stats, pending = params.pending, bad = params.bad or {} })
+    end
     if params.ann then
         table.insert(streams, { id = "ann", def = NetJob.STREAMS.ann, pending = params.ann.pending, bad = params.ann.bad or {} })
     end
@@ -109,14 +120,19 @@ function NetJob.run(params, transport, report)
     end
 
     -- 1. Devices
+    local function missingOwn()
+        result.missing_own = true
+        return failed("this device's earlier files aren't in this folder on the server")
+    end
     local dev_entries, err, code = transport:list(NetJob.DEVICES)
     if not dev_entries then
         if code ~= 404 and code ~= 409 then return failed("listing devices: " .. tostring(err)) end
+        if params.expect_own then return missingOwn() end
         for _, dir in ipairs({ "", NetJob.DEVICES }) do
             local ok, merr
             if dir == "" and transport.mkdir_root then ok, merr = transport:mkdir_root()
             else ok, merr = transport:mkdir(dir) end
-            if not ok then return failed("creating " .. (dir == "" and "statsync folder" or dir) .. ": " .. tostring(merr)) end
+            if not ok then return failed("creating " .. (dir == "" and "sync folder" or dir) .. ": " .. tostring(merr)) end
         end
         dev_entries = {}
     end
@@ -132,6 +148,7 @@ function NetJob.run(params, transport, report)
 
     local listings = {} -- device id -> entries, when listed
     if not own_exists then
+        if params.expect_own then return missingOwn() end
         local ok, merr = transport:mkdir(own)
         if not ok then return failed("creating own folder: " .. tostring(merr)) end
         listings[own_id] = {}

@@ -1,37 +1,22 @@
-# Settings sync (rclonesync.koplugin)
+# SuperSync: settings
 
 Keeps KOReader's settings, chosen plugins and patches, dictionaries, fonts
 and style tweaks the same on several devices, through a Dropbox or WebDAV
-server. It needs nothing installed beyond KOReader: it uses the servers
-set up in KOReader's Cloud storage, and does the syncing itself.
+server from Cloud storage. (This was Settings sync, `rclonesync.koplugin`.)
+See [README.md](README.md) for installing and the menu.
 
-## Install
-
-1. Copy `rclonesync.koplugin` into KOReader's `plugins/` folder and restart
-   KOReader.
-2. Add your Dropbox or WebDAV server in Cloud storage (file browser → Cloud
-   storage), if it isn't there already. Settings sync uses the first one,
-   or the one chosen under Settings sync → Server.
-3. Put the lists of what to sync in `koreader/rclonesync/` (see below).
-
-The menu is in Tools → "Settings sync", in both the file browser and the
-reader:
-
-- **Sync**: everything below.
-- **Preview sync**: shows what a sync would change, without changing it;
-  "Sync now" there runs the sync.
-- **Server** and **Folder on server** (`/KOReader/Settings` by default).
-- **Show last log**.
-- **Check for updates** and **Automatic updates** (see Updates).
-
-Sync can be assigned to a gesture (General → "Settings sync: sync"). A sync runs in the background, and
-tapping the message cancels it; running it again finishes the job.
+Put the lists of what to sync in `koreader/supersync/` (below). Tools →
+SuperSync → "Sync settings" syncs; "Preview settings sync" shows what a
+sync would change without changing it ("Sync now" there runs it). A sync
+runs in the background, and tapping the message cancels it; running it
+again finishes the job. It's also a gesture: General → "SuperSync: sync
+settings". Settings sync only runs when you ask for it.
 
 ## What's synced
 
-| On the server (under the folder) | On the device | |
+| On the server (under `<folder>/Settings`) | On the device | |
 |---|---|---|
-| `lists/` | `koreader/rclonesync/settings.txt`, `plugins.txt`, `patches.txt` | first, so the rest use the new lists |
+| `lists/` | `koreader/supersync/settings.txt`, `plugins.txt`, `patches.txt` | first, so the rest use the new lists |
 | `settings/` | what `settings.txt` lists in `settings/` (and with `//`, elsewhere) | put in place at the next start |
 | `plugins/` | what `plugins.txt` lists in `plugins/` | |
 | `patches/` | what `patches.txt` lists in `patches/` | |
@@ -59,7 +44,7 @@ such as a setting a plugin keeps in its own folder. It's synced like the
 other settings (put in place at the next start), and kept on the server
 under `settings/@koreader/`. It has to be the exact path of one file, not
 a pattern, and not in `settings/` (list those with a single `/`) or
-`rclonesync/`. Only `settings.txt` can have these lines.
+`supersync/`. Only `settings.txt` can have these lines.
 
 `plugins.txt`:
 
@@ -67,9 +52,9 @@ a pattern, and not in `settings/` (list those with a single `/`) or
 /assistant.koplugin/**
 ```
 
-Don't list the plugins from this repository (`rclonesync.koplugin`,
-`statsync.koplugin`, `knuthplass.koplugin`): they update themselves from
-GitHub (see Updates), and a sync would fight the updater over their folders.
+Don't list the plugins from this repository (`supersync.koplugin`,
+`knuthplass.koplugin`): they update themselves from GitHub, and a sync
+would fight the updater over their folders.
 
 `patches.txt`:
 
@@ -81,19 +66,10 @@ GitHub (see Updates), and a sync would fight the updater over their folders.
 Don't list `1-knuthplass-engine.lua` (or a pattern such as `/*.lua` that
 matches it): the Knuth–Plass plugin writes it for each device itself.
 
-## Updates
-
-Tools → Settings sync → "Check for updates" looks for a newer release on
-GitHub. "Automatic updates" sets what happens once a day when KOReader is
-already online: off, notify (the default: asks first), or install. An update
-is checked (checksum, complete plugin) before it replaces the installed one,
-and takes effect after a restart. The first version with the updater has to
-be installed by hand.
-
 ## How it decides
 
 Each device remembers what every file was when it last synced
-(`koreader/rclonesync/state.tsv`), so it can tell which side changed a
+(`koreader/supersync/state.tsv`), so it can tell which side changed a
 file:
 
 - **Changed on one side:** the change is copied to the other, deletions
@@ -102,7 +78,7 @@ file:
   deleted here, so adding a line to a list on a device that doesn't have
   the file yet is safe.
 - **Changed on both sides:** the newer one is kept, and the other is saved
-  in `koreader/rclonesync/conflicts/`. A sync says when this happens.
+  in `koreader/supersync/conflicts/`. A sync says when this happens.
 - **Changed on one side, deleted on the other:** the change is kept.
 
 **Fonts** come from the server's `fonts/` folder (put them there yourself)
@@ -117,7 +93,7 @@ server's ID for the file.
 ## Moving to another server
 
 Copy the whole folder (with `manifest.tsv`) from the old server to the new
-one, then choose the new server under Settings sync → Server on each
+one, then choose the new server under SuperSync → Server on each
 device. Syncing then carries on without uploading or downloading anything.
 The new server has its own IDs for the fonts, so the first sync takes fonts
 the same size as in the manifest as the same fonts and notes their new IDs.
@@ -134,6 +110,14 @@ device's settings; the next sync sends them.
 Before a sync, KOReader saves its settings, so what's synced is what's in
 use. Files are downloaded to a temporary name and then put in place, so a
 file in use (such as a font) is replaced rather than rewritten.
+
+## A folder without a manifest
+
+A folder on the server without `manifest.tsv` is new to the sync (or not
+copied there yet). What a device remembers from its last sync is about
+another folder then, so it's set aside: the sync is like a first sync,
+uploading this device's files and deleting nothing. (Earlier, every file
+synced before looked deleted on the server, and was deleted here.)
 
 ## The first sync
 

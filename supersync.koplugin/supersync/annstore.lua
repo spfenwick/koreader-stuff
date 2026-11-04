@@ -1,5 +1,5 @@
 --[[--
-The annotation side of statsync's state database (statsync.sqlite3): the
+The annotation side of the statistics sync state database (supersync.sqlite3): the
 merged state of every book's annotations, what this device's copy of each
 book held when last looked at, what's waiting to be sent, and deletions
 waiting for the user's decision. Main process only; every call is one short
@@ -23,7 +23,7 @@ Segments imported are recorded in the statistics' seen_segments and
 bad_segments tables (their names, ann-…, can't clash with seg-…).
 --]]
 
-local AnnFormat = require("statsync/annformat")
+local AnnFormat = require("supersync/annformat")
 
 local AnnStore = {}
 AnnStore.__index = AnnStore
@@ -86,8 +86,8 @@ local SCHEMA = [[
     );
 ]]
 
---- Mass deletion: more than this many items, and more than half of them,
--- gone at once (or all of them) waits for the user.
+--- Mass deletion: more than this many of a book's items gone at once waits
+-- for the user.
 AnnStore.MASS_MIN = 5
 
 local function num(v) return v ~= nil and tonumber(v) or nil end
@@ -327,7 +327,7 @@ function AnnStore:observe(opts)
             for key in pairs(prev) do
                 if not snap[key] and not held[key] then gone[#gone + 1] = key end
             end
-            local mass = #gone > 0 and ((#gone > AnnStore.MASS_MIN and #gone * 2 > nprev) or ncur == 0)
+            local mass = #gone > AnnStore.MASS_MIN
             if mass then
                 local stmt = conn:prepare("INSERT OR IGNORE INTO ann_held (md5, kind, key) VALUES (?, ?, ?);")
                 for _, key in ipairs(gone) do

@@ -1,12 +1,12 @@
 # Annotation sync design
 
 Syncing bookmarks, highlights and notes between devices, as a second
-stream next to the statistics in statsync. Written against KOReader
+stream next to the statistics in SuperSync. Written against KOReader
 `426e932` (20 Oct 2026); file and line references are to that revision.
 
-Implemented in `statsync/annformat.lua` (records, keys, segment format),
-`statsync/annstore.lua` (merged state, change detection, held deletions,
-export and import) and `statsync/annsync.lua` (in the reader: open, close,
+Implemented in `supersync/annformat.lua` (records, keys, segment format),
+`supersync/annstore.lua` (merged state, change detection, held deletions,
+export and import) and `supersync/annsync.lua` (in the reader: open, close,
 live apply, history scan, the question). Where the build differs from the
 design below, it says so under "As built".
 
@@ -189,7 +189,7 @@ Segment lines (JSON Lines, then zstd, as for statistics):
   daily full listing, download budget and bad-segment records are reused
   as they are, with the `ann-` prefix.
 
-## Local state (in `statsync.sqlite3`)
+## Local state (in `supersync.sqlite3`)
 
 As built:
 
@@ -328,18 +328,19 @@ flush stats → detect open book's annotation changes
 ```
 
 - One subprocess, one time limit, one single-flight lock for both streams.
-- Annotation sync has its own on/off switch. **As built: on by default**
-  (the design had it off, as notes go to the server in plain text, as
-  statistics do; changed at the user's request). Turning it off is kept
-  in the shared settings as `annotations = false`.
+- A sync can be for one stream only ("Sync statistics", "Sync highlights
+  and bookmarks"), and each stream's automatic sync has its own setting
+  (`auto_stats`, `auto_annotations` in the shared settings; on unless
+  false). Changes are always recorded on close and applied on open, so a
+  sync by hand finds them whether or not automatic sync is on.
 - "Rebuild from cloud" re-imports both streams. A changed server or folder
   resets both streams' records.
 
 ### Initial scan
 
 Annotations of books that aren't opened would otherwise never be published.
-Before the first sync with annotation sync on (after installing or
-updating, or turning it on again), triggered by whatever starts that sync:
+Before the first sync of annotations on a device, triggered by whatever
+starts that sync:
 
 - Walk the reading history; for each file with a sidecar, read
   `partial_md5_checksum` and the `annotations` list, record the path in
@@ -399,11 +400,11 @@ updating, or turning it on again), triggered by whatever starts that sync:
 - Integration: real KOReader `ReaderAnnotation` code where it can run
   headless, real sidecars written by `DocSettings`, rclone as server.
 
-As built: `tests/test_statsync_ann.lua` runs KOReader's own
+As built: `tests/test_supersync_ann.lua` runs KOReader's own
 `ReaderAnnotation` (sorting, page numbers, `AnnotationsModified`) on a
 stand-in CREngine document, with simulated sidecars;
-`tests/test_statsync_integration.lua` syncs annotations between devices
-through the real engine, subprocess and rclone; `tests/test_statsync_plugin.lua`
+`tests/test_supersync_integration.lua` syncs annotations between devices
+through the real engine, subprocess and rclone; `tests/test_supersync_plugin.lua`
 covers the menu, history scan, live apply, close and the question with
 KOReader's UI stubbed. `DocSettings` itself isn't exercised (stubbed), and
 nothing ran on a device.

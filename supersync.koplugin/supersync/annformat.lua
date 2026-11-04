@@ -1,5 +1,5 @@
 --[[--
-Annotation records and segment files for statsync's annotation stream.
+Annotation records and segment files for SuperSync's annotation stream.
 
 An annotation is one item of KOReader's `annotations` list (a page
 bookmark, a highlight or a note). Here it's identified by
@@ -23,7 +23,7 @@ change of server). Readers reject an unknown major version and skip record
 types they don't know.
 --]]
 
-local Codec = require("statsync/codec")
+local Codec = require("supersync/codec")
 
 local AnnFormat = {}
 

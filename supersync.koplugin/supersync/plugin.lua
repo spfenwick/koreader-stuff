@@ -1,6 +1,7 @@
 --[[--
-Connects the sync engine to KOReader: settings, the server, subprocesses,
-the network state and the running statistics plugin.
+Connects the statistics and annotations sync engine to KOReader: settings,
+the server, subprocesses, the network state and the running statistics
+plugin. Also the settings and the server choice settings sync shares.
 
 One controller per KOReader process (plugins are instantiated again for
 every FileManager and ReaderUI, but package.loaded keeps this module), so a
@@ -14,100 +15,50 @@ local UIManager = require("ui/uimanager")
 local ffiutil = require("ffi/util")
 local logger = require("logger")
 
-local AnnStore = require("statsync/annstore")
-local AnnSync = require("statsync/annsync")
-local Engine = require("statsync/engine")
-local Store = require("statsync/store")
+local AnnStore = require("supersync/annstore")
+local AnnSync = require("supersync/annsync")
+local Engine = require("supersync/engine")
+local Store = require("supersync/store")
 
 local Plugin = {}
 
 -- Settings live in KOReader's settings folder, in two files:
 --
---   statsync_settings.lua  the same on every device (fine to sync between
---                          devices, e.g. with Settings sync): enabled,
---                          allow_wifi, server ({name, type} of a Cloud
---                          storage server, no credentials), root, time_limit,
---                          annotations (sync highlights and bookmarks too;
---                          on unless false)
---   statsync_device.lua    this device's own: device_id, status, ann_scanned
+--   supersync_settings.lua  the same on every device (fine to sync between
+--                           devices with SuperSync's own settings sync):
+--                           server ({name, type} of a Cloud storage server, no
+--                           credentials), root, auto_stats and auto_annotations
+--                           (on unless false), allow_wifi, time_limit
+--   supersync_device.lua    this device's own: device_id, status, ann_scanned
 --
--- Earlier versions kept the shared settings in statsync.lua with the whole
--- server entry (password included), and before that everything under
--- "statsync" in settings.reader.lua. They're copied the first time, and the
--- old places left alone, so a device still on an older version that gets
--- the shared file synced to it isn't handed settings it can't read.
-Plugin.SHARED_FILE = "statsync_settings.lua"
-Plugin.DEVICE_FILE = "statsync_device.lua"
-local OLD_SHARED_FILE = "statsync.lua"
-local LEGACY_KEY = "statsync"
-local DEVICE_KEYS = { device_id = true, status = true, ann_scanned = true }
+-- supersync/migrate.lua fills them from Statistics sync's on first start.
+Plugin.SHARED_FILE = "supersync_settings.lua"
+Plugin.DEVICE_FILE = "supersync_device.lua"
+Plugin.STATE_FILE = "supersync.sqlite3"
 
---- Folder on the server when none is set, like Settings sync's /KOReader/Settings.
-Plugin.DEFAULT_ROOT = "/KOReader/Statistics"
+--- Folder on the server when none is set. Settings sync uses its Settings/
+-- subfolder, statistics and annotations its Statistics/ subfolder: the
+-- folders Settings sync and Statistics sync used by default.
+Plugin.DEFAULT_ROOT = "/KOReader"
+Plugin.SETTINGS_DIR = "Settings"
+Plugin.STATS_DIR = "Statistics"
 
 local files -- { shared = LuaSettings, device = LuaSettings }, opened on first use
-
-local function exists(path)
-    local f = io.open(path, "rb")
-    if f then f:close() end
-    return f ~= nil
-end
-
---- Settings from before statsync_settings.lua: statsync.lua, else
--- settings.reader.lua's "statsync". Returns shared, device (tables).
-local function oldSettings(dir, LuaSettings)
-    local shared, device = {}, {}
-    local legacy = G_reader_settings:readSetting(LEGACY_KEY)
-    if type(legacy) == "table" then
-        for k, v in pairs(legacy) do
-            if DEVICE_KEYS[k] then device[k] = v else shared[k] = v end
-        end
-    end
-    if exists(dir .. "/" .. OLD_SHARED_FILE) then
-        local ok, old = pcall(LuaSettings.open, LuaSettings, dir .. "/" .. OLD_SHARED_FILE)
-        if ok and old and type(old.data) == "table" then
-            shared = {}
-            for k, v in pairs(old.data) do
-                if not DEVICE_KEYS[k] then shared[k] = v end
-            end
-        end
-    end
-    -- The old server entry was a copy of Cloud storage's, password and all,
-    -- synced to <its folder>/statsync. Keep only the name, and the folder.
-    if type(shared.server) == "table" and shared.server.address then
-        local old = shared.server
-        shared.server = { name = old.name, type = old.type }
-        if shared.root == nil then
-            shared.root = "/" .. require("statsync/webdav").join(old.url or "", "statsync")
-        end
-    end
-    return shared, device
-end
 
 local function openFiles()
     if files then return files end
     local LuaSettings = require("luasettings")
     local dir = DataStorage:getSettingsDir()
-    local fresh = not exists(dir .. "/" .. Plugin.SHARED_FILE)
     files = {
         shared = LuaSettings:open(dir .. "/" .. Plugin.SHARED_FILE),
         device = LuaSettings:open(dir .. "/" .. Plugin.DEVICE_FILE),
     }
-    if fresh then
-        local shared, device = oldSettings(dir, LuaSettings)
-        for k, v in pairs(shared) do
-            if files.shared.data[k] == nil then files.shared.data[k] = v end
-        end
-        for k, v in pairs(device) do
-            if files.device.data[k] == nil then files.device.data[k] = v end
-        end
-        if next(shared) or next(device) then
-            files.shared:flush()
-            files.device:flush()
-            logger.info("StatSync: copied earlier settings to", Plugin.SHARED_FILE, "and", Plugin.DEVICE_FILE)
-        end
-    end
     return files
+end
+
+--- Forgets the open settings files (after migrate.lua wrote them, and in tests).
+function Plugin.reload()
+    files = nil
 end
 
 --- Settings shared by all devices (a live table; call saveSettings after changing it).
@@ -127,6 +78,11 @@ end
 function Plugin.saveDeviceState()
     openFiles().device:flush()
 end
+
+--- Automatic syncs of statistics, and of highlights and bookmarks: each on
+-- unless turned off.
+function Plugin.autoStats() return Plugin.settings().auto_stats ~= false end
+function Plugin.autoAnnotations() return Plugin.settings().auto_annotations ~= false end
 
 local function randomId()
     local f = io.open("/dev/urandom", "rb")
@@ -155,64 +111,87 @@ function Plugin.resetDeviceId()
     return Plugin.deviceId()
 end
 
---- The WebDAV servers set up in Cloud storage (with their credentials).
+--- Server types SuperSync can use (Dropbox and WebDAV). Settings sync works
+-- with both; statistics and annotations need WebDAV.
+Plugin.TYPES = require("supersync/remote").TYPES
+
+--- The Dropbox and WebDAV servers set up in Cloud storage (with their credentials).
 function Plugin.servers()
     local LuaSettings = require("luasettings")
     local ok, cs = pcall(LuaSettings.open, LuaSettings, DataStorage:getSettingsDir() .. "/cloudstorage.lua")
     local servers = {}
     local list = ok and cs and (cs.readSetting and cs:readSetting("cs_servers") or cs.data and cs.data.cs_servers)
     for _, server in ipairs(type(list) == "table" and list or {}) do
-        if server.type == "webdav" then table.insert(servers, server) end
+        if Plugin.TYPES[server.type] then table.insert(servers, server) end
     end
     return servers
 end
 
---- The Cloud storage server statsync uses: the one chosen (by name), or with
--- none chosen, the first WebDAV server. Returns server, or nil and why.
+--- The Cloud storage server SuperSync uses: the one chosen (by name and
+-- type), or with none chosen, the first Dropbox or WebDAV server. Returns
+-- server, or nil and why.
 function Plugin.server()
     local servers = Plugin.servers()
     local chosen = Plugin.settings().server
     if chosen then
         for _, server in ipairs(servers) do
-            if server.name == chosen.name then return server end
+            if server.name == chosen.name and (chosen.type == nil or server.type == chosen.type) then
+                return server
+            end
         end
         -- Not another server instead: it could be a different place.
-        return nil, string.format("WebDAV server \"%s\" not found in Cloud storage", tostring(chosen.name))
+        return nil, string.format("server \"%s\" not found in Cloud storage", tostring(chosen.name))
     end
     if servers[1] then return servers[1] end
-    return nil, "no WebDAV server in Cloud storage"
+    return nil, "no Dropbox or WebDAV server in Cloud storage"
 end
 
---- The folder on the server, as set ("/KOReader/Statistics" by default).
+--- The server for statistics and annotations: WebDAV only.
+function Plugin.statsServer()
+    local server, why = Plugin.server()
+    if not server then return nil, why end
+    if server.type ~= "webdav" then
+        return nil, "statistics and highlights need a WebDAV server (not " .. tostring(Plugin.TYPES[server.type]) .. ")"
+    end
+    return server
+end
+
+--- The folder on the server, as set ("/KOReader" by default).
 function Plugin.root()
     local root = Plugin.settings().root
     return (root and root ~= "") and root or Plugin.DEFAULT_ROOT
 end
 
---- Subfolder of the folder for this version's (compressed) segments. 0.2.2
--- wrote uncompressed ones straight into the folder; devices still on it
--- carry on there undisturbed, and an updated device sends everything it has
--- to the new subfolder (a new location, see Store:useLocation).
-Plugin.FORMAT_DIR = "v2"
+local function join(a, b) return require("supersync/webdav").join(a, b) end
 
---- The folder for the WebDAV client: relative to the server's address.
-function Plugin.remoteRoot()
-    return require("statsync/webdav").join(Plugin.root(), Plugin.FORMAT_DIR)
+--- Settings sync's folder: <root>/Settings.
+function Plugin.settingsRoot()
+    return "/" .. join(Plugin.root(), Plugin.SETTINGS_DIR)
 end
 
---- Where statsync syncs to, for showing and for noticing a change: the
--- server's address (without any user:password@) and the folder. Nil without
--- a server.
+--- Subfolder for this format's (compressed) segments, as in Statistics sync
+-- (whose 0.2.2 and earlier wrote uncompressed ones straight into the folder).
+Plugin.FORMAT_DIR = "v2"
+
+--- The folder for statistics and annotations, for the WebDAV client:
+-- relative to the server's address. <root>/Statistics/v2.
+function Plugin.remoteRoot()
+    return join(join(Plugin.root(), Plugin.STATS_DIR), Plugin.FORMAT_DIR)
+end
+
+--- Where statistics and annotations sync to, for showing and for noticing
+-- a change: the server's address (without any user:password@) and the
+-- folder. Nil without a WebDAV server.
 function Plugin.serverLocation(server)
-    server = server or Plugin.server()
+    server = server or Plugin.statsServer()
     if not server or not server.address then return nil end
-    local WebDav = require("statsync/webdav")
+    local WebDav = require("supersync/webdav")
     local root = Plugin.remoteRoot()
     return WebDav.redact(server.address):gsub("/+$", "") .. "/" .. (root ~= "" and root .. "/" or "")
 end
 
 function Plugin.serverProblem()
-    local server, why = Plugin.server()
+    local server, why = Plugin.statsServer()
     if not server then return why end
     if not server.address or server.address == "" then return "the WebDAV server has no address" end
 end
@@ -224,10 +203,10 @@ local function statsPlugin()
 end
 
 local function paths()
-    local work = DataStorage:getDataDir() .. "/cache/statsync"
+    local work = DataStorage:getDataDir() .. "/cache/supersync"
     return {
         stats = DataStorage:getSettingsDir() .. "/statistics.sqlite3",
-        state = DataStorage:getSettingsDir() .. "/statsync.sqlite3",
+        state = DataStorage:getSettingsDir() .. "/" .. Plugin.STATE_FILE,
         work = work,
         tmp = work .. "/incoming",
     }
@@ -248,15 +227,10 @@ function Plugin.annStore()
     return ann_store
 end
 
---- Highlights and bookmarks sync too, unless turned off.
-function Plugin.annotationsEnabled()
-    return Plugin.settings().annotations ~= false
-end
-
---- The reading history hasn't been read on this device yet (first sync with
--- annotations, or turned on again).
+--- The reading history hasn't been read on this device yet (before the
+-- first sync of annotations).
 function Plugin.annotationsNeedScan()
-    return Plugin.annotationsEnabled() and not Plugin.deviceState().ann_scanned
+    return not Plugin.deviceState().ann_scanned
 end
 
 --- The process-wide annotation sync (KOReader side).
@@ -268,7 +242,7 @@ function Plugin.annSync()
         now = os.time,
         logger = logger,
         ui_manager = UIManager,
-        enabled = Plugin.annotationsEnabled,
+        enabled = function() return true end,
         schedule = function(delay, fn)
             if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
         end,
@@ -278,15 +252,6 @@ function Plugin.annSync()
         end,
     }
     return ann_sync
-end
-
---- Annotation sync turned on: send everything known again, and read the
--- reading history afresh. done(stats) after the scan.
-function Plugin.startAnnotations(done)
-    Plugin.annStore():requeueAll()
-    Plugin.deviceState().ann_scanned = nil
-    Plugin.saveDeviceState()
-    return Plugin.annSync():scan(done)
 end
 
 local controller
@@ -311,8 +276,6 @@ function Plugin.engine()
             if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
         end,
         canRun = function(reason, opts)
-            local st = Plugin.settings()
-            if not opts.interactive and not st.enabled then return false, "automatic sync is off" end
             local problem = Plugin.serverProblem()
             if problem then return false, problem end
             -- Another server or folder: send and import everything there.
@@ -325,8 +288,9 @@ function Plugin.engine()
                 if not aok then return false, "state database: " .. tostring(aerr) end
             end
             local stats_settings = G_reader_settings:readSetting("statistics")
-            if stats_settings and stats_settings.is_enabled == false then
-                return false, "reading statistics are disabled"
+            if opts.stats ~= false and stats_settings and stats_settings.is_enabled == false then
+                if opts.ann == false then return false, "reading statistics are disabled" end
+                opts.stats = false -- highlights and bookmarks only
             end
             if not NetworkMgr:isConnected() then return false, "offline" end
             return true
@@ -334,11 +298,11 @@ function Plugin.engine()
         makeTransport = function()
             -- Runs in the subprocess: the server is read from settings as
             -- they were when it was forked.
-            local server = Plugin.server()
+            local server = Plugin.statsServer()
             local http = require("socket.http")
             local sok, socketutil = pcall(require, "socketutil")
             if sok then socketutil:set_timeout(socketutil.FILE_BLOCK_TIMEOUT, socketutil.FILE_TOTAL_TIMEOUT) end
-            local WebDav = require("statsync/webdav")
+            local WebDav = require("supersync/webdav")
             return WebDav.new{
                 http = http, logger = logger,
                 address = server.address, username = server.username, password = server.password,
@@ -382,7 +346,6 @@ function Plugin.engine()
         end,
         ann = {
             store = Plugin.annStore(),
-            enabled = Plugin.annotationsEnabled,
             collect = function() Plugin.annSync():collect() end,
             afterSync = function(run) Plugin.annSync():afterSync(run) end,
         },
@@ -400,6 +363,12 @@ end
 --- Clears the import record so the next sync imports every segment again.
 function Plugin.rebuild()
     makeStore():forgetSeen()
+end
+
+--- The next sync sends everything this device has to the folder, and
+-- imports everything there (as after choosing another folder).
+function Plugin.sendEverythingAgain()
+    makeStore():forgetLocation(true)
 end
 
 return Plugin

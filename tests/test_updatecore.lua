@@ -24,8 +24,7 @@ end
 local canonical = read("shared/updatecore.lua")
 for _, copy in ipairs({
     "knuthplass.koplugin/knuthplass_updatecore.lua",
-    "rclonesync.koplugin/rclonesync_updatecore.lua",
-    "statsync.koplugin/statsync/updatecore.lua",
+    "supersync.koplugin/supersync/updatecore.lua",
 }) do
     check(read(copy) == canonical, copy .. " differs from shared/updatecore.lua (run scripts/sync-updatecore.sh)")
 end
@@ -33,7 +32,7 @@ end
 -- Every plugin has a release version.
 local function stub(name, value) package.loaded[name] = value end
 stub("gettext", setmetatable({}, { __call = function(_, s) return s end }))
-for _, name in ipairs({ "knuthplass", "rclonesync", "statsync" }) do
+for _, name in ipairs({ "knuthplass", "supersync" }) do
     local meta = dofile(name .. ".koplugin/_meta.lua")
     check(type(meta.version) == "string" and meta.version:match("^%d+%.%d+%.%d+$"), name .. " _meta.lua version")
 end
@@ -77,13 +76,13 @@ check(UpdateCore.parseVersion("v1.2.3")[3] == 3 and UpdateCore.parseVersion("1.2
 check(UpdateCore.isNewer("0.10.0", "0.9.9") and not UpdateCore.isNewer("0.1.0", "0.1.0")
     and not UpdateCore.isNewer("junk", "0.1.0"), "isNewer")
 
-local U = UpdateCore.new{ name = "statsync", title = "Statistics sync", settings_key = "statsync_updates" }
-check(U.release_tag == "statsync" and U.folder == "statsync.koplugin", "release tag and folder from the name")
-check(U.entryPath("statsync.koplugin/main.lua") == "main.lua", "entry in the plugin folder")
-check(U.entryPath("statsync.koplugin/statsync/store.lua") == "statsync/store.lua", "entry in a subfolder")
+local U = UpdateCore.new{ name = "supersync", title = "SuperSync", settings_key = "supersync_updates" }
+check(U.release_tag == "supersync" and U.folder == "supersync.koplugin", "release tag and folder from the name")
+check(U.entryPath("supersync.koplugin/main.lua") == "main.lua", "entry in the plugin folder")
+check(U.entryPath("supersync.koplugin/supersync/store.lua") == "supersync/store.lua", "entry in a subfolder")
 check(U.entryPath("knuthplass.koplugin/main.lua") == nil, "another plugin's folder rejected")
-check(U.entryPath("statsync.koplugin/") == nil and U.entryPath("main.lua") == nil, "no file / no folder rejected")
-check(U.entryPath("statsync.koplugin/../evil.lua") == nil and U.entryPath("statsync.koplugin/a/../../x") == nil,
+check(U.entryPath("supersync.koplugin/") == nil and U.entryPath("main.lua") == nil, "no file / no folder rejected")
+check(U.entryPath("supersync.koplugin/../evil.lua") == nil and U.entryPath("supersync.koplugin/a/../../x") == nil,
     "path traversal rejected")
 
 local good = { version = "1.0.0", url = "https://example.com/x.zip", sha256 = string.rep("a", 64) }
@@ -97,12 +96,12 @@ check(not UpdateCore.validManifest({ version = "1.0.0", url = good.url, sha256 =
 check(U.getMode() == "notify", "notify by default")
 U.setMode("bogus")
 check(U.getMode() == "notify", "unknown mode ignored")
-local plugin = { version = "0.1.0", path = "/plugins/statsync.koplugin" }
+local plugin = { version = "0.1.0", path = "/plugins/supersync.koplugin" }
 local items = U.menuItems(plugin)
 check(items[1].text == "Check for updates (0.1.0)" and items[1].enabled_func(), "check item")
 check(items[2].text_func() == "Automatic updates: notify", "mode item")
 items[2].sub_item_table[3].callback()
-check(U.getMode() == "install" and store.statsync_updates.mode == "install", "mode saved under the plugin's key")
+check(U.getMode() == "install" and store.supersync_updates.mode == "install", "mode saved under the plugin's key")
 check(not U.menuItems({ version = "0.1.0" })[1].enabled_func(), "no path (not loaded by KOReader): can't update")
 
 -- Each plugin's updater is separate.
@@ -141,7 +140,7 @@ check(manifest_calls == 1 and shown[#shown].kind == "confirm" and shown[#shown].
 U.check(plugin, false)
 check(manifest_calls == 1, "automatic check at most once a day")
 
-store.statsync_updates.last_check = nil
+store.supersync_updates.last_check = nil
 U.setMode("install")
 U.check(plugin, false)
 check(#downloads == 1 and U.installed == "0.2.0" and #restarts == 1, "install: downloaded, installed, restart asked")
