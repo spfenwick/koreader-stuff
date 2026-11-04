@@ -161,7 +161,7 @@ A separate stream in each device folder, with its own numbering and seen
 tracking:
 
 ```
-<folder>/v2/devices/<device-id>/
+<folder>/Statistics/devices/<device-id>/
   meta.json
   seg-0000000001.jsonl.zst      statistics (unchanged)
   ann-0000000001.jsonl.zst      annotations
@@ -245,9 +245,10 @@ initial scan:
 
 A reset or deleted sidecar, a sidecar copied over from an old backup, or
 "Reset" in book settings all look like the user deleted everything. So when
-more than 5 items **and** more than half of a book's items vanish in one
-comparison (or all of them, for a book with a known merged state), no
-deletion records are made straight away. The user is asked instead:
+more than 5 of a book's items vanish in one comparison, no deletion records
+are made straight away. (As built: at the user's request, only the count
+matters. Earlier versions also required more than half of the book's items,
+or asked whenever all of them went, even one.) The user is asked instead:
 
 > 12 of 15 highlights and bookmarks in "Book title" were removed on this
 > device. Remove them on your other devices too?

@@ -37,8 +37,7 @@ Plugin.DEVICE_FILE = "supersync_device.lua"
 Plugin.STATE_FILE = "supersync.sqlite3"
 
 --- Folder on the server when none is set. Settings sync uses its Settings/
--- subfolder, statistics and annotations its Statistics/ subfolder: the
--- folders Settings sync and Statistics sync used by default.
+-- subfolder, statistics and annotations its Statistics/ subfolder.
 Plugin.DEFAULT_ROOT = "/KOReader"
 Plugin.SETTINGS_DIR = "Settings"
 Plugin.STATS_DIR = "Statistics"
@@ -169,14 +168,10 @@ function Plugin.settingsRoot()
     return "/" .. join(Plugin.root(), Plugin.SETTINGS_DIR)
 end
 
---- Subfolder for this format's (compressed) segments, as in Statistics sync
--- (whose 0.2.2 and earlier wrote uncompressed ones straight into the folder).
-Plugin.FORMAT_DIR = "v2"
-
 --- The folder for statistics and annotations, for the WebDAV client:
--- relative to the server's address. <root>/Statistics/v2.
+-- relative to the server's address. <root>/Statistics.
 function Plugin.remoteRoot()
-    return join(join(Plugin.root(), Plugin.STATS_DIR), Plugin.FORMAT_DIR)
+    return join(Plugin.root(), Plugin.STATS_DIR)
 end
 
 --- Where statistics and annotations sync to, for showing and for noticing

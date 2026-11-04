@@ -52,10 +52,10 @@ Highlights and bookmarks are designed in ANNOTATIONS.md.
    size a frame claims, and a downloaded file can be anything. Unpacking
    is refused above 32 MB. Compression happens in the main process after
    export, decompression just before each import (a few ms per segment).
-   The segment format inside is unchanged (`v` 1); the compressed files go
-   in a `v2/` subfolder, so 0.2.2 devices never see them, and updated
-   devices republish everything there (a new location resets the sync
-   record, see Store:useLocation).
+   The segment format inside is unchanged (`v` 1). (Statistics sync put the
+   compressed files in a `v2/` subfolder, so its 0.2.2 devices never saw
+   them; SuperSync, which those devices can't share a folder with anyway,
+   puts them straight in `<folder>/Statistics/`.)
 6. **`insertDB` doesn't save the page on screen.** Its duration isn't known
    until the page is turned, so the flush before export (calling the
    statistics plugin's `insertDB()`, as its own `onSuspend` does) writes
@@ -214,7 +214,7 @@ Highlights and bookmarks are designed in ANNOTATIONS.md.
 - **The server comes from Cloud storage, by name**, and is the one settings
   sync uses: `supersync_settings.lua` keeps `{name, type}` and a folder
   (default `/KOReader`, relative to the server's address; statistics and
-  annotations go in its `Statistics/v2/`), and the address and credentials
+  annotations go in its `Statistics/`), and the address and credentials
   are read from `cloudstorage.lua` when syncing. Statistics and annotations
   need a WebDAV server (settings sync also works with Dropbox). Nothing is
   shared with Reading statistics' own Cloud sync setting. With no server

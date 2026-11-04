@@ -188,9 +188,9 @@ sub[2].callback()
 check(fileData("supersync_settings.lua").server.name == "My DAV" and fileData("supersync_settings.lua").server.password == nil,
     "chosen server kept by name, no credentials")
 check(item("Server: My DAV (WebDAV)"), "chosen server shown")
-check(P.serverLocation() == server.url .. "/KOReader/Statistics/v2/", "location: " .. tostring(P.serverLocation()))
+check(P.serverLocation() == server.url .. "/KOReader/Statistics/", "location: " .. tostring(P.serverLocation()))
 check(P.serverLocation({ address = "https://me:secret@dav.example.com/dav/" })
-    == "https://dav.example.com/dav/KOReader/Statistics/v2/", "location shown without credentials")
+    == "https://dav.example.com/dav/KOReader/Statistics/", "location shown without credentials")
 
 -- Automatic sync is on: the start-up trigger syncs both, flushing the open book first.
 loop:run(60)
@@ -211,9 +211,9 @@ local function count(dir, pattern)
     end
     return n
 end
-local DAVDIR = server.dir .. "/KOReader/Statistics/v2/devices/"
+local DAVDIR = server.dir .. "/KOReader/Statistics/devices/"
 check(count(DAVDIR .. id, "^seg%-") == 1 and count(DAVDIR .. id, "^ann%-") == 1,
-    "compressed segments on the server under KOReader/Statistics/v2")
+    "compressed segments on the server under KOReader/Statistics")
 
 -- Offline: automatic triggers skip quietly
 connected = false
@@ -231,7 +231,7 @@ local WebDav = require("supersync/webdav")
 local ost = Store.new{ sq3 = S.SQ3, stats_path = other.db, state_path = other.state }
 local seg = TMP .. "/other.jsonl"
 ost:export{ device_id = "otherdev", out_path = seg, now = 1, max_events = 1000 }
-local dav = WebDav.new{ http = S.Http.new(), address = server.url, username = "u", password = "p", root = "KOReader/Statistics/v2" }
+local dav = WebDav.new{ http = S.Http.new(), address = server.url, username = "u", password = "p", root = "KOReader/Statistics" }
 check(require("supersync/zstd").compressFile(seg, seg .. ".zst"), "other device's segment compressed")
 dav:mkdir("devices/otherdev")
 check(dav:put_new("devices/otherdev/seg-0000000001.jsonl.zst", seg .. ".zst"), "other device's segment uploaded")
@@ -272,7 +272,7 @@ check(P.autoStats() and P.autoAnnotations(), "both on again")
 -- Status, rebuild
 item("Status").callback()
 check(shown[#shown].text:find("Devices seen: 2", 1, true), "status shows devices seen")
-check(shown[#shown].text:find("Statistics folder: " .. server.url .. "/KOReader/Statistics/v2/", 1, true),
+check(shown[#shown].text:find("Statistics folder: " .. server.url .. "/KOReader/Statistics/", 1, true),
     "status shows the folder")
 item("Rebuild statistics and highlights from cloud").callback()
 shown[#shown].ok_callback()
@@ -291,7 +291,7 @@ os.remove(dev.dir .. "/supersync.sqlite3")
 os.remove(dev.dir .. "/supersync_device.lua")
 S.mkdirp(server.dir .. "/Moved")
 cp(server.dir .. "/KOReader/Statistics", server.dir .. "/Moved/Statistics")
-local own_files = count(server.dir .. "/Moved/Statistics/v2/devices/" .. id, "%.zst$")
+local own_files = count(server.dir .. "/Moved/Statistics/devices/" .. id, "%.zst$")
 dofile("supersync.koplugin/main.lua") -- KOReader starting
 check(S.readFile(dev.dir .. "/supersync.sqlite3") and P.deviceState().device_id == id
     and P.deviceState().ann_scanned ~= nil, "database and device ID taken over")
@@ -305,7 +305,7 @@ loop:run(60)
 local q0 = shown[#shown]
 check(q0 and q0.confirm and q0.text:find("files aren't in the folder"), "folder without this device's files: asked: "
     .. tostring(q0 and q0.text))
-check(not io.open(server.dir .. "/Empty/Statistics/v2/devices/" .. id), "nothing written there")
+check(not io.open(server.dir .. "/Empty/Statistics/devices/" .. id), "nothing written there")
 -- Then the folder with the copied files.
 P.settings().root = "/Moved"
 P.saveSettings()
@@ -314,7 +314,7 @@ loop:run(60)
 st = P.deviceState().status
 check(not st.last_error and st.uploaded_events == 0, "nothing sent again to the copied folder: "
     .. tostring(st.uploaded_events) .. ", " .. tostring(st.last_error))
-check(count(server.dir .. "/Moved/Statistics/v2/devices/" .. id, "%.zst$") == own_files, "no new files")
+check(count(server.dir .. "/Moved/Statistics/devices/" .. id, "%.zst$") == own_files, "no new files")
 item("Sync highlights and bookmarks").callback()
 loop:run(60)
 st = P.deviceState().status
@@ -333,11 +333,11 @@ loop:run(60)
 st = P.deviceState().status
 check(not st.last_error and st.uploaded_events == 5, "send everything: all 5 entries sent ("
     .. tostring(st.uploaded_events) .. ", " .. tostring(st.last_error) .. ")")
-check(io.open(server.dir .. "/Fresh/Statistics/v2/devices/" .. id .. "/seg-0000000001.jsonl.zst") ~= nil,
+check(io.open(server.dir .. "/Fresh/Statistics/devices/" .. id .. "/seg-0000000001.jsonl.zst") ~= nil,
     "segment in the new folder")
 
 -- Highlights and bookmarks ----------------------------------------------------------------
-local FRESH = "Fresh/Statistics/v2"
+local FRESH = "Fresh/Statistics"
 local dev_id = id
 local function annSegs() return count(server.dir .. "/" .. FRESH .. "/devices/" .. dev_id, "^ann%-%d+%.jsonl%.zst$") end
 local segs0 = annSegs()
@@ -390,19 +390,31 @@ package.loaded["apps/reader/readerui"].instance = { statistics = stats }
 loop:run(60)
 check(annSegs() == segs0 + 1 and P.deviceState().status.ann_uploaded == 1, "new highlight sent after closing the book")
 
--- Opening it again with its annotations gone (book settings reset): asks
+-- Three more highlights, so the book has 6
+for i = 1, 3 do
+    local xp = "/body/DocFragment[8]/body/p[" .. i .. "]/text().0"
+    table.insert(reader.annotation.annotations, { datetime = "2026-05-05 05:05:0" .. i, drawer = "lighten",
+                                                  text = "more " .. i, page = xp, pos0 = xp, pos1 = xp })
+end
+package.loaded["apps/reader/readerui"].instance = reader
+reader_plugin:onCloseDocument()
+package.loaded["apps/reader/readerui"].instance = { statistics = stats }
+loop:run(60)
+
+-- Opening it again with its annotations gone (book settings reset): more
+-- than 5 at once, so it asks
 reader.annotation.annotations = {}
 reader_plugin.ui.registerPostReaderReadyCallback = nil
 reader_plugin:onReaderReady()
 loop:run(5, function() return shown[#shown].multi end)
 local q = shown[#shown]
-check(q.multi and q.text:find("3 of 3", 1, true) and q.text:find("Annotated", 1, true), "asked about the removed highlights: " .. tostring(q.text))
+check(q.multi and q.text:find("6 of 6", 1, true) and q.text:find("Annotated", 1, true), "asked about the removed highlights: " .. tostring(q.text))
 check(item("Removed highlights waiting").enabled_func(), "held removals: menu item enabled")
 item("Status").callback()
 check(shown[#shown].text:find("Books with removals waiting for you: 1", 1, true), "status shows the held book")
 package.loaded["apps/reader/readerui"].instance = reader
 q.choice1_callback() -- restore them here
-check(#reader.annotation.annotations == 3, "restored in the open book")
+check(#reader.annotation.annotations == 6, "restored in the open book")
 check(not item("Removed highlights waiting").enabled_func(), "nothing held any more")
 package.loaded["apps/reader/readerui"].instance = { statistics = stats }
 

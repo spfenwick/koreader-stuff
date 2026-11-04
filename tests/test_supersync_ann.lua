@@ -377,8 +377,6 @@ do -- order independence and newest-wins, three devices
     clock = t0 + 2; A:open(M1, "rolling"); A:edit(A.ui.annotation.annotations[1], { note = "A" }); A:close()
     clock = t0 + 5; B:open(M1, "rolling"); B:edit(B.ui.annotation.annotations[1], { note = "B" }); B:close()
     clock = t0 + 9; C:open(M1, "rolling"); C:remove(C.ui.annotation.annotations[1]); C:close()
-    -- (its only highlight: held until the user says to remove it everywhere)
-    C.sync:askHeld(); C.asked[#C.asked].done("remove")
     clock = t0 + 20
     local segs = { A = A:export(), B = B:export(), C = C:export() }
     check(segs.A and segs.B and segs.C, "each sends its change")
@@ -472,7 +470,7 @@ do -- mass deletion: held, then each answer
     check(#A.store:held() == 0 and A.store:isPending(M1, "rolling"), "restore: no longer held, to be applied")
     A:open(M1, "rolling")
     check(#A.ui.annotation.annotations == 8, "restored on open")
-    -- 6 of 8 removed (more than 5 and more than half): held; answer remove
+    -- 6 of 8 removed (more than 5): held; answer remove
     tick(5)
     local items = A.ui.annotation.annotations
     for _ = 1, 6 do table.remove(items, 1) end
@@ -491,16 +489,33 @@ do -- mass deletion: held, then each answer
     check(C:close() == 0, "3 of 8 removed: not held")
     local _, cr = C:export()
     check(cr and cr.records == 3, "3 deletions sent straight away")
-    -- The only highlight removed: all gone, asks
+    -- The only highlight removed: 5 or fewer, deleted straight away
     C:open(M1, "rolling"); C:highlight(1, 1, 0, 1); tick(); C:close(); C:export()
     C:open(M1, "rolling")
-    local before = deepcopy(C.ui.annotation.annotations)
     table.remove(C.ui.annotation.annotations, 1)
-    check(C:close() == 1, "all of a book's annotations gone: held")
+    check(C:close() == 0, "a book's only highlight removed: not held")
+    local _, cr1 = C:export()
+    check(cr1 and cr1.records == 1, "its deletion sent straight away")
+    -- 6 of 20: fewer than half, but more than 5: held
+    local D = newDev("D")
+    D:open(M2, "rolling")
+    for i = 1, 20 do D:highlight(i, 1, 0, 4); tick() end
+    D:close(); D:export()
+    D:open(M2, "rolling")
+    for _ = 1, 6 do table.remove(D.ui.annotation.annotations, 1) end
+    check(D:close() == 6, "6 of 20 removed: held")
+    -- All 6 of a book's removed: held
+    C:open(M1, "rolling")
+    for i = 2, 7 do C:highlight(i, 1, 0, 1); tick() end
+    C:close(); C:export()
+    C:open(M1, "rolling")
+    local before = deepcopy(C.ui.annotation.annotations)
+    for _ = 1, 6 do table.remove(C.ui.annotation.annotations, 1) end
+    check(C:close() == 6, "all 6 of a book's annotations gone: held")
     -- Put back by hand before answering: no longer held, nothing sent
     C:sidecar(M1, "rolling", before)
     C:open(M1, "rolling")
-    check(#C.ui.annotation.annotations == 1, "item back")
+    check(#C.ui.annotation.annotations == 6, "items back")
     C:close()
     check(#C.store:held() == 0 and C:export() == nil, "back again: no longer held, nothing to send")
 end

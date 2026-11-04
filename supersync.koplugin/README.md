@@ -84,11 +84,12 @@ book being read), whether or not automatic sync is on.
 ```
 <folder on server>/        /KOReader unless changed
   Settings/                settings (manifest.tsv, lists/, settings/, plugins/, …)
-  Statistics/v2/devices/   statistics and highlights, a folder per device
+  Statistics/devices/      statistics and highlights, a folder per device
 ```
 
-These are the folders Settings sync and Statistics sync used by default
-(`/KOReader/Settings` and `/KOReader/Statistics`).
+Settings sync used the same `/KOReader/Settings` by default. Statistics
+sync kept its device folders one level deeper, in
+`/KOReader/Statistics/v2/devices/`.
 
 ## Moving from Settings sync and Statistics sync
 
@@ -100,12 +101,14 @@ the server, and it has one folder for both.
    folder (`/KOReader` unless you choose another):
    - everything in Settings sync's folder (`manifest.tsv`, `lists/`,
      `settings/`, …) into `<folder>/Settings/`;
-   - everything in Statistics sync's folder (its `v2/` folder) into
+   - the `devices/` folder from Statistics sync's `v2/` folder into
      `<folder>/Statistics/`, so its device folders end up in
-     `<folder>/Statistics/v2/devices/`.
+     `<folder>/Statistics/devices/`.
 
-   If both plugins used their default folders on the same server, they're
-   in place already, and there's nothing to copy.
+   If both plugins used their default folders on the same server, settings
+   are in place already; for statistics, move
+   `/KOReader/Statistics/v2/devices/` to `/KOReader/Statistics/devices/`
+   (then delete the empty `v2/`).
 2. **On each device**: install SuperSync (above) and restart KOReader. On
    the first start it takes over the old plugins' data, turns the old
    plugins off, and says so. Delete `rclonesync.koplugin` and

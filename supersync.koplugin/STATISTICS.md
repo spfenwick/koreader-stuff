@@ -20,7 +20,7 @@ mixing them gives confusing results.
 
 ```
 <folder on server>/Statistics/    /KOReader/Statistics unless changed
-  v2/devices/<device-id>/
+  devices/<device-id>/
     meta.json                     device ID, model, format version, when written
     seg-0000000001.jsonl.zst      segment files, numbered 1, 2, 3, …
     seg-0000000002.jsonl.zst
@@ -47,9 +47,10 @@ book (by KOReader's partial MD5 of the file), page, start time, duration, and
 the book's page count at the time. Segments hold at most 20,000 events
 (about 2 MB, about 170 KB compressed).
 
-(The `v2/` is from Statistics sync, whose 0.2.2 and earlier wrote
-uncompressed `seg-N.jsonl` files straight into the folder. SuperSync
-doesn't read those.)
+(Statistics sync kept these in a `v2/` subfolder, as its 0.2.2 and
+earlier wrote uncompressed `seg-N.jsonl` files straight into the folder.
+SuperSync doesn't use the subfolder, and doesn't read the uncompressed
+files.)
 
 ## Guarantees
 
@@ -128,10 +129,11 @@ and removals.
 - **Newest change wins.** If the same highlight is changed on two devices,
   the later change wins, by the devices' clocks. A removal counts as a
   change: it wins over an earlier edit, and loses to a later one.
-- **Removing many at once asks first.** If more than 5 and more than half of
-  a book's highlights and bookmarks disappear at once, or all of them (for
-  example the book's settings were reset or its `.sdr` folder deleted),
-  they're not removed elsewhere straight away. You're asked:
+- **Removing many at once asks first.** If more than 5 of a book's
+  highlights and bookmarks disappear at once (for example the book's
+  settings were reset or its `.sdr` folder deleted), they're not removed
+  elsewhere straight away. 5 or fewer are removed everywhere at the next
+  sync, even if they were all the book had. When more go, you're asked:
   - **Restore them here**: they're put back on this device;
   - **Remove everywhere**: they're removed on the other devices too;
   - **Ask later**: nothing happens; you're asked again after the next sync
