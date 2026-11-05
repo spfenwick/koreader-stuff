@@ -140,11 +140,16 @@ function OmniSync:init()
         UIManager:scheduleIn(STARTUP_DELAY, function() self.trigger("start") end)
     end
     Updater.scheduleCheck(self)
-    if migrated and #migrated > 0 and not migrated.shown then
+    if migrated and (migrated.supersync or migrated.layout) and not migrated.shown then
         migrated.shown = true
-        UIManager:nextTick(function()
-            notify(_([[OmniSync took over SuperSync's data and settings on this device. Delete supersync.koplugin from KOReader's plugins folder.]]))
-        end)
+        local texts = {}
+        if migrated.supersync then
+            table.insert(texts, _([[OmniSync took over SuperSync's data and settings on this device. Delete supersync.koplugin from KOReader's plugins folder.]]))
+        end
+        if migrated.layout then
+            table.insert(texts, _([[Settings sync now has one list of what to sync, settings/omnisync/sync.txt, made from the three lists in koreader/omnisync/.]]))
+        end
+        UIManager:nextTick(function() notify(table.concat(texts, "\n\n")) end)
     end
     if startup and not startup.shown then
         startup.shown = true
@@ -543,7 +548,7 @@ function OmniSync:menuItems()
     local items = {
         {
             text = _("Sync settings"),
-            help_text = _([[Settings, and the plugins, patches, dictionaries, fonts and style tweaks the lists in koreader/omnisync/ name. Pulled settings are put in place at the next start.]]),
+            help_text = _([[Settings, plugins, patches, dictionaries, fonts and anything else in KOReader's folder that settings/omnisync/sync.txt lists. Pulled settings are put in place at the next start.]]),
             callback = function(touchmenu_instance)
                 if touchmenu_instance then touchmenu_instance:closeMenu() end
                 self:syncSettings()

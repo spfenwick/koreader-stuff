@@ -40,10 +40,10 @@ Plugin.SHARED_FILE = Plugin.DIR .. "/settings.lua"
 Plugin.DEVICE_FILE = Plugin.DIR .. "/device.lua"
 Plugin.STATE_FILE = Plugin.DIR .. "/state.sqlite3"
 
---- Folder on the server when none is set. Settings sync uses its Settings/
+--- Folder on the server when none is set. Settings sync uses its Files/
 -- subfolder, statistics and annotations its Statistics/ subfolder.
 Plugin.DEFAULT_ROOT = "/KOReader"
-Plugin.SETTINGS_DIR = "Settings"
+Plugin.SETTINGS_DIR = "Files"
 Plugin.STATS_DIR = "Statistics"
 
 --- Makes settings/omnisync/ if it isn't there; returns the settings folder.
@@ -177,7 +177,7 @@ end
 
 local function join(a, b) return require("omnisync/webdav").join(a, b) end
 
---- Settings sync's folder: <root>/Settings.
+--- Settings sync's folder: <root>/Files.
 function Plugin.settingsRoot()
     return "/" .. join(Plugin.root(), Plugin.SETTINGS_DIR)
 end

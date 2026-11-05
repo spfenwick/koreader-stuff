@@ -55,6 +55,6 @@ release.
 - The first version of a plugin with the updater (Knuth–Plass already has
   it; OmniSync has it from its first release) has to be copied to the
   device by hand.
-- Don't list these plugins in OmniSync's `plugins.txt`: the sync and the
-  updater would both write their folders. Settings sync is for settings,
-  patches and plugins not published here.
+- OmniSync's settings sync never syncs these plugins' folders (even if
+  `sync.txt` lists them): the sync and the updater would both write them.
+  Settings sync is for settings, patches and plugins not published here.

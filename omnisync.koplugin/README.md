@@ -28,7 +28,7 @@ It was called SuperSync, and takes over SuperSync's data on each device
 4. Tools → OmniSync → Folder on server: `/KOReader` unless you change it.
    It's relative to the server's address; the folder set for the server in
    Cloud storage isn't used. Use the same server and folder on every device.
-5. For settings, put the lists of what to sync in `koreader/omnisync/`
+5. For settings, list what to sync in `settings/omnisync/sync.txt`
    (see [SETTINGS.md](SETTINGS.md)).
 
 ## Menu
@@ -86,12 +86,12 @@ into a book when it's opened, whether or not automatic sync is on.
 
 ```
 <folder on server>/        /KOReader unless changed
-  Settings/                settings (manifest.tsv, lists/, settings/, plugins/, …)
+  Files/                   settings sync (manifest.tsv, files/ as in KOReader's folder)
   Statistics/devices/      statistics and highlights, a folder per device
 ```
 
-Settings sync used the same `/KOReader/Settings` by default. Statistics
-sync kept its device folders one level deeper, in
+Earlier versions kept settings sync's files in `Settings/` (see
+[SETTINGS.md](SETTINGS.md#from-the-earlier-layout)). Statistics sync kept its device folders one level deeper, in
 `/KOReader/Statistics/v2/devices/`.
 
 ## Moving from SuperSync
@@ -113,8 +113,8 @@ What's moved, on the first start without SuperSync:
 | `settings/supersync_settings.lua` | `settings/omnisync/settings.lua` |
 | `settings/supersync_device.lua` | `settings/omnisync/device.lua` |
 | `settings/supersync.sqlite3` | `settings/omnisync/state.sqlite3` |
-| `koreader/supersync/` (settings sync's lists, state, conflicts, logs) | `koreader/omnisync/` |
-| `/supersync_settings.lua` in `settings.txt` | `/omnisync/settings.lua` |
+| `koreader/supersync/` (settings sync's lists, state, conflicts, logs) | `settings/omnisync/sync.txt` and `settings-sync/` (see [SETTINGS.md](SETTINGS.md#from-the-earlier-layout)) |
+| `/supersync_settings.lua` in `settings.txt` | `/settings/omnisync/settings.lua` in `sync.txt` |
 | SuperSync's automatic updates setting | OmniSync's |
 | gestures and profiles for SuperSync's syncs | OmniSync's |
 
@@ -130,21 +130,25 @@ In KOReader's `settings/omnisync/` folder:
   `cloudstorage.lua`), folder, the automatic syncs, "Turn on Wi-Fi to sync",
   and `time_limit` (seconds before the network step of a statistics sync is
   stopped, default 180; not in the menu). **Fine to sync**: add
-  `/omnisync/settings.lua` to `settings.txt`. A synced change takes effect
+  `/settings/omnisync/settings.lua` to `sync.txt`. A synced change takes effect
   at the next start.
 - `device.lua`: this device's ID and sync status. Devices sharing it
   would share an ID.
 - `state.sqlite3`: what was sent and received, and the merged
   highlights of every book. Safe to delete, at the cost of sending
   everything once more.
+- `sync.txt`: settings sync's list of what to sync (see
+  [SETTINGS.md](SETTINGS.md)).
+- `settings-sync/`: settings sync's state, pulled settings waiting for a
+  restart, conflicts and logs.
 
-Settings sync never syncs `device.lua` or `state.sqlite3`, even if
-`settings.txt` names them (a sync's log says it skipped them), so
-`/omnisync/**` there syncs only `settings.lua`.
+Settings sync never syncs `device.lua`, `state.sqlite3` or
+`settings-sync/`, even if `sync.txt` names them (a sync's log says it
+skipped them), so `/settings/omnisync/**` there syncs only `settings.lua`
+(and the list, which is always synced).
 
-Also: `koreader/omnisync/` (settings sync's lists, state, pulled settings
-waiting for a restart, conflicts and logs), `cache/omnisync/` (temporary
-files), and the updater's setting (`omnisync_updates` in
+Also: `cache/omnisync/` (temporary files, and settings sync's checksums),
+and the updater's setting (`omnisync_updates` in
 `settings.reader.lua`, kept per device).
 
 Logs: statistics and highlights messages start with `StatSync:`, the rest
@@ -157,8 +161,8 @@ with `OmniSync:`, in KOReader's `crash.log`. Passwords are never logged.
 online: off, notify (the default: asks first), or install. An update is
 checked (checksum, complete plugin) before it replaces the installed one,
 and takes effect after a restart. Don't also copy this plugin between
-devices with settings sync (`plugins.txt`): the two would fight over its
-folder.
+devices with settings sync: it never syncs this plugin's folder, as the
+two would fight over it.
 
 ## Tests
 
