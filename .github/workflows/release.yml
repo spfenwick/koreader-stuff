@@ -1,7 +1,10 @@
-# Publishes a release of one plugin for its updater, either
+# Publishes releases of the plugins for their updater:
 #
+# - automatically, when a push to main changes a plugin's version (its
+#   _meta.lua): every plugin whose version has no <plugin>-vX.Y.Z release
+#   yet is released, tagging the commit pushed;
 # - when a <plugin>-vX.Y.Z tag is pushed (e.g. supersync-v1.0.0; the version
-#   must match the plugin's _meta.lua), or
+#   must match the plugin's _meta.lua); or
 # - by hand (Actions → Release plugin → Run workflow, on main, choosing the
 #   plugin), which tags the commit with the version in its _meta.lua.
 #
@@ -14,12 +17,17 @@
 # (A fixed tag per plugin, so the plugins' releases can't hide each other the
 # way they could with "latest". Like "engine", these are prereleases.)
 #
+# Tags made here use the workflow's token, so they don't start this workflow
+# again.
+#
 # Knuth–Plass releases before 0.6 were tagged vX.Y.Z; its rolling release
 # ("knuthplass") is the same, so installed copies keep updating.
 name: Release plugin
 
 on:
   push:
+    branches: [main]
+    paths: ["*.koplugin/_meta.lua"]
     tags: ["*-v*.*.*"]
   workflow_dispatch:
     inputs:
@@ -31,14 +39,84 @@ on:
 permissions:
   contents: write
 
-# One release at a time.
+# One run at a time, so a run sees the releases the previous one made.
 concurrency:
   group: plugin-release
   cancel-in-progress: false
 
+env:
+  PLUGINS: knuthplass supersync
+
 jobs:
-  release:
+  # Which plugins to release: the tag's, the one chosen, or (on a push to
+  # main) every plugin whose version isn't released yet.
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      plugins: ${{ steps.plan.outputs.plugins }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_PLUGIN: ${{ inputs.plugin }}
+        run: |
+          set -euo pipefail
+          released() {
+            gh release view "$1" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              || git ls-remote --exit-code --tags origin "refs/tags/$1" >/dev/null
+          }
+          version() {
+            sed -n 's/^ *version = "\([0-9]*\.[0-9]*\.[0-9]*\)",$/\1/p' "$1.koplugin/_meta.lua"
+          }
+          list=""
+          case "$EVENT:$REF" in
+            push:refs/tags/*) list=${REF_NAME%-v*} ;;
+            workflow_dispatch:*) list=$INPUT_PLUGIN ;;
+            push:refs/heads/main)
+              for p in $PLUGINS; do
+                v=$(version "$p")
+                if [ -z "$v" ]; then
+                  echo "::warning::no version in $p.koplugin/_meta.lua"
+                elif released "$p-v$v"; then
+                  echo "$p $v: already released"
+                else
+                  echo "$p $v: new version"
+                  list="$list $p"
+                fi
+              done
+              ;;
+          esac
+          json=$(printf '%s\n' $list | jq -R . | jq -sc 'map(select(. != ""))')
+          echo "Releasing: $json"
+          echo "plugins=$json" >> "$GITHUB_OUTPUT"
+
+  # All plugins' tests, once: they share the updater.
+  test:
+    needs: plan
+    if: needs.plan.outputs.plugins != '[]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y luajit lua-filesystem libsqlite3-0 libzstd1 rclone
+          sh scripts/test.sh
+          sh scripts/test-supersync.sh
+
+  release:
+    needs: [plan, test]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJSON(needs.plan.outputs.plugins) }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -49,20 +127,17 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
-          INPUT_PLUGIN: ${{ inputs.plugin }}
+          plugin: ${{ matrix.plugin }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" = "push" ]; then
-            plugin=${REF_NAME%-v*}
-          else
-            plugin=$INPUT_PLUGIN
-            if [ "$REF" != "refs/heads/main" ]; then
-              echo "::error::run it on main (not $REF_NAME)"
-              exit 1
-            fi
+          is_tag=false
+          case "$REF" in refs/tags/*) is_tag=true ;; esac
+          if [ "$is_tag" = false ] && [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::run it on main (not $REF_NAME)"
+            exit 1
           fi
-          case "$plugin" in
-            knuthplass|supersync) ;;
+          case " $PLUGINS " in
+            *" $plugin "*) ;;
             *) echo "::error::unknown plugin '$plugin'"; exit 1 ;;
           esac
           meta="$plugin.koplugin/_meta.lua"
@@ -71,7 +146,7 @@ jobs:
           title=$(sed -n 's/^ *fullname = _("\(.*\)"),$/\1/p' "$meta")
           [ -n "$title" ] || title=$plugin
           tag="$plugin-v$version"
-          if [ "$EVENT" = "push" ]; then
+          if [ "$is_tag" = true ]; then
             if [ "$tag" != "$REF_NAME" ]; then
               echo "::error::tag $REF_NAME does not match $meta version $version"
               exit 1
@@ -89,14 +164,6 @@ jobs:
             echo "TITLE=$title"
           } >> "$GITHUB_ENV"
 
-      # All plugins' tests: they share the updater.
-      - name: Test
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y luajit lua-filesystem libsqlite3-0 libzstd1 rclone
-          sh scripts/test.sh
-          sh scripts/test-supersync.sh
-
       - name: Package
         run: |
           set -euo pipefail
@@ -109,7 +176,7 @@ jobs:
             > out/plugin.json
           cat out/plugin.json
 
-      # For a manual run this also creates the tag, on the commit tested.
+      # Unless a tag was pushed, this also creates the tag, on the commit tested.
       - name: Publish
         run: |
           gh release create "$TAG" -R "$GITHUB_REPOSITORY" --latest=false --target "$GITHUB_SHA" \
