@@ -237,7 +237,8 @@ function Sync:syncSeries(series_url, stamp)
     return in_series
 end
 
---- Quick sync: reads the newest books until it reaches ones already known.
+--- Quick sync: reads the newest books until it reaches ones already known
+-- (always at least the first page).
 -- Returns { added, needs_full, remote_count, total, requests } or nil, err.
 -- needs_full is true when the counts still differ afterwards (books were
 -- removed, or more were added than the new-books feed showed).
@@ -251,16 +252,16 @@ function Sync:quick()
     local e, err = self:endpoints()
     if not e then return nil, err end
     local remote = self:remoteCount()
-    if remote and remote == store:count() then
-        store:setMeta("last_sync", started)
-        return { added = 0, needs_full = false, remote_count = remote, total = remote,
+    if not e.new then
+        local same = remote ~= nil and remote == store:count()
+        if same then store:setMeta("last_sync", started) end
+        return { added = 0, needs_full = not same, remote_count = remote, total = store:count(),
             requests = self.requests, seconds = self.now() - started,
             timing = self:timings(self.clock() - t_start) }
     end
-    if not e.new then
-        return { added = 0, needs_full = true, remote_count = remote, total = store:count(),
-            requests = self.requests }
-    end
+    -- Even when the counts match, read the newest page: a book added and
+    -- another removed leave the count unchanged. Usually that's one page,
+    -- which already holds known books.
     local added = 0
     local stamp = tonumber(store:getMeta("last_full_sync"))
     local ok, perr = self:eachPage(e.new, function(feed, page)

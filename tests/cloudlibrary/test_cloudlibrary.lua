@@ -380,13 +380,27 @@ do
     eq(store:count(), 9, "failed crawl deletes nothing")
     server.fail = {}
 
-    -- Quick sync: nothing new costs two requests (stats + nothing else).
+    -- Quick sync: nothing new costs two requests (the count, the newest page).
     newSync(store, server, 4000):full()
     local s = newSync(store, server)
     local q = s:quick()
     eq(q.added, 0, "quick: nothing new")
     check(not q.needs_full, "quick: no full sync needed")
-    eq(s.requests, 1, "quick when counts match: one request")
+    eq(s.requests, 2, "quick when counts match: count and newest page")
+
+    -- One added and one removed: the count is unchanged, the newest page
+    -- still shows the new book, and a full sync is asked for (the removal).
+    local swap = makeBooks(20)[20]
+    swap.added = 1750000000 -- newer than the books so far, older than ones added later
+    local removed = table.remove(books, 1)
+    table.insert(books, swap)
+    local qs = newSync(store, server):quick()
+    eq(qs.added, 1, "quick: new book found though the count is unchanged")
+    check(store:has(swap.uuid), "new book stored")
+    check(qs.needs_full, "quick: asks for a full sync to find the removal")
+    local fs = newSync(store, server, 4500):full()
+    eq(fs.deleted, 1, "full sync removes the other book")
+    check(not store:has(removed.uuid), "removed book gone")
 
     -- New books arrive.
     local extra = makeBooks(14)
@@ -407,7 +421,7 @@ do
 
     -- Reopen.
     local again = Store.open(TMP .. "/db/a.sqlite3", false)
-    eq(again:count(), 12, "data persists")
+    eq(again:count(), #books + 1, "data persists")
     again:close()
 end
 
