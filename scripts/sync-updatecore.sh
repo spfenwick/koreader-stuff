@@ -7,7 +7,7 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
 for target in \
     knuthplass.koplugin/knuthplass_updatecore.lua \
-    supersync.koplugin/supersync/updatecore.lua
+    omnisync.koplugin/omnisync/updatecore.lua
 do
     cp shared/updatecore.lua "$target"
     echo "updated $target"

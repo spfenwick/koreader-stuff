@@ -20,11 +20,11 @@ cd "$repo_dir"
     knuthplass.koplugin/knuthplass_loader.lua \
     knuthplass.koplugin/knuthplass_updatecore.lua \
     shared/updatecore.lua \
-    supersync.koplugin/_meta.lua \
-    supersync.koplugin/main.lua \
-    supersync.koplugin/supersync/*.lua
+    omnisync.koplugin/_meta.lua \
+    omnisync.koplugin/main.lua \
+    omnisync.koplugin/omnisync/*.lua
 "$lua_bin" tests/test_updatecore.lua
 "$lua_bin" tests/test_plugin.lua
-"$lua_bin" tests/test_supersync_settings.lua
-# The rest of supersync.koplugin's tests need KOReader's sources and rclone:
-# scripts/test-supersync.sh
+"$lua_bin" tests/test_omnisync_settings.lua
+# The rest of omnisync.koplugin's tests need KOReader's sources and rclone:
+# scripts/test-omnisync.sh

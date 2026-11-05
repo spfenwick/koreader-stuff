@@ -3,7 +3,7 @@
 # - automatically, when a push to main changes a plugin's version (its
 #   _meta.lua): every plugin whose version has no <plugin>-vX.Y.Z release
 #   yet is released, tagging the commit pushed;
-# - when a <plugin>-vX.Y.Z tag is pushed (e.g. supersync-v1.0.0; the version
+# - when a <plugin>-vX.Y.Z tag is pushed (e.g. omnisync-v1.0.0; the version
 #   must match the plugin's _meta.lua); or
 # - by hand (Actions → Release plugin → Run workflow, on main, choosing the
 #   plugin), which tags the commit with the version in its _meta.lua.
@@ -34,7 +34,7 @@ on:
       plugin:
         description: Plugin to release
         type: choice
-        options: [knuthplass, supersync]
+        options: [knuthplass, omnisync]
 
 permissions:
   contents: write
@@ -45,7 +45,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PLUGINS: knuthplass supersync
+  PLUGINS: knuthplass omnisync
 
 jobs:
   # Which plugins to release: the tag's, the one chosen, or (on a push to
@@ -108,7 +108,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y luajit lua-filesystem libsqlite3-0 libzstd1 rclone
           sh scripts/test.sh
-          sh scripts/test-supersync.sh
+          sh scripts/test-omnisync.sh
 
   release:
     needs: [plan, test]
