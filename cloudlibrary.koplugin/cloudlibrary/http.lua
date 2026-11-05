@@ -5,7 +5,8 @@ from a subprocess.
 
 local Http = {}
 
---- Returns body, or nil and an error message.
+--- Returns body, or nil, an error message and "http" (the server answered
+-- with an error) or "network" (it wasn't reached).
 -- server: { url, username, password } as in KOReader's OPDS settings.
 function Http.get(server, url)
     local http = require("socket.http")
@@ -27,10 +28,14 @@ function Http.get(server, url)
     })
     socketutil:reset_timeout()
     if code == 200 then return table.concat(sink) end
-    if code == 401 or code == 403 then
-        return nil, "The server refused the user name or password (" .. tostring(code) .. ")."
+    -- Without an HTTP status, the server wasn't reached (no network, timeout).
+    if type(code) ~= "number" then
+        return nil, "Network error: " .. tostring(code or status), "network"
     end
-    return nil, "Request failed: " .. tostring(status or code) .. " " .. url
+    if code == 401 or code == 403 then
+        return nil, "The server refused the user name or password (" .. tostring(code) .. ").", "http"
+    end
+    return nil, "Request failed: " .. tostring(status or code) .. " " .. url, "http"
 end
 
 --- Downloads url to path, streaming (books can be large). Returns true, or

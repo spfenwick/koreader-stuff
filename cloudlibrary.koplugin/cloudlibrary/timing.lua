@@ -28,6 +28,11 @@ do
 end
 Timing.clock = clock
 
+--- Packs return values keeping nils ({ fn() } loses values after a nil).
+function Timing.pack(...)
+    return { n = select("#", ...), ... }
+end
+
 function Timing.start()
     return clock()
 end
@@ -122,9 +127,9 @@ function Timing.collector()
     end
     function c.measure(name, fn, ...)
         local t0 = clock()
-        local results = { fn(...) }
+        local results = Timing.pack(fn(...))
         c.add(name, clock() - t0)
-        return unpack(results)
+        return unpack(results, 1, results.n)
     end
     return c
 end

@@ -12,7 +12,7 @@ does. formats is "type\tsize\thref" lines.
 local SQ3 = require("lua-ljsqlite3/init")
 local logger = require("logger")
 
-local SCHEMA_VERSION = 2
+local SCHEMA_VERSION = 3
 
 local SCHEMA = [[
 CREATE TABLE IF NOT EXISTS books (
@@ -86,6 +86,11 @@ function Store.open(path, wal)
             ALTER TABLE books ADD COLUMN cover_w INTEGER;
             ALTER TABLE books ADD COLUMN cover_h INTEGER;
             ALTER TABLE books ADD COLUMN cover_failed INTEGER;]])
+    end
+    if version == 1 or version == 2 then
+        -- 2 -> 3: version 2 also marked covers as failed when the network
+        -- was lost; forget those marks.
+        conn:exec("UPDATE books SET cover_failed = NULL;")
     elseif version ~= 0 and version ~= SCHEMA_VERSION then
         -- A cache: start again rather than migrate.
         logger.info("CloudLibrary: catalog schema", version, "-> rebuilding")
@@ -276,10 +281,11 @@ function Store:missingCovers(limit, retry_before)
 end
 
 function Store:coverCounts()
-    local with_cover, downloaded = self.conn:rowexec([[SELECT
+    local with_cover, downloaded, failed = self.conn:rowexec([[SELECT
         COUNT(CASE WHEN cover IS NOT NULL THEN 1 END),
-        COUNT(cover_file) FROM books;]])
-    return tonumber(with_cover) or 0, tonumber(downloaded) or 0
+        COUNT(cover_file),
+        COUNT(CASE WHEN cover_file IS NULL AND cover_failed IS NOT NULL THEN 1 END) FROM books;]])
+    return tonumber(with_cover) or 0, tonumber(downloaded) or 0, tonumber(failed) or 0
 end
 
 --- Cover file names in use.

@@ -45,6 +45,8 @@ function CloudLibrary:init()
     if first then
         Virtual.details = Library.bookDetails
         Virtual.install()
+        require("cloudlibrary/badge").install()
+        require("cloudlibrary/search").install(Virtual)
     end
     if self.ui.document then return end -- reader: menu only
     local fixture = loadFixture()

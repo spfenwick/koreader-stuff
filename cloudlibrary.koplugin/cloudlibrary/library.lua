@@ -8,6 +8,8 @@ Settings (G_reader_settings "cloudlibrary"):
   folder     library folder (default: KOReader's download folder, else home)
   show       show cloud books (default true)
   auto_sync  sync when the file browser opens and Wi-Fi is on (default true)
+  badge      on-device badge on local catalog books (default true)
+  search     cloud books in file search results (default true)
 
 The password stays in KOReader's OPDS settings and is read from there.
 ]]
@@ -22,9 +24,11 @@ local util = require("util")
 local _ = require("gettext")
 local T = ffiutil.template
 
+local Badge = require("cloudlibrary/badge")
 local Covers = require("cloudlibrary/covers")
 local Downloads = require("cloudlibrary/downloads")
 local Matcher = require("cloudlibrary/matcher")
+local Search = require("cloudlibrary/search")
 local Store = require("cloudlibrary/store")
 local Timing = require("cloudlibrary/timing")
 local Virtual = require("cloudlibrary/virtual")
@@ -38,6 +42,9 @@ local Library = {
     last_result = nil,  -- last job's result table
     stats = {},         -- counts from the last load
 }
+
+Library.on_device = {} -- path -> true: local files that are catalog books
+Badge.isOnDevice = function(path) return Library.on_device[path] == true end
 
 local QUICK_INTERVAL = 60 * 60       -- auto sync at most hourly
 local FULL_INTERVAL = 24 * 60 * 60   -- and a full sync daily
@@ -124,8 +131,11 @@ end
 function Library.load()
     local server, folder = Library.server(), Library.folder()
     local s = Library.settings()
+    Badge.enabled = s.badge ~= false
+    Search.enabled = s.search ~= false
     if not server or not folder or s.show == false then
         Library.stats = {}
+        Library.matched, Library.on_device = {}, {}
         Covers.configure(nil)
         showCatalog(folder, {})
         return
@@ -137,7 +147,7 @@ function Library.load()
     local t0 = Timing.start()
     local store = openStore(server)
     local books = store:listing()
-    local with_cover, downloaded = store:coverCounts()
+    local with_cover, downloaded, failed = store:coverCounts()
     for _i, b in ipairs(books) do
         if b.cover_file then b.cover = covers_dir .. "/" .. b.cover_file end
     end
@@ -152,10 +162,12 @@ function Library.load()
         if not matched[b.id] then table.insert(cloud, b) end
     end
     Library.matched = matched
+    Library.on_device = {}
+    for _id, path in pairs(matched) do Library.on_device[path] = true end
     Library.stats = {
         catalog = #books, cloud = #cloud, on_device = #books - #cloud,
         unmatched_files = #unmatched,
-        covers = downloaded, covers_available = with_cover,
+        covers = downloaded, covers_available = with_cover, covers_failed = failed,
     }
     logger.info("CloudLibrary: loaded", Library.stats)
     t0 = Timing.start()
@@ -186,7 +198,8 @@ local function runJob(server, folder, mode, db_path, wal, covers_dir)
         if mode == "covers" or mode == "prefetch" then
             util.makePath(covers_dir)
             local opts = mode == "prefetch"
-                and { limit = PREFETCH_COVERS, deadline = os.time() + PREFETCH_SECONDS } or nil
+                and { limit = PREFETCH_COVERS, deadline = os.time() + PREFETCH_SECONDS }
+                or { retry_all = true } -- "Download all covers": retry failed ones too
             result.covers = Covers.downloadMissing(Http.fetcher(server), server.url, store, covers_dir, opts)
             result.covers.results = nil
             return
@@ -230,6 +243,9 @@ end
 local function describeResult(r)
     if r.error then return T(_("Cloud library sync failed: %1"), r.error) end
     if r.mode == "covers" and r.covers then
+        if r.covers.network_error then
+            return T(_("Cloud library: %1 covers downloaded, then the network was lost."), r.covers.fetched)
+        end
         return T(_("Cloud library: %1 covers downloaded."), r.covers.fetched)
     end
     local s = r.sync
@@ -469,7 +485,7 @@ Virtual.detailsButtons = Library.detailsButtons
 -- redraw the library page (their covers are then asked for), and sync if
 -- it's due.
 function Library.onNetworkConnected()
-    for _i, b in ipairs(Virtual.books) do b.cover_offline = nil end
+    for _i, b in ipairs(Virtual.books) do b.cover_retry_at = nil end
     UIManager:scheduleIn(1, function()
         local FileManager = require("apps/filemanager/filemanager")
         local fm = FileManager.instance
@@ -515,6 +531,9 @@ function Library.statusText()
         table.insert(lines, T(_("Shown as cloud books: %1"), st.cloud))
         table.insert(lines, T(_("Files in the folder not in the catalog: %1"), st.unmatched_files))
         table.insert(lines, T(_("Covers downloaded: %1 of %2"), st.covers, st.covers_available))
+        if (st.covers_failed or 0) > 0 then
+            table.insert(lines, T(_("Covers the server couldn't provide: %1 (tried again daily)"), st.covers_failed))
+        end
     end
     table.insert(lines, T(_("Last sync: %1"), ago(last)))
     table.insert(lines, T(_("Last full sync: %1"), ago(last_full)))
@@ -611,6 +630,25 @@ function Library.menuItems()
                     callback = function()
                         Library.save("show", Library.settings().show == false)
                         Library.load()
+                    end,
+                },
+                {
+                    text = _("Mark books on this device"),
+                    help_text = _("A check mark on the cover of downloaded books that are in your cloud library."),
+                    checked_func = function() return Library.settings().badge ~= false end,
+                    callback = function()
+                        Library.save("badge", Library.settings().badge == false)
+                        Badge.enabled = Library.settings().badge ~= false
+                        local FileManager = require("apps/filemanager/filemanager")
+                        if FileManager.instance then UIManager:setDirty(FileManager.instance, "ui") end
+                    end,
+                },
+                {
+                    text = _("Include cloud books in file search"),
+                    checked_func = function() return Library.settings().search ~= false end,
+                    callback = function()
+                        Library.save("search", Library.settings().search == false)
+                        Search.enabled = Library.settings().search ~= false
                     end,
                 },
                 {

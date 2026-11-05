@@ -12,6 +12,8 @@ assert(REPO and TMP, "usage: test_cloudlibrary.lua <repo> <tmpdir>")
 require("setupkoenv")
 G_defaults = require("luadefaults"):open()
 G_reader_settings = require("luasettings"):open(TMP .. "/settings.reader.lua")
+-- As reader.lua does at startup (needed to draw icons).
+require("document/canvascontext"):init(require("device"))
 package.path = REPO .. "/cloudlibrary.koplugin/?.lua;" .. package.path
 
 local lfs = require("libs/libkoreader-lfs")
@@ -39,6 +41,20 @@ end
 
 local function esc(s)
     return (s:gsub("[&<>\"]", { ["&"] = "&amp;", ["<"] = "&lt;", [">"] = "&gt;", ['"'] = "&quot;" }))
+end
+
+-- Every module loads (catches mistakes in code that only runs at load time) ------------
+
+do
+    for _i, name in ipairs({ "badge", "covers", "downloads", "feed", "http", "library", "matcher",
+            "search", "store", "sync", "timing", "virtual" }) do
+        local ok, err = pcall(require, "cloudlibrary/" .. name)
+        check(ok, "module " .. name .. " loads: " .. tostring(err))
+    end
+    local chunk, err = loadfile(REPO .. "/cloudlibrary.koplugin/main.lua")
+    check(chunk ~= nil, "main.lua parses: " .. tostring(err))
+    local ok, plugin = pcall(chunk)
+    check(ok and type(plugin) == "table" and plugin.name == "cloudlibrary", "main.lua loads: " .. tostring(plugin))
 end
 
 -- A fake Calibre-Web OPDS server -------------------------------------------------
@@ -279,6 +295,18 @@ do
     check(Feed.parse("<html><body>no</body></html>") == nil, "non-feed rejected")
 end
 
+-- Errors keep their message through the timing wrappers ------------------------------------
+
+do
+    os.execute("mkdir -p '" .. TMP .. "/db'")
+    local store = Store.open(TMP .. "/db/err.sqlite3", false)
+    local s = Sync.new{ store = store, root = ORIGIN .. "/",
+        fetch = function() return nil, "Network error: host not found", "network" end }
+    local r, err = s:full()
+    check(r == nil and err == "Network error: host not found", "sync error message kept: " .. tostring(err))
+    store:close()
+end
+
 -- Resolving links --------------------------------------------------------------------
 
 do
@@ -482,6 +510,15 @@ do
     local listing = store:listing()
     eq(listing[1].cover_file, "old-1.webp", "cover columns added")
     store:close()
+
+    -- 2 -> 3 forgets cover failures (version 2 also recorded network errors).
+    local conn2 = SQ3.open(path)
+    conn2:exec("UPDATE books SET cover_file = NULL, cover_failed = 99; PRAGMA user_version=2;")
+    conn2:close()
+    local store3 = Store.open(path, false)
+    eq(store3:listing()[1].cover_failed, nil, "old failure marks cleared")
+    eq(store3:count(), 1, "books kept")
+    store3:close()
 end
 
 -- Covers ------------------------------------------------------------------------------
@@ -518,7 +555,7 @@ do
     local fetch = function(url)
         table.insert(asked, url)
         if url:find("/1001$") then return "<html>oops</html>" end
-        if url:find("/1002$") then return nil, "404" end
+        if url:find("/1002$") then return nil, "404", "http" end
         return png
     end
     local r = Covers.download(fetch, ORIGIN .. "/", store, dir, store:missingCovers(nil, 0),
@@ -539,6 +576,24 @@ do
     for _i, b in ipairs(store:listing()) do l[b.id] = b end
     eq(l[books[5].uuid].cover_w, 30, "listing has the cover size")
     eq(l[books[1].uuid].cover_failed, 5000, "listing has the failure time")
+
+    -- "Download all covers" retries covers that failed recently.
+    local retry = Covers.downloadMissing(fetch, ORIGIN .. "/", store, dir,
+        { now = function() return 5001 end, retry_all = true })
+    eq(retry.fetched + retry.failed, 2, "retry_all includes recent failures")
+
+    -- A lost network stops the batch without marking anything failed.
+    store:setCoverFailed(books[1].uuid, nil)
+    store:setCoverFailed(books[2].uuid, nil)
+    local calls = 0
+    local offline = Covers.download(function()
+        calls = calls + 1
+        return nil, "Network error: timeout", "network"
+    end, ORIGIN .. "/", store, dir, store:missingCovers(nil, 0), { now = function() return 7000 end })
+    eq(calls, 1, "batch stops at the first network error")
+    eq(offline.failed, 0, "network errors aren't failures")
+    check(offline.network_error ~= nil, "network error reported")
+    eq(#store:missingCovers(nil, 0), 2, "covers still wanted after a network error")
 
     -- A deadline stops the batch.
     local t = 0
@@ -672,6 +727,70 @@ do
 
     local attr = Downloads.finish(path, book)
     eq(attr.modification, 1600000000, "file dated when the book was added")
+end
+
+-- Search ----------------------------------------------------------------------------------
+
+do
+    local Search = require("cloudlibrary/search")
+    local m = Search.matcher("cloud", false, false)
+    check(m("The Cloud Atlas") and not m("Clout"), "plain, case-insensitive")
+    check(not Search.matcher("cloud", true, false)("Cloud"), "case-sensitive")
+    check(Search.matcher("c*d a?las", false, true)("cloud atlas"), "wildcards")
+    check(not Search.matcher("a.c", false, true)("abc"), "a dot is a dot")
+    check(Search.matcher("(", false, true)("x") == false, "bad pattern doesn't throw")
+    check(Search.matcher("*", false, false)("anything"), "* matches everything")
+    local books = {
+        { id = "1", title = "Sharpe's Tiger", authors = { "Bernard Cornwell" }, series = "Sharpe" },
+        { id = "2", title = "The Pagan Lord", authors = { "Bernard Cornwell" }, series = "The Saxon Stories" },
+        { id = "3", title = "Security", authors = { "Poul Anderson" } },
+    }
+    eq(#Search.cloudMatches(books, "cornwell", false, false), 2, "match by author")
+    eq(#Search.cloudMatches(books, "saxon", false, false), 1, "match by series")
+    eq(#Search.cloudMatches(books, "tiger", false, false), 1, "match by title")
+    eq(#Search.cloudMatches(books, "zzz", false, false), 0, "no match")
+    check(Search.inScope("/mnt/onboard/Books", "/mnt/onboard/Books/", false), "same folder")
+    check(Search.inScope("/mnt/onboard/Books", "/mnt/onboard", true), "folder below, with subfolders")
+    check(not Search.inScope("/mnt/onboard/Books", "/mnt/onboard", false), "folder below, no subfolders")
+    check(not Search.inScope("/mnt/onboard/Books", "/mnt/onboard/Bo", true), "prefix isn't a parent")
+    check(Search.inScope("/x", "/", true), "root")
+end
+
+-- Badge ----------------------------------------------------------------------------------
+
+do
+    local Badge = require("cloudlibrary/badge")
+    local Blitbuffer = require("ffi/blitbuffer")
+    local Geom = require("ui/geometry")
+    local bb = Blitbuffer.new(400, 300, Blitbuffer.TYPE_BB8)
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    local cover = { image = true, dimen = Geom:new{ x = 20, y = 10, w = 120, h = 180 } }
+    local menu = { item_group = {
+        { entry = { path = "/lib/local.epub" }, dimen = Geom:new{ x = 0, y = 0, w = 160, h = 200 }, { { cover } } },
+        { entry = { path = "/lib/other.epub" }, dimen = Geom:new{ x = 200, y = 0, w = 160, h = 200 } },
+    } }
+    Badge.isOnDevice = function(path) return path == "/lib/local.epub" end
+    Badge.enabled = true
+    Badge.paintOn(menu, bb)
+    local x, y, size = Badge.place(cover.dimen)
+    check(x + size <= 140 and y + size <= 190 and x > 20, "badge inside the cover's corner")
+    local function changed(x0, y0, w, h)
+        for yy = y0, y0 + h - 1 do
+            for xx = x0, x0 + w - 1 do
+                if bb:getPixel(xx, yy):getColor8().a ~= Blitbuffer.COLOR_GRAY.a then return true end
+            end
+        end
+        return false
+    end
+    check(changed(x, y, size, size), "badge drawn on the local book")
+    check(not changed(200, 0, 160, 200), "no badge on a book not on the device")
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    Badge.enabled = false
+    Badge.paintOn(menu, bb)
+    check(not changed(x, y, size, size), "badge can be turned off")
+    Badge.enabled = true
+    Badge.isOnDevice = nil
+    bb:free()
 end
 
 -- Virtual entries ---------------------------------------------------------------------

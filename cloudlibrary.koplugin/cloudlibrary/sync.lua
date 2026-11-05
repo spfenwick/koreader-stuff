@@ -37,9 +37,9 @@ end
 -- Runs fn and adds its duration to self.spent[part].
 function Sync:timed(part, fn, ...)
     local t0 = self.clock()
-    local results = { fn(...) }
+    local results = Timing.pack(fn(...))
     self.spent[part] = self.spent[part] + (self.clock() - t0)
-    return unpack(results)
+    return unpack(results, 1, results.n)
 end
 
 --- Timings for this sync, in the form Timing.recordAll() takes.

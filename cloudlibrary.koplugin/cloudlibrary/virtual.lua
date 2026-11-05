@@ -124,7 +124,8 @@ function Virtual.coverState(book)
         end
         if book.cover_w then return "ready" end
     end
-    if book.cover_href and not book.cover_failed and not book.cover_offline and not book.cover
+    if book.cover_href and not book.cover_failed and not book.cover
+            and not (book.cover_retry_at and book.cover_retry_at > os.time())
             and Virtual.canFetchCovers and Virtual.canFetchCovers() then
         return "pending"
     end
@@ -276,6 +277,12 @@ function Virtual.showDetails(path)
     UIManager:show(dialog)
 end
 
+--- A file browser item for a virtual book (as in the library folder).
+function Virtual.listItem(fc, book, collate)
+    local dir = book.path:match("^(.*)/[^/]*$")
+    return fc:getListItem(dir, book.filename, book.path, attributes(book), collate)
+end
+
 local function installListing()
     local FileChooser = require("ui/widget/filechooser")
     local orig_getList = FileChooser.getList
@@ -343,10 +350,10 @@ local function installListingTimer()
             return orig(self, path, ...)
         end
         local t0 = Timing.start()
-        local results = { orig(self, path, ...) }
+        local results = Timing.pack(orig(self, path, ...))
         Timing.record("listing: build library folder", Timing.since(t0),
             #(results[1] or {}) .. " entries, sorted")
-        return unpack(results)
+        return unpack(results, 1, results.n)
     end
 end
 
@@ -373,7 +380,7 @@ local function installBookInfo()
             if #wanted > 0 and not (Virtual.requestCovers and Virtual.requestCovers(wanted)) then
                 -- Can't download now (Wi-Fi went off): show them without a
                 -- cover for this session instead of waiting.
-                for _i, book in ipairs(wanted) do book.cover_offline = true end
+                for _i, book in ipairs(wanted) do book.cover_retry_at = os.time() + 120 end
             end
             if #real > 0 then return orig_extract(self, real, ...) end
             -- Report success even when nothing was started: CoverBrowser

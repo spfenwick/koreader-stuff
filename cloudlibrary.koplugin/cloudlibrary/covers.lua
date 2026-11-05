@@ -25,7 +25,8 @@ local Covers = {
     on_done = nil,  -- function(results) after each job, in the UI process
 }
 
-local RETRY_AFTER = 24 * 60 * 60
+local RETRY_AFTER = 24 * 60 * 60 -- covers the server couldn't provide
+local RETRY_SOON = 2 * 60        -- covers not attempted (network lost)
 
 --- File extension from an image's first bytes.
 function Covers.imageType(data)
@@ -62,8 +63,14 @@ function Covers.download(fetch, root, store, dir, books, opts)
     for _i, book in ipairs(books) do
         if opts.deadline and now() >= opts.deadline then break end
         local t0 = clock()
-        local data = fetch(resolve(root, book.href))
+        local data, err, kind = fetch(resolve(root, book.href))
         spent.network = spent.network + (clock() - t0)
+        if data == nil and kind ~= "http" then
+            -- Not reached (Wi-Fi off, device asleep...): stop here, and don't
+            -- count it against the covers.
+            result.network_error = err or "network error"
+            break
+        end
         spent.bytes = spent.bytes + (type(data) == "string" and #data or 0)
         local ext = Covers.imageType(data)
         local w, h
@@ -109,11 +116,12 @@ function Covers.download(fetch, root, store, dir, books, opts)
     return result
 end
 
---- Downloads missing covers, newest books first. opts as above, plus limit.
+--- Downloads missing covers, newest books first. opts as above, plus limit,
+-- and retry_all (also covers that failed less than a day ago).
 function Covers.downloadMissing(fetch, root, store, dir, opts)
     opts = opts or {}
     local now = (opts.now or os.time)()
-    local books = store:missingCovers(opts.limit, now - RETRY_AFTER)
+    local books = store:missingCovers(opts.limit, opts.retry_all and now + 1 or now - RETRY_AFTER)
     return Covers.download(fetch, root, store, dir, books, opts)
 end
 
@@ -183,7 +191,8 @@ function Covers.request(books)
     if not Covers.canFetch() then return false end
     local fresh = {}
     for _i, b in ipairs(books) do
-        if b.cover_href and not b.cover_file and not b.cover_failed then
+        if b.cover_href and not b.cover_file and not b.cover_failed
+                and not (b.cover_retry_at and b.cover_retry_at > os.time()) then
             if Covers.job then
                 if not Covers.pending[b.id] then
                     Covers.pending[b.id] = b
@@ -228,10 +237,14 @@ function Covers.poll()
         if r then
             b.cover_file, b.cover_w, b.cover_h = r.file, r.w, r.h
             b.cover = cfg.dir .. "/" .. r.file
-            b.cover_failed = nil
+            b.cover_failed, b.cover_retry_at = nil, nil
+        elseif r == false then
+            -- The server had no usable cover: the store retries it in a day.
+            b.cover_failed = now
         else
-            -- Failed, or the job died: don't ask again this session.
-            b.cover_failed = b.cover_failed or now
+            -- Not attempted (network lost, or the job died): try again soon,
+            -- or when Wi-Fi reconnects.
+            b.cover_retry_at = now + RETRY_SOON
         end
     end
     -- Start the next batch before reporting, so file browsers polling
