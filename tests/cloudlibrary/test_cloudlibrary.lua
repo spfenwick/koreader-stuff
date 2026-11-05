@@ -46,7 +46,7 @@ end
 -- Every module loads (catches mistakes in code that only runs at load time) ------------
 
 do
-    for _i, name in ipairs({ "badge", "covers", "downloads", "feed", "http", "library", "matcher",
+    for _i, name in ipairs({ "badge", "covers", "downloads", "feed", "guard", "http", "library", "matcher",
             "search", "store", "sync", "timing", "virtual" }) do
         local ok, err = pcall(require, "cloudlibrary/" .. name)
         check(ok, "module " .. name .. " loads: " .. tostring(err))
@@ -805,6 +805,104 @@ do
     Badge.enabled = true
     Badge.isOnDevice = nil
     bb:free()
+end
+
+-- Guard -------------------------------------------------------------------------------------
+
+do
+    local Guard = require("cloudlibrary/guard")
+    local function reset()
+        Guard.failed, Guard.unavailable, Guard.on_failure, Guard.notified = {}, {}, {}, false
+    end
+    reset()
+
+    -- A working hook, keeping nils in its results.
+    local target = { f = function(_self, a) return nil, a, nil end }
+    Guard.hook("search", target, "f", function(orig, self, a) return orig(self, a .. "!") end)
+    local r1, r2, r3 = target:f("x")
+    check(r1 == nil and r2 == "x!" and r3 == nil, "hook result kept")
+    check(select("#", target:f("x")) == 3, "hook keeps every return value")
+
+    -- The plugin's code fails: the original runs, the feature turns off once.
+    local turned_off = 0
+    Guard.on_failure.search = function() turned_off = turned_off + 1 end
+    local calls = 0
+    local t2 = { f = function(_self, a) calls = calls + 1; return "orig " .. a end }
+    Guard.hook("search", t2, "f", function(_orig, _self, _a) error("plugin bug") end)
+    eq(t2:f("a"), "orig a", "original used after a plugin error")
+    check(Guard.failed.search ~= nil and Guard.failed.search:find("plugin bug", 1, true), "error recorded")
+    check(not Guard.ok("search"), "feature off")
+    eq(turned_off, 1, "turned off once")
+    eq(t2:f("b"), "orig b", "later calls go straight to the original")
+    eq(calls, 2, "original not called twice for one call afterwards")
+    check(Guard.ok("badge"), "other features unaffected")
+
+    -- The original fails: its error passes through, nothing turns off.
+    reset()
+    local t3 = { f = function() error("koreader bug") end }
+    Guard.hook("badge", t3, "f", function(orig, self) return orig(self) end)
+    local ok3, err3 = pcall(t3.f, t3)
+    check(not ok3 and tostring(err3):find("koreader bug", 1, true), "original's error passed through")
+    check(Guard.ok("badge"), "not blamed on the plugin")
+
+    -- Missing function: reported, nothing hooked.
+    reset()
+    check(Guard.hook("badge", {}, "nope", function() end) == nil, "nothing to hook")
+    check(Guard.unavailable.badge ~= nil, "missing function reported")
+
+    -- Library failure turns everything off; setCatalog then shows nothing.
+    reset()
+    local t4 = { f = function() return 1 end }
+    Guard.hook("library", t4, "f", function() error("boom") end)
+    t4:f()
+    check(not Guard.ok("library") and not Guard.ok("search") and not Guard.ok("badge"),
+        "library failure turns off search and badge too")
+    Virtual.setCatalog("/lib", { { id = "a", title = "A" } })
+    eq(#Virtual.books, 0, "no cloud books once the library is off")
+
+    -- Background tasks: errors reported, tasks keep running.
+    reset()
+    eq(Guard.call("jobs", function(a, b) return a + b end, 2, 3), 5, "protected call result")
+    eq(Guard.call("jobs", function() error("job bug") end), nil, "protected call error")
+    check(Guard.failed.jobs ~= nil, "job error recorded")
+    eq(Guard.call("jobs", function() return "again" end), "again", "jobs still run after an error")
+    check(Guard.ok("library"), "a job error doesn't turn the library off")
+    check(Guard.statusText():find("jobs error", 1, true), "job error in status")
+
+    -- Menu and button callbacks, nested.
+    reset()
+    local ran = {}
+    local menu = Guard.wrapCallbacks({ {
+        text = "top",
+        sub_item_table_func = function()
+            return { { text = "inner", callback = function() ran.inner = true; error("menu bug") end } }
+        end,
+    }, { text = "plain", callback = function() ran.plain = true end } })
+    menu[2].callback()
+    local sub = menu[1].sub_item_table_func()
+    local okm = pcall(sub[1].callback)
+    check(ran.plain and ran.inner and okm, "menu callbacks run, errors contained")
+    local rows = Guard.wrapCallbacks({ { { text = "b", callback = function() error("button bug") end } } })
+    check(pcall(rows[1][1].callback), "button callback errors contained")
+
+    -- Startup check against this KOReader.
+    reset()
+    check(Guard.check(), "startup check passes: " .. Guard.statusText())
+    eq(Guard.statusText(), "", "no problems on this KOReader")
+    local FileChooser = require("ui/widget/filechooser")
+    local real = FileChooser.getListItem
+    FileChooser.getListItem = function(_self) end
+    check(not Guard.check(), "startup check notices a changed function")
+    check(Guard.statusText():find("getListItem takes 1 parameters, expected 6", 1, true),
+        "problem described: " .. Guard.statusText())
+    FileChooser.getListItem = real
+    local FileSearcher = require("apps/filemanager/filemanagerfilesearcher")
+    local real_show = FileSearcher.onShowSearchResults
+    FileSearcher.onShowSearchResults = nil
+    check(Guard.check(), "search missing doesn't stop the library")
+    check(Guard.unavailable.search ~= nil and not Guard.ok("search"), "search not started")
+    FileSearcher.onShowSearchResults = real_show
+    reset()
 end
 
 -- Virtual entries ---------------------------------------------------------------------

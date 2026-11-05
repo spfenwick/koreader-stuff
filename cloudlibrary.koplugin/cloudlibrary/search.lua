@@ -62,6 +62,8 @@ end
 
 function Search.install(Virtual)
     if Search.installed then return end
+    local Guard = require("cloudlibrary/guard")
+    if not Guard.ok("search") then return end -- failed the startup check
     local ok, FileSearcher = pcall(require, "apps/filemanager/filemanagerfilesearcher")
     if not ok or type(FileSearcher) ~= "table" then return end
     Search.installed = true
@@ -105,34 +107,32 @@ function Search.install(Virtual)
         return results
     end
 
-    local orig_show = FileSearcher.onShowSearchResults
-    FileSearcher.onShowSearchResults = function(self, not_cached, ...)
+    local Guard = require("cloudlibrary/guard")
+    Guard.hook("search", FileSearcher, "onShowSearchResults", function(orig, self, not_cached, ...)
         if FileSearcher.search_results then augment(self, FileSearcher.search_results) end
-        return orig_show(self, not_cached, ...)
-    end
+        return orig(self, not_cached, ...)
+    end, "FileSearcher:onShowSearchResults")
 
-    local orig_message = FileSearcher.showSearchResultsMessage
-    FileSearcher.showSearchResultsMessage = function(self, no_results, ...)
+    Guard.hook("search", FileSearcher, "showSearchResultsMessage", function(orig, self, no_results, ...)
         if no_results and FileSearcher.search_results then
             augment(self, FileSearcher.search_results)
             if #FileSearcher.search_results > 0 then
                 return self:onShowSearchResults(true)
             end
         end
-        return orig_message(self, no_results, ...)
-    end
+        return orig(self, no_results, ...)
+    end, "FileSearcher:showSearchResultsMessage")
 
     -- Called with the results menu as self (its _manager is the searcher).
     for _i, name in ipairs({ "onMenuSelect", "onMenuHold" }) do
-        local orig = FileSearcher[name]
-        FileSearcher[name] = function(self, item, ...)
+        Guard.hook("search", FileSearcher, name, function(orig, self, item, ...)
             local manager = self._manager or self
             if type(item) == "table" and Virtual.by_path[item.path] and not manager.selected_files then
                 Virtual.showDetails(item.path)
                 return true
             end
             return orig(self, item, ...)
-        end
+        end, "FileSearcher:" .. name)
     end
 end
 

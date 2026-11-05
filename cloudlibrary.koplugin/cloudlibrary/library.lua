@@ -27,6 +27,7 @@ local T = ffiutil.template
 local Badge = require("cloudlibrary/badge")
 local Covers = require("cloudlibrary/covers")
 local Downloads = require("cloudlibrary/downloads")
+local Guard = require("cloudlibrary/guard")
 local Matcher = require("cloudlibrary/matcher")
 local Search = require("cloudlibrary/search")
 local Store = require("cloudlibrary/store")
@@ -293,7 +294,7 @@ function Library.sync(mode, quiet)
     return true
 end
 
-function Library.poll()
+local function pollJob()
     local job = Library.job
     if not job then return end
     if not ffiutil.isSubProcessDone(job.pid) then
@@ -362,6 +363,10 @@ function Library.onFileManagerReady()
     -- Even without syncing, check the folder for new or changed files.
     Library.sync(syncDue() and "quick" or "scan", true)
     Timing.record("startup: plugin", Timing.since(t_start), "catalog load and starting the background check")
+end
+
+function Library.poll()
+    return Guard.call("jobs", pollJob)
 end
 
 -- Downloading --------------------------------------------------------------------
@@ -477,7 +482,9 @@ function Library.detailsButtons(id, full, close)
     end
     return rows
 end
-Virtual.detailsButtons = Library.detailsButtons
+Virtual.detailsButtons = function(...)
+    return Guard.wrapCallbacks(Library.detailsButtons(...))
+end
 
 -- Network ----------------------------------------------------------------------
 
@@ -486,7 +493,7 @@ Virtual.detailsButtons = Library.detailsButtons
 -- it's due.
 function Library.onNetworkConnected()
     for _i, b in ipairs(Virtual.books) do b.cover_retry_at = nil end
-    UIManager:scheduleIn(1, function()
+    UIManager:scheduleIn(1, Guard.task("jobs", function()
         local FileManager = require("apps/filemanager/filemanager")
         local fm = FileManager.instance
         local fc = fm and fm.file_chooser
@@ -497,7 +504,7 @@ function Library.onNetworkConnected()
         if UIManager:getTopmostVisibleWidget() ~= fm then return end
         Timing.record("network: redraw library", 0, "after Wi-Fi connected", true)
         fc:updateItems(1, true)
-    end)
+    end))
     Library.syncIfDue()
 end
 
@@ -517,7 +524,8 @@ function Library.statusText()
     local server = Library.server()
     local lines = {}
     if not server then
-        return _("No catalog chosen.")
+        local problems = Guard.statusText()
+        return _("No catalog chosen.") .. (problems ~= "" and ("\n\n" .. problems) or "")
     end
     table.insert(lines, T(_("Catalog: %1"), server.title or server.url))
     table.insert(lines, T(_("Folder: %1"), Library.folder() or "?"))
@@ -539,11 +547,21 @@ function Library.statusText()
     table.insert(lines, T(_("Last full sync: %1"), ago(last_full)))
     local r = Library.last_result
     if r and r.error then table.insert(lines, T(_("Last error: %1"), r.error)) end
+    local problems = Guard.statusText()
+    if problems ~= "" then
+        table.insert(lines, "")
+        table.insert(lines, _("Compatibility:"))
+        table.insert(lines, problems)
+    end
     if Library.job then table.insert(lines, _("Syncing now…")) end
     return table.concat(lines, "\n")
 end
 
 function Library.menuItems()
+    return Guard.wrapCallbacks({ Library.menuEntry() })[1]
+end
+
+function Library.menuEntry()
     return {
         text = _("Cloud library"),
         sorting_hint = "tools",

@@ -207,7 +207,7 @@ function Covers.request(books)
     return start(fresh) or #fresh == 0
 end
 
-function Covers.poll()
+local function pollCovers()
     local job = Covers.job
     if not job then return end
     local ffiutil = require("ffi/util")
@@ -216,6 +216,8 @@ function Covers.poll()
         UIManager:scheduleIn(0.5, Covers.poll)
         return
     end
+    -- Not busy any more, whatever happens below.
+    Covers.job = nil
     local data = ffiutil.readAllFromFD(job.fd)
     local result
     local chunk = data and data ~= "" and loadstring("return " .. data, "covers result")
@@ -232,8 +234,9 @@ function Covers.poll()
         string.format("%d covers, from asking to having them", #job.books))
     local cfg = Covers.config
     local now = os.time()
+    local results = type(result.results) == "table" and result.results or {}
     for _i, b in ipairs(job.books) do
-        local r = result.results[b.id]
+        local r = results[b.id]
         if r then
             b.cover_file, b.cover_w, b.cover_h = r.file, r.w, r.h
             b.cover = cfg.dir .. "/" .. r.file
@@ -252,9 +255,12 @@ function Covers.poll()
     local next_books = {}
     for _id, b in pairs(Covers.pending) do table.insert(next_books, b) end
     Covers.pending, Covers.pending_count = {}, 0
-    Covers.job = nil
     if #next_books > 0 then start(next_books) end
     if Covers.on_done then Covers.on_done(result) end
+end
+
+function Covers.poll()
+    return require("cloudlibrary/guard").call("jobs", pollCovers)
 end
 
 return Covers

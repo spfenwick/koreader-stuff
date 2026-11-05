@@ -30,6 +30,7 @@ local logger = require("logger")
 local util = require("util")
 local _ = require("gettext")
 local Timing = require("cloudlibrary/timing")
+local Guard = require("cloudlibrary/guard")
 
 local Virtual = {
     folder = nil, -- library folder, no trailing slash
@@ -57,7 +58,8 @@ end
 function Virtual.setCatalog(folder, books)
     Virtual.folder = normalize(folder)
     Virtual.books, Virtual.by_path = {}, {}
-    if not Virtual.folder then return end
+    -- Turned off (startup check or an error): no cloud books.
+    if not Virtual.folder or not Guard.ok("library") then return end
     for _i, book in ipairs(books or {}) do
         local path = type(book.id) == "string" and book.id ~= ""
             and Virtual.folder .. "/" .. PREFIX .. book.id .. ".epub"
@@ -285,9 +287,8 @@ end
 
 local function installListing()
     local FileChooser = require("ui/widget/filechooser")
-    local orig_getList = FileChooser.getList
-    FileChooser.getList = function(self, path, collate)
-        local dirs, files, readable = orig_getList(self, path, collate)
+    Guard.hook("library", FileChooser, "getList", function(orig, self, path, collate)
+        local dirs, files, readable = orig(self, path, collate)
         if self.name == "filemanager" and Virtual.folder
                 and normalize(path) == Virtual.folder then
             Virtual.ensureOutermost()
@@ -305,7 +306,7 @@ local function installListing()
             end
         end
         return dirs, files, readable
-    end
+    end, "FileChooser:getList")
 end
 
 -- The getBookInfo hook stays the outermost one: other plugins (ZenOS) wrap
@@ -313,24 +314,21 @@ end
 -- after the cover arrives. Virtual books are answered here directly; this is
 -- re-checked whenever the library folder is listed.
 local BookInfoManager
-local our_getBookInfo, our_getDocProps
+local our_getBookInfo
 
 local function wrapBookInfo()
-    local inner = BookInfoManager.getBookInfo
-    our_getBookInfo = function(self, filepath, get_cover)
-        local book = Virtual.by_path[filepath]
-        if book then return bookInfo(book, get_cover) end
-        return inner(self, filepath, get_cover)
-    end
-    BookInfoManager.getBookInfo = our_getBookInfo
+    our_getBookInfo = Guard.hook("library", BookInfoManager, "getBookInfo",
+        function(orig, self, filepath, get_cover)
+            local book = Virtual.by_path[filepath]
+            if book then return bookInfo(book, get_cover) end
+            return orig(self, filepath, get_cover)
+        end, "BookInfoManager:getBookInfo")
     if type(BookInfoManager.getDocProps) == "function" then
-        local inner_props = BookInfoManager.getDocProps
-        our_getDocProps = function(self, filepath)
+        Guard.hook("library", BookInfoManager, "getDocProps", function(orig, self, filepath)
             local book = Virtual.by_path[filepath]
             if book then return docProps(book) end
-            return inner_props(self, filepath)
-        end
-        BookInfoManager.getDocProps = our_getDocProps
+            return orig(self, filepath)
+        end, "BookInfoManager:getDocProps")
     end
 end
 
@@ -344,8 +342,7 @@ end
 -- browsers that cache listings, like ZenOS, skip this when they can).
 local function installListingTimer()
     local FileChooser = require("ui/widget/filechooser")
-    local orig = FileChooser.genItemTableFromPath
-    FileChooser.genItemTableFromPath = function(self, path, ...)
+    Guard.hook("library", FileChooser, "genItemTableFromPath", function(orig, self, path, ...)
         if not (Virtual.folder and self.name == "filemanager" and normalize(path) == Virtual.folder) then
             return orig(self, path, ...)
         end
@@ -354,7 +351,7 @@ local function installListingTimer()
         Timing.record("listing: build library folder", Timing.since(t0),
             #(results[1] or {}) .. " entries, sorted")
         return unpack(results, 1, results.n)
-    end
+    end, "FileChooser:genItemTableFromPath")
 end
 
 local function installBookInfo()
@@ -367,126 +364,122 @@ local function installBookInfo()
     wrapBookInfo()
     -- Virtual books are never extracted from a file: their covers are
     -- downloaded instead.
-    if type(BookInfoManager.extractInBackground) == "function" then
-        local orig_extract = BookInfoManager.extractInBackground
-        BookInfoManager.extractInBackground = function(self, files, ...)
-            if type(files) ~= "table" then return orig_extract(self, files, ...) end
-            local real, wanted = {}, {}
-            for _i, file in ipairs(files) do
-                local filepath = type(file) == "table" and file.filepath or file
-                local book = Virtual.by_path[filepath]
-                if book then table.insert(wanted, book) else table.insert(real, file) end
-            end
-            if #wanted > 0 and not (Virtual.requestCovers and Virtual.requestCovers(wanted)) then
-                -- Can't download now (Wi-Fi went off): show them without a
-                -- cover for this session instead of waiting.
-                for _i, book in ipairs(wanted) do book.cover_retry_at = os.time() + 120 end
-            end
-            if #real > 0 then return orig_extract(self, real, ...) end
-            -- Report success even when nothing was started: CoverBrowser
-            -- shows an error otherwise. It stops waiting once
-            -- isExtractingInBackground() is false.
-            return true
+    Guard.hook("library", BookInfoManager, "extractInBackground", function(orig, self, files, ...)
+        if type(files) ~= "table" then return orig(self, files, ...) end
+        local real, wanted = {}, {}
+        for _i, file in ipairs(files) do
+            local filepath = type(file) == "table" and file.filepath or file
+            local book = Virtual.by_path[filepath]
+            if book then table.insert(wanted, book) else table.insert(real, file) end
         end
-    end
-    if type(BookInfoManager.isExtractingInBackground) == "function" then
-        local orig_busy = BookInfoManager.isExtractingInBackground
-        BookInfoManager.isExtractingInBackground = function(self, ...)
-            return orig_busy(self, ...) or (Virtual.coversBusy and Virtual.coversBusy()) or false
+        if #wanted == 0 then return orig(self, files, ...) end
+        if not (Virtual.requestCovers and Virtual.requestCovers(wanted)) then
+            -- Can't download now (Wi-Fi went off): show them without a
+            -- cover for now instead of waiting.
+            for _i, book in ipairs(wanted) do book.cover_retry_at = os.time() + 120 end
         end
-    end
+        if #real > 0 then return orig(self, real, ...) end
+        -- Report success even when nothing was started: CoverBrowser
+        -- shows an error otherwise. It stops waiting once
+        -- isExtractingInBackground() is false.
+        return true
+    end, "BookInfoManager:extractInBackground")
+    Guard.hook("library", BookInfoManager, "isExtractingInBackground", function(orig, self, ...)
+        return orig(self, ...) or (Virtual.coversBusy and Virtual.coversBusy()) or false
+    end, "BookInfoManager:isExtractingInBackground")
     return true
 end
 
 local function installOpen()
     local ReaderUI = require("apps/reader/readerui")
-    local orig_showReader = ReaderUI.showReader
-    ReaderUI.showReader = function(self, file, ...)
+    Guard.hook("library", ReaderUI, "showReader", function(orig, self, file, ...)
         if Virtual.by_path[file] then
             Virtual.showDetails(file)
             return
         end
-        return orig_showReader(self, file, ...)
-    end
-    local orig_switchDocument = ReaderUI.switchDocument
-    if type(orig_switchDocument) == "function" then
-        ReaderUI.switchDocument = function(self, file, ...)
+        return orig(self, file, ...)
+    end, "ReaderUI:showReader")
+    if type(ReaderUI.switchDocument) == "function" then
+        Guard.hook("library", ReaderUI, "switchDocument", function(orig, self, file, ...)
             if Virtual.by_path[file] then
                 Virtual.showDetails(file)
                 return
             end
-            return orig_switchDocument(self, file, ...)
-        end
+            return orig(self, file, ...)
+        end, "ReaderUI:switchDocument")
     end
 end
 
--- Long-press on a virtual book: the file browser's own menu (and ZenOS's)
--- offers actions like rename, delete, edit metadata and read status, which
--- would act on a file that doesn't exist. Show the book's details instead.
+local function isVirtualItem(chooser, item)
+    return chooser.name == "filemanager" and type(item) == "table"
+        and Virtual.by_path[item.path] ~= nil
+        and not (chooser.ui and chooser.ui.selected_files)
+end
+
 -- Taps are caught here, before KOReader's open path starts: ZenOS wraps
--- filemanagerutil.openFile to mark the book as being read.
-local function installSelect()
+-- filemanagerutil.openFile to mark the book as being read. Long-press: the
+-- file browser's own menu (and ZenOS's) offers rename, delete, edit
+-- metadata, read status..., which would act on a file that doesn't exist;
+-- show the book's details instead.
+local function installSelectAndHold()
     local FileChooser = require("ui/widget/filechooser")
-    local orig_onMenuSelect = FileChooser.onMenuSelect
-    FileChooser.onMenuSelect = function(self, item, ...)
-        if self.name == "filemanager" and type(item) == "table"
-                and Virtual.by_path[item.path]
-                and not (self.ui and self.ui.selected_files) then
-            Virtual.showDetails(item.path)
-            return true
-        end
-        return orig_onMenuSelect(self, item, ...)
+    for _i, name in ipairs({ "onMenuSelect", "onMenuHold" }) do
+        Guard.hook("library", FileChooser, name, function(orig, self, item, ...)
+            if isVirtualItem(self, item) then
+                Virtual.showDetails(item.path)
+                return true
+            end
+            return orig(self, item, ...)
+        end, "FileChooser:" .. name)
     end
 end
 
 local function installSettingsGuard()
     local DocSettings = require("docsettings")
-    local orig_flush = DocSettings.flush
-    DocSettings.flush = function(self, data, ...)
+    Guard.hook("library", DocSettings, "flush", function(orig, self, data, ...)
         local doc_path = type(data) == "table" and data.doc_path
             or type(self.data) == "table" and self.data.doc_path
         if Virtual.by_path[doc_path] then
             logger.dbg("CloudLibrary: not writing settings for", doc_path)
             return
         end
-        return orig_flush(self, data, ...)
-    end
+        return orig(self, data, ...)
+    end, "DocSettings:flush")
     for _i, name in ipairs({ "flushCustomCover", "flushCustomMetadata" }) do
-        local orig = DocSettings[name]
-        if type(orig) == "function" then
-            DocSettings[name] = function(self, doc_path, ...)
+        if type(DocSettings[name]) == "function" then
+            Guard.hook("library", DocSettings, name, function(orig, self, doc_path, ...)
                 if Virtual.by_path[doc_path] then return end
                 return orig(self, doc_path, ...)
-            end
+            end, "DocSettings:" .. name)
         end
     end
 end
 
-local function installHold()
-    local FileChooser = require("ui/widget/filechooser")
-    local orig_onMenuHold = FileChooser.onMenuHold
-    FileChooser.onMenuHold = function(self, item, ...)
-        if self.name == "filemanager" and type(item) == "table"
-                and Virtual.by_path[item.path]
-                and not (self.ui and self.ui.selected_files) then
-            Virtual.showDetails(item.path)
-            return true
-        end
-        return orig_onMenuHold(self, item, ...)
-    end
-end
-
+--- Installs the hooks. Returns false (and installs nothing) when the
+-- startup check finds KOReader has changed in a way the plugin relies on.
 function Virtual.install()
-    if Virtual.installed then return end
+    if Virtual.installed then return Guard.ok("library") end
     Virtual.installed = true
+    if not Guard.check() then
+        logger.warn("CloudLibrary: not installed:", Guard.statusText())
+        return false
+    end
+    -- If a hook fails later: no more cloud books in the folder.
+    Guard.on_failure.library = function()
+        local folder = Virtual.folder
+        Virtual.setCatalog(folder, {})
+        Virtual.forgetDecodedCovers()
+        local UIManager = require("ui/uimanager")
+        UIManager:nextTick(function() pcall(Virtual.refresh) end)
+    end
     installListing()
     installListingTimer()
     Virtual.has_bookinfo = installBookInfo()
-    installSelect()
-    installHold()
+    installSelectAndHold()
     installOpen()
     installSettingsGuard()
     logger.info("CloudLibrary: installed,", #Virtual.books, "cloud books in", Virtual.folder)
+    return true
 end
 
 return Virtual

@@ -131,8 +131,9 @@ function Downloads.isQueued(id)
 end
 
 local start
+local poll
 
-local function poll()
+local function pollDownload()
     local job = Downloads.job
     if not job then return end
     local ffiutil = require("ffi/util")
@@ -157,6 +158,8 @@ local function poll()
     local next_req = table.remove(Downloads.queue, 1)
     if next_req then start(next_req) end
 end
+
+poll = function() return require("cloudlibrary/guard").call("jobs", pollDownload) end
 
 start = function(req)
     local ffiutil = require("ffi/util")

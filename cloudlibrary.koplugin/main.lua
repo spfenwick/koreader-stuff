@@ -56,7 +56,7 @@ function CloudLibrary:init()
             fixture.books)
         return
     end
-    Library.onFileManagerReady()
+    require("cloudlibrary/guard").call("jobs", Library.onFileManagerReady)
 end
 
 function CloudLibrary:addToMainMenu(menu_items)
@@ -64,11 +64,13 @@ function CloudLibrary:addToMainMenu(menu_items)
 end
 
 function CloudLibrary:onNetworkConnected()
-    if not self.ui.document then Library.onNetworkConnected() end
+    if not self.ui.document then
+        require("cloudlibrary/guard").call("jobs", Library.onNetworkConnected)
+    end
 end
 
 function CloudLibrary:onCloudLibrarySync()
-    Library.sync("quick")
+    require("cloudlibrary/guard").call("jobs", Library.sync, "quick")
     return true
 end
 

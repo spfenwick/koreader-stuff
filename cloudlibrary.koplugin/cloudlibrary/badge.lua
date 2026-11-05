@@ -93,17 +93,17 @@ end
 
 function Badge.install()
     if Badge.installed then return end
+    local Guard = require("cloudlibrary/guard")
+    if not Guard.ok("badge") then return end -- failed the startup check
     Badge.installed = true
     -- FileChooser extends BookList, so wrapping BookList covers both (older
     -- KOReader versions have no BookList: wrap FileChooser there).
     local ok, cls = pcall(require, "ui/widget/booklist")
     if not (ok and type(cls) == "table") then cls = require("ui/widget/filechooser") end
-    local orig = cls.paintTo
-    cls.paintTo = function(self, bb, x, y)
+    Guard.hook("badge", cls, "paintTo", function(orig, self, bb, x, y)
         orig(self, bb, x, y)
-        local okp, err = pcall(Badge.paintOn, self, bb)
-        if not okp then require("logger").warn("CloudLibrary: badge:", err) end
-    end
+        Badge.paintOn(self, bb)
+    end, "BookList:paintTo")
 end
 
 return Badge
