@@ -23,6 +23,7 @@ local _ = require("gettext")
 local T = ffiutil.template
 
 local Covers = require("cloudlibrary/covers")
+local Downloads = require("cloudlibrary/downloads")
 local Matcher = require("cloudlibrary/matcher")
 local Store = require("cloudlibrary/store")
 local Timing = require("cloudlibrary/timing")
@@ -320,25 +321,168 @@ function Library.poll()
 end
 
 --- Called when the file browser opens: load, then sync if it's due.
+local function syncDue()
+    local server = Library.server()
+    if not server or Library.settings().auto_sync == false then return false end
+    local NetworkMgr = require("ui/network/manager")
+    if not NetworkMgr:isConnected() then return false end
+    local store = openStore(server)
+    local last = tonumber(store:getMeta("last_sync")) or 0
+    store:close()
+    return os.time() - last > QUICK_INTERVAL
+end
+
+--- Starts a quick sync if automatic syncing is on and one is due.
+function Library.syncIfDue()
+    if Library.job or not syncDue() then return false end
+    return Library.sync("quick", true)
+end
+
 function Library.onFileManagerReady()
     local t_start = Timing.start()
     Library.load()
     local server = Library.server()
     if not server or Library.job then return end
-    local s = Library.settings()
-    local due = false
-    if s.auto_sync ~= false then
-        local NetworkMgr = require("ui/network/manager")
-        if NetworkMgr:isConnected() then
-            local store = openStore(server)
-            local last = tonumber(store:getMeta("last_sync")) or 0
-            store:close()
-            due = os.time() - last > QUICK_INTERVAL
+    -- Even without syncing, check the folder for new or changed files.
+    Library.sync(syncDue() and "quick" or "scan", true)
+    Timing.record("startup: plugin", Timing.since(t_start), "catalog load and starting the background check")
+end
+
+-- Downloading --------------------------------------------------------------------
+
+--- Downloads a cloud book into the library folder. opts: { ext = format to
+-- use (default: the best one), open = open it when done }.
+function Library.download(id, opts)
+    opts = opts or {}
+    local server, folder = Library.server(), Library.folder()
+    local book = server and Library.bookDetails(id)
+    if not (book and folder) then return false end
+    local choices = Downloads.choices(book.formats)
+    local format = choices[1]
+    for _i, c in ipairs(choices) do
+        if c.ext == opts.ext then format = c end
+    end
+    if not format then
+        notify(T(_("Cloud library: no downloadable format for %1."), book.title or id))
+        return false
+    end
+    if Downloads.isQueued(id) then
+        notify(T(_("Cloud library: already downloading %1."), book.title or id))
+        return false
+    end
+    local url = require("cloudlibrary/sync").resolve(server.url, format.href)
+    local function go()
+        local name = Downloads.fileName(book, format.ext, folder)
+        local path = folder .. "/" .. name
+        notify(T(_("Downloading %1…"), book.title or name))
+        Downloads.start{
+            server = server, url = url, path = path, book = book,
+            on_done = function(result) Library.downloaded(book, result, opts) end,
+        }
+    end
+    local NetworkMgr = require("ui/network/manager")
+    NetworkMgr:runWhenConnected(go)
+    return true
+end
+
+function Library.downloaded(book, result, opts)
+    if result.error then
+        Timing.record("download: failed", result.ms or 0, book.title)
+        UIManager:show(require("ui/widget/infomessage"):new{
+            text = T(_("Couldn't download %1:\n%2"), book.title or book.id, result.error),
+        })
+        return
+    end
+    local attr = Downloads.finish(result.path, book)
+    Timing.record("download: book", result.ms or 0,
+        string.format("%.1f MB, %s", (result.size or 0) / 1048576, result.path:match("[^/]+$")))
+    -- Link the file to the catalog book now, rather than when the folder is
+    -- next checked, so its cloud entry goes away at once.
+    local server = Library.server()
+    if server and attr then
+        local store = openStore(server)
+        store:setLocalFile(result.path, {
+            mtime = attr.modification, size = attr.size, uuids = { book.id:lower() },
+            title = book.title, authors = book.authors,
+        })
+        store:close()
+    end
+    Library.load()
+    notify(T(_("Downloaded %1."), book.title or book.id))
+    if opts.open then
+        local FileManager = require("apps/filemanager/filemanager")
+        if FileManager.instance then
+            require("apps/filemanager/filemanagerutil").openFile(FileManager.instance, result.path)
+        else
+            require("apps/reader/readerui"):showReader(result.path)
         end
     end
-    -- Even without syncing, check the folder for new or changed files.
-    Library.sync(due and "quick" or "scan", true)
-    Timing.record("startup: plugin", Timing.since(t_start), "catalog load and starting the background check")
+end
+
+--- Buttons for a cloud book's details sheet. close() closes the sheet.
+function Library.detailsButtons(id, full, close)
+    local choices = Downloads.choices(full and full.formats)
+    local busy = Downloads.isQueued(id)
+    local first = choices[1]
+    local label = first and #choices > 1 and first.ext:upper() or nil
+    local rows = {{
+        { text = _("Close"), callback = close },
+        {
+            text = label and T(_("Download %1"), label) or _("Download"),
+            enabled = first ~= nil and not busy,
+            callback = function()
+                close()
+                Library.download(id, { ext = first and first.ext })
+            end,
+        },
+        {
+            text = _("Download & read"),
+            enabled = first ~= nil and not busy,
+            callback = function()
+                close()
+                Library.download(id, { ext = first and first.ext, open = true })
+            end,
+        },
+    }}
+    if #choices > 1 then
+        local row = {}
+        for i = 2, math.min(#choices, 4) do
+            local c = choices[i]
+            table.insert(row, {
+                text = T(_("Download %1"), c.ext:upper()),
+                enabled = not busy,
+                callback = function()
+                    close()
+                    Library.download(id, { ext = c.ext })
+                end,
+            })
+        end
+        table.insert(rows, row)
+    end
+    return rows
+end
+Virtual.detailsButtons = Library.detailsButtons
+
+-- Network ----------------------------------------------------------------------
+
+--- Wi-Fi connected: books drawn while offline got placeholder covers, so
+-- redraw the library page (their covers are then asked for), and sync if
+-- it's due.
+function Library.onNetworkConnected()
+    for _i, b in ipairs(Virtual.books) do b.cover_offline = nil end
+    UIManager:scheduleIn(1, function()
+        local FileManager = require("apps/filemanager/filemanager")
+        local fm = FileManager.instance
+        local fc = fm and fm.file_chooser
+        if not (fc and Virtual.folder and fc.path) then return end
+        if (fc.path:gsub("/+$", "")) ~= Virtual.folder then return end
+        -- Only when the file browser is what's on screen (not ZenOS's Home
+        -- page, a dialog's parent, or the reader).
+        if UIManager:getTopmostVisibleWidget() ~= fm then return end
+        Timing.record("network: redraw library", 0, "after Wi-Fi connected", true)
+        fc:updateItems(1, true)
+    end)
+    Library.syncIfDue()
 end
 
 -- Menu -------------------------------------------------------------------------

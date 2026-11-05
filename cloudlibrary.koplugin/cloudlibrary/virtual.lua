@@ -106,6 +106,7 @@ end
 Virtual.canFetchCovers = nil -- function() -> true if covers can be downloaded now
 Virtual.requestCovers = nil  -- function(books) -> true if they'll be downloaded
 Virtual.coversBusy = nil     -- function() -> true while downloading
+Virtual.detailsButtons = nil -- function(id, full_book, close) -> ButtonDialog rows
 
 --- "ready", "pending" (can be downloaded now) or "none".
 function Virtual.coverState(book)
@@ -123,7 +124,7 @@ function Virtual.coverState(book)
         end
         if book.cover_w then return "ready" end
     end
-    if book.cover_href and not book.cover_failed and not book.cover
+    if book.cover_href and not book.cover_failed and not book.cover_offline and not book.cover
             and Virtual.canFetchCovers and Virtual.canFetchCovers() then
         return "pending"
     end
@@ -233,7 +234,6 @@ function Virtual.showDetails(path)
     rawset(_G, "__CLOUDLIBRARY_LAST_DETAILS", path)
     local UIManager = require("ui/uimanager")
     local ButtonDialog = require("ui/widget/buttondialog")
-    local InfoMessage = require("ui/widget/infomessage")
     -- Full record (summary, formats...) from the catalog, when available.
     local full = Virtual.details and Virtual.details(book.id) or book
     local lines = { full.title or book.title or book.id }
@@ -265,24 +265,13 @@ function Virtual.showDetails(path)
     table.insert(lines, "")
     table.insert(lines, _("In your cloud library, not on this device."))
     local dialog
+    local function close() UIManager:close(dialog) end
+    local buttons = Virtual.detailsButtons and Virtual.detailsButtons(book.id, full, close)
+        or {{ { text = _("Close"), callback = close } }}
     dialog = ButtonDialog:new{
         title = table.concat(lines, "\n"),
         title_align = "left",
-        buttons = {{
-            {
-                text = _("Close"),
-                callback = function() UIManager:close(dialog) end,
-            },
-            {
-                text = _("Download"),
-                callback = function()
-                    UIManager:close(dialog)
-                    UIManager:show(InfoMessage:new{
-                        text = _("Downloading comes in a later version."),
-                    })
-                end,
-            },
-        }},
+        buttons = buttons,
     }
     UIManager:show(dialog)
 end
@@ -384,7 +373,7 @@ local function installBookInfo()
             if #wanted > 0 and not (Virtual.requestCovers and Virtual.requestCovers(wanted)) then
                 -- Can't download now (Wi-Fi went off): show them without a
                 -- cover for this session instead of waiting.
-                for _i, book in ipairs(wanted) do book.cover_failed = book.cover_failed or os.time() end
+                for _i, book in ipairs(wanted) do book.cover_offline = true end
             end
             if #real > 0 then return orig_extract(self, real, ...) end
             -- Report success even when nothing was started: CoverBrowser

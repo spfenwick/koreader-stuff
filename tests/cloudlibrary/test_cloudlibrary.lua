@@ -21,6 +21,7 @@ local Sync = require("cloudlibrary/sync")
 local Matcher = require("cloudlibrary/matcher")
 local Virtual = require("cloudlibrary/virtual")
 local Covers = require("cloudlibrary/covers")
+local Downloads = require("cloudlibrary/downloads")
 
 local failures, checks = 0, 0
 local function check(cond, msg)
@@ -614,6 +615,63 @@ do
         "cover download timings")
     check(cr.timing.total.note:find("2 covers", 1, true), "cover count in the note")
     store:close()
+end
+
+-- Downloads -----------------------------------------------------------------------------
+
+do
+    eq(Downloads.extension({ type = "application/epub+zip" }), "epub", "epub type")
+    eq(Downloads.extension({ type = "application/pdf; charset=binary" }), "pdf", "type with parameters")
+    eq(Downloads.extension({ type = "application/vnd.comicbook+zip" }), "cbz", "comic type")
+    eq(Downloads.extension({ type = "application/x-mobi8-ebook" }), "azw3", "azw3 type")
+    eq(Downloads.extension({ type = "application/octet-stream", href = "/opds/download/7/fb2/" }), "fb2",
+        "format from a Calibre-Web link")
+    eq(Downloads.extension({ href = "/files/book.DJVU" }), "djvu", "format from a file name")
+    eq(Downloads.extension({ type = "application/x-unknown" }), nil, "unknown format")
+    local choices = Downloads.choices({
+        { type = "application/pdf", href = "/d/1/pdf/" },
+        { type = "application/x-weird", href = "/opds/download/1/weird/" },
+        { type = "application/epub+zip", href = "/d/1/epub/" },
+        { type = "application/x-nothing" },
+    })
+    eq(#choices, 3, "formats with an extension")
+    eq(choices[1].ext, "epub", "EPUB preferred")
+    eq(choices[2].ext, "pdf", "then PDF")
+    eq(choices[3].ext, "weird", "unknown formats last")
+
+    local folder = TMP .. "/downloads"
+    rmrf(folder); mkdir(folder)
+    local book = { id = "d1", title = "Why: A \"Question\"?", authors = { "Ann One", "Bob Two" }, added = 1600000000 }
+    local name = Downloads.fileName(book, "epub", folder)
+    eq(name, "Ann One, Bob Two - Why_ A _Question__.epub", "KOReader-style name, unsafe characters replaced")
+    local f = io.open(folder .. "/" .. name, "w"); f:write("x"); f:close()
+    eq(Downloads.fileName(book, "epub", folder), "Ann One, Bob Two - Why_ A _Question__ (2).epub",
+        "existing file not overwritten")
+    eq(Downloads.fileName({ id = "x", title = "T" }, "pdf", folder), "T.pdf", "no author")
+
+    local path = folder .. "/ok.epub"
+    local r = Downloads.fetch(function(_url, part)
+        local out = io.open(part, "wb"); out:write("book bytes"); out:close(); return true
+    end, "https://x/1", path)
+    check(r and r.path == path and r.size == 10, "downloaded and renamed")
+    check(lfs.attributes(path .. ".part") == nil, "no partial file left")
+    local r2, err2 = Downloads.fetch(function(_url, part)
+        local out = io.open(part, "wb"); out:write("half"); out:close(); return nil, "timeout"
+    end, "https://x/2", folder .. "/bad.epub")
+    check(r2 == nil and err2 == "timeout", "failure reported")
+    check(lfs.attributes(folder .. "/bad.epub") == nil and lfs.attributes(folder .. "/bad.epub.part") == nil,
+        "failed download leaves nothing")
+    local r3, err3 = Downloads.fetch(function(_url, part)
+        io.open(part, "wb"):close(); return true
+    end, "https://x/3", folder .. "/empty.epub")
+    check(r3 == nil and err3:find("empty", 1, true), "empty file rejected")
+    local r4 = Downloads.fetch(function(_url, part)
+        local out = io.open(part, "wb"); out:write("y"); out:close(); return true
+    end, "https://x/4", path)
+    check(r4 == nil, "won't replace a file that appeared meanwhile")
+
+    local attr = Downloads.finish(path, book)
+    eq(attr.modification, 1600000000, "file dated when the book was added")
 end
 
 -- Virtual entries ---------------------------------------------------------------------

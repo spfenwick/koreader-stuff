@@ -33,6 +33,35 @@ function Http.get(server, url)
     return nil, "Request failed: " .. tostring(status or code) .. " " .. url
 end
 
+--- Downloads url to path, streaming (books can be large). Returns true, or
+-- nil and an error message; on failure path is removed.
+function Http.download(server, url, path)
+    local http = require("socket.http")
+    local ltn12 = require("ltn12")
+    local socket = require("socket")
+    local socketutil = require("socketutil")
+    local file, ferr = io.open(path, "wb")
+    if not file then return nil, "Can't write " .. path .. ": " .. tostring(ferr) end
+    local block_timeout, total_timeout = socketutil:set_timeout(socketutil.FILE_BLOCK_TIMEOUT,
+        socketutil.FILE_TOTAL_TIMEOUT)
+    local code, _headers, status = socket.skip(1, http.request{
+        url = url,
+        method = "GET",
+        headers = { ["Accept-Encoding"] = "identity" },
+        sink = ltn12.sink.file(file), -- closes the file
+        user = server.username,
+        password = server.password,
+    })
+    socketutil:reset_timeout()
+    if code == 200 then return true end
+    os.remove(path)
+    if code == 401 or code == 403 then
+        return nil, "The server refused the user name or password (" .. tostring(code) .. ")."
+    end
+    local described = socketutil.describe_error and socketutil.describe_error(code, block_timeout, total_timeout)
+    return nil, described or ("Download failed: " .. tostring(status or code))
+end
+
 --- fetch(url) for Sync.
 function Http.fetcher(server)
     return function(url) return Http.get(server, url) end

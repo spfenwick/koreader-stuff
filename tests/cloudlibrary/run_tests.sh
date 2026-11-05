@@ -22,6 +22,6 @@ SDL_VIDEODRIVER=dummy ./luajit "$repo/tests/cloudlibrary/test_cloudlibrary.lua" 
     > "$tmp/out.log" 2> "$tmp/err.log" && status=0 || status=$?
 grep -h "^cloudlibrary:\|^FAIL\|rror" "$tmp/out.log" "$tmp/err.log" || true
 if [ "$status" -ne 0 ] && ! grep -q "^cloudlibrary:" "$tmp/out.log"; then
-    tail -20 "$tmp/err.log" "$tmp/out.log"
+    tail -n 20 "$tmp/err.log" "$tmp/out.log"
 fi
 exit "$status"

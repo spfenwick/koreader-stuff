@@ -61,6 +61,10 @@ function CloudLibrary:addToMainMenu(menu_items)
     menu_items.cloudlibrary = Library.menuItems()
 end
 
+function CloudLibrary:onNetworkConnected()
+    if not self.ui.document then Library.onNetworkConnected() end
+end
+
 function CloudLibrary:onCloudLibrarySync()
     Library.sync("quick")
     return true
