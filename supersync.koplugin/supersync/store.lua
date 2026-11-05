@@ -360,6 +360,8 @@ function Store:counts()
             bad = num(conn:rowexec("SELECT count(*) FROM bad_segments WHERE name LIKE 'seg-%';")),
             ann_seen = num(conn:rowexec("SELECT count(*) FROM seen_segments WHERE name LIKE 'ann-%';")),
             ann_bad = num(conn:rowexec("SELECT count(*) FROM bad_segments WHERE name LIKE 'ann-%';")),
+            book_seen = num(conn:rowexec("SELECT count(*) FROM seen_segments WHERE name LIKE 'book-%';")),
+            book_bad = num(conn:rowexec("SELECT count(*) FROM bad_segments WHERE name LIKE 'book-%';")),
         }
     end)
 end

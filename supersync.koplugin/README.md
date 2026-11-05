@@ -8,6 +8,9 @@ KOReader's Cloud storage:
 - **Reading statistics** (WebDAV). See [STATISTICS.md](STATISTICS.md).
 - **Highlights, notes and page bookmarks** (WebDAV). See
   [STATISTICS.md](STATISTICS.md#highlights-and-bookmarks).
+- **Book status, rating, review, custom metadata and handmade table of
+  contents**, with highlights (WebDAV). See
+  [STATISTICS.md](STATISTICS.md#book-status-and-details).
 
 It replaces two plugins, Settings sync (`rclonesync.koplugin`) and
 Statistics sync (`statsync.koplugin`), and takes over their data on each
@@ -77,7 +80,9 @@ minutes, keeping what it finished (the next sync carries on).
 
 Changes to highlights are recorded when a book is closed, and changes from
 other devices are put into a book when it's opened (or right away for the
-book being read), whether or not automatic sync is on.
+book being read), whether or not automatic sync is on. Book status,
+rating, review and custom metadata are also written into books that aren't
+open, right after a sync.
 
 ## On the server
 

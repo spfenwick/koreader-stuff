@@ -27,6 +27,8 @@ mixing them gives confusing results.
     …
     ann-0000000001.jsonl.zst      highlights and bookmarks, numbered apart
     …
+    book-0000000001.jsonl.zst     book status and details, numbered apart
+    …
 ```
 
 A segment is a text file compressed with zstd (`zstd -d` unpacks it), one
@@ -151,6 +153,37 @@ So:
 - **"Write highlights into PDF"** puts a copy of each highlight into the PDF
   file itself. A device with that copy of the file would show it twice
   (once from the file, once synced). Leave it off for synced PDFs.
+
+## Book status and details
+
+Synced with highlights and bookmarks (same menu item, same automatic
+setting):
+
+- the book's **status** (reading, on hold, finished), **rating** and
+  **review**;
+- **custom metadata** set in Book information (title, authors, series,
+  series index, keywords, language, description), not custom covers;
+- the **handmade table of contents** and **hidden flows**.
+
+As for highlights, they go to devices with the same file. Each item syncs
+on its own, and the newest change wins.
+
+- **When they arrive.** Status, rating, review and metadata: right after a
+  sync, also into books that aren't open (books opened on that device
+  before), so the file browser shows them. The table of contents and
+  hidden flows: right away for the book you're reading, otherwise when
+  it's next opened.
+- **Changes made in the file browser** (marking a book finished, rating
+  it, editing its metadata) are picked up at the next sync.
+- **A device's first sync doesn't override the others**: what a device
+  had before it first synced counts as old, and the "reading" status
+  KOReader gives a book when it's first opened never replaces a status set
+  elsewhere.
+- **Resetting a book's settings** (or deleting its `.sdr` folder) doesn't
+  clear anything on other devices: the synced values come back instead.
+- **Reviews are sent as plain text** to your server.
+
+Details in [BOOKDATA.md](BOOKDATA.md).
 
 ## Recovering
 

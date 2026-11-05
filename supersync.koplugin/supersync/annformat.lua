@@ -108,6 +108,21 @@ fromJson = function(v)
 end
 AnnFormat.fromJson = fromJson
 
+--- Any Lua value as canonical JSON text (sorted keys, tables with
+-- non-JSON keys tagged as above), or nil and an error.
+function AnnFormat.encodeValue(v)
+    local ok, res = pcall(function() return Codec.encode(toJson(v, 0)) end)
+    if not ok then return nil, tostring(res) end
+    return res
+end
+
+--- The Lua value back from encodeValue's JSON text (nil if it isn't JSON).
+function AnnFormat.decodeValue(json)
+    local v = Codec.decode(json)
+    if v == nil or v == Codec.null then return nil end
+    return fromJson(v)
+end
+
 --- The fields of a KOReader annotation that are synced, as canonical JSON
 -- text (sorted keys), or nil and an error.
 function AnnFormat.fieldsJson(item)

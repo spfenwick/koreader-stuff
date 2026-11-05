@@ -1,7 +1,7 @@
 --[[--
 The network part of a sync. Runs in a subprocess; doesn't touch any database.
 
-With a transport (see webdav.lua) rooted at <configured folder>/statsync:
+With a transport (see webdav.lua) rooted at <configured folder>/Statistics:
 
 1. List devices/ (PROPFIND, Depth 1). Create the folders on first use, and
    this device's meta.json.
@@ -25,10 +25,10 @@ Downloads go to tmp_dir, each to a .part file renamed when complete.
 caller can save it: if the subprocess is killed for taking too long, what
 was done so far (complete downloads, a verified upload) is still used.
 
-There are two streams of segments in each device folder: statistics
-(seg-N) and annotations (ann-N). Each has its own numbering; steps 3 and 4
-run for each stream the sync is for (params.stats unless false, params.ann
-when given).
+There are three streams of segments in each device folder: statistics
+(seg-N), annotations (ann-N) and book data (book-N). Each has its own
+numbering; steps 3 and 4 run for each stream the sync is for (params.stats
+unless false, params.ann and params.book when given).
 
 params.expect_own: this device has files in the folder already (it has
 sent some). If its folder isn't there, the folder is a different one, for
@@ -37,14 +37,16 @@ would start numbering from 1 again, and clash with the copies. So the step
 stops with result.missing_own, before creating anything.
 
 Result: { ok, error, stage, full_listed, uploaded = { name, size, etag,
-          verified }, upload_error, ann_uploaded, ann_upload_error, missing_own,
+          verified }, upload_error, ann_uploaded, ann_upload_error, book_uploaded,
+          book_upload_error, missing_own,
           devices = { id, … }, downloads = { {stream, device, name, size,
           etag, path}, … }, remote_more, segment_errors, bytes_up,
           bytes_down, requests }
-(stream is "stats" or "ann").
+(stream is "stats", "ann" or "book").
 --]]
 
 local AnnFormat = require("supersync/annformat")
+local BookFormat = require("supersync/bookformat")
 local Codec = require("supersync/codec")
 
 local NetJob = {}
@@ -64,8 +66,11 @@ local function fileSize(path)
 end
 
 NetJob.STREAMS = {
-    stats = { name = Codec.segmentName, seq = Codec.segmentSeq, result = "uploaded" },
-    ann = { name = AnnFormat.segmentName, seq = AnnFormat.segmentSeq, result = "ann_uploaded" },
+    stats = { name = Codec.segmentName, seq = Codec.segmentSeq, result = "uploaded", err = "upload_error" },
+    ann = { name = AnnFormat.segmentName, seq = AnnFormat.segmentSeq, result = "ann_uploaded",
+            err = "ann_upload_error" },
+    book = { name = BookFormat.segmentName, seq = BookFormat.segmentSeq, result = "book_uploaded",
+             err = "book_upload_error" },
 }
 
 --- The first segment number (from 1) for which used(name) is false.
@@ -87,7 +92,8 @@ end
 --  seen and bad ({ [device] = { [name] = { size, etag } } }), full_list (bool),
 --  tmp_dir, max_download_bytes (optional), stats (false: annotations only),
 --  expect_own, and for annotations
---  ann = { pending = { path, size } | nil, bad } (seen is shared: names differ)
+--  ann = { pending = { path, size } | nil, bad } (seen is shared: names differ),
+--  and for book data, book (the same shape)
 function NetJob.run(params, transport, report)
     report = report or function() end
     local result = { stage = "start", devices = {}, downloads = {}, segment_errors = {} }
@@ -113,6 +119,10 @@ function NetJob.run(params, transport, report)
     end
     if params.ann then
         table.insert(streams, { id = "ann", def = NetJob.STREAMS.ann, pending = params.ann.pending, bad = params.ann.bad or {} })
+    end
+    if params.book then
+        table.insert(streams, { id = "book", def = NetJob.STREAMS.book, pending = params.book.pending,
+                                bad = params.book.bad or {} })
     end
     local function known(id, stream)
         local s, b = seen[id] or {}, stream.bad[id] or {}
@@ -227,8 +237,7 @@ function NetJob.run(params, transport, report)
         end
         if not up and not up_err then up_err = "no free segment name" end
         result[def.result] = up
-        local err_key = stream.id == "ann" and "ann_upload_error" or "upload_error"
-        result[err_key] = up_err
+        result[def.err] = up_err
         stream.uploaded_name = up and up.name
     end
     for _, stream in ipairs(streams) do

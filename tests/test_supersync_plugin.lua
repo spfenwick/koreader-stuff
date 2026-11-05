@@ -119,12 +119,15 @@ stub("ui/widget/container/widgetcontainer", {
 local MD5 = string.rep("d", 32)
 local XP = "/body/DocFragment[2]/body/p[3]/text().0"
 local sidecar = { partial_md5_checksum = MD5, doc_props = { title = "Annotated" },
+                  summary = { status = "complete", modified = "2026-01-01" },
                   annotations = { { datetime = "2026-02-02 02:02:02", drawer = "lighten", text = "from history",
                                     page = XP, pos0 = XP, pos1 = "/body/DocFragment[2]/body/p[3]/text().9" } } }
 stub("readhistory", { hist = { { file = TMP .. "/annotated.epub" } } })
 S.writeFile(TMP .. "/annotated.epub", "book")
 stub("docsettings", {
     hasSidecarFile = function(_, p) return p == TMP .. "/annotated.epub" end,
+    findSidecarFile = function(_, p) return p == TMP .. "/annotated.epub" and TMP .. "/annotated.sdr/metadata.epub.lua" or nil end,
+    findCustomMetadataFile = function() return nil end,
     open = function() return { readSetting = function(_, k) return sidecar[k] end } end,
 })
 stub("libs/libkoreader-lfs", require("lfs"))
@@ -212,8 +215,9 @@ local function count(dir, pattern)
     return n
 end
 local DAVDIR = server.dir .. "/KOReader/Statistics/devices/"
-check(count(DAVDIR .. id, "^seg%-") == 1 and count(DAVDIR .. id, "^ann%-") == 1,
+check(count(DAVDIR .. id, "^seg%-") == 1 and count(DAVDIR .. id, "^ann%-") == 1 and count(DAVDIR .. id, "^book%-") == 1,
     "compressed segments on the server under KOReader/Statistics")
+check(st.book_uploaded == 1, "book status from the reading history sent with highlights (" .. tostring(st.book_uploaded) .. ")")
 
 -- Offline: automatic triggers skip quietly
 connected = false
@@ -412,6 +416,8 @@ check(q.multi and q.text:find("6 of 6", 1, true) and q.text:find("Annotated", 1,
 check(item("Removed highlights waiting").enabled_func(), "held removals: menu item enabled")
 item("Status").callback()
 check(shown[#shown].text:find("Books with removals waiting for you: 1", 1, true), "status shows the held book")
+check(shown[#shown].text:find("Book status and details (synced with highlights): 1 books", 1, true),
+    "status shows book data")
 package.loaded["apps/reader/readerui"].instance = reader
 q.choice1_callback() -- restore them here
 check(#reader.annotation.annotations == 6, "restored in the open book")

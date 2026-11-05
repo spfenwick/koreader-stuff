@@ -18,8 +18,12 @@ description, and what couldn't be verified. Written against KOReader
 | `supersync/annformat.lua` | both | Annotation records, keys, annotation segment format |
 | `supersync/annstore.lua` | main | Annotations' merged state, change detection, held deletions, export/import |
 | `supersync/annsync.lua` | main | Annotations in the reader: on open/close, live apply, history scan, the question |
+| `supersync/bookformat.lua` | both | Book data properties, book data segment format |
+| `supersync/bookstore.lua` | main | Book data's merged state, change detection, export/import |
+| `supersync/booksync.lua` | main | Book data in KOReader: open book, sidecar refresh, writing closed books |
 
-Highlights and bookmarks are designed in ANNOTATIONS.md.
+Highlights and bookmarks are designed in ANNOTATIONS.md, book data (status,
+rating, review, custom metadata, handmade TOC) in BOOKDATA.md.
 
 ## Where the KOReader source differs from the task description
 

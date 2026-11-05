@@ -10,6 +10,8 @@ local check = S.check
 
 local AnnFormat = require("supersync/annformat")
 local AnnStore = require("supersync/annstore")
+local BookFormat = require("supersync/bookformat")
+local BookStore = require("supersync/bookstore")
 local Codec = require("supersync/codec")
 local Zstd = require("supersync/zstd")
 local Engine = require("supersync/engine")
@@ -55,6 +57,7 @@ function Sim:makeEngine()
     local sim = self
     self.store = Store.new{ sq3 = S.SQ3, stats_path = self.db, state_path = self.state }
     self.ann_store = AnnStore.new{ sq3 = S.SQ3, state_path = self.state }
+    self.book_store = BookStore.new{ sq3 = S.SQ3, state_path = self.state }
     self.engine = Engine.new{
         store = self.store,
         ann = {
@@ -64,6 +67,14 @@ function Sim:makeEngine()
             afterSync = function(run)
                 sim.ann_affected = sim.ann_affected or {}
                 for id in pairs(run.ann_affected) do sim.ann_affected[id] = true end
+            end,
+        },
+        book = {
+            store = self.book_store,
+            collect = function() end,
+            afterSync = function(run)
+                sim.book_affected = sim.book_affected or {}
+                for md5 in pairs(run.book_affected) do sim.book_affected[md5] = true end
             end,
         },
         logger = verbose or quiet,
@@ -401,6 +412,57 @@ local cmerged = annMerged(C)
 C.store:forgetSeen()
 sync({ C })
 check(annMerged(C) == cmerged and C.last_run.ann_segments_imported > 0, "rebuild re-imports annotations, same result")
+
+-- 9. Book data -----------------------------------------------------------------------------------
+-- Synced with annotations: status, rating, custom metadata, handmade TOC.
+local function bookMerged(d)
+    local c = S.SQ3.open(d.state)
+    local rows = {}
+    for r in c:prepare("SELECT md5, prop, updated, device, deleted, hash FROM book_merged ORDER BY md5, prop"):rows() do
+        rows[#rows + 1] = table.concat({ r[1], r[2], tonumber(r[3]), r[4], tonumber(r[5]), r[6] }, "|")
+    end
+    c:close()
+    return table.concat(rows, "\n"), #rows
+end
+local function bookObserve(d, values, extra)
+    local o = { md5 = ANN_BOOK, values = values, now = os.time(), device = d.id, title = BOOKS[1].title }
+    for k, v in pairs(extra or {}) do o[k] = v end
+    return d.book_store:observe(o)
+end
+local function bookRemote(id)
+    local out = {}
+    for name in io.popen("ls " .. S.q(REMOTE .. "/devices/" .. id) .. " 2>/dev/null"):lines() do
+        if BookFormat.segmentSeq(name) then out[#out + 1] = name end
+    end
+    return out
+end
+bookObserve(A, { status = "complete", rating = 5, ["meta.title"] = "Custom title",
+                 ["toc.rolling"] = { enabled = true, items = { { title = "One", depth = 1, xpointer = "/body/p[1]" } } } },
+            { times = { status = 1700000000 } })
+bookObserve(B, { status = "reading", rating = false }) -- KOReader's default: never wins
+sync({ A, B, C }); sync({ A, B, C })
+local bm, nb = bookMerged(A)
+check(nb == 4 and bookMerged(B) == bm and bookMerged(C) == bm, "book data: same merged state everywhere (" .. nb .. ")")
+check(#bookRemote(A.id) == 1, "book data segment next to the others")
+check(B.book_affected and B.book_affected[ANN_BOOK], "B told which book's data changed")
+local bplan = B.book_store:plan(ANN_BOOK, { status = "reading", rating = false, ["meta.title"] = false })
+check(#bplan == 3 and bplan[3].prop == "status" and bplan[3].value == "complete", "B would set A's status, rating and title")
+for _, d in ipairs({ A, B, C }) do
+    check(d.last_run and not d.last_run.error and not d.last_run.book_upload_error,
+        "book data: " .. d.name .. " synced without error")
+end
+-- A corrupt book data segment: recorded as bad, the sync carries on
+check(dav:put("devices/" .. B.id .. "/" .. BookFormat.segmentName(#bookRemote(B.id) + 1), TMP .. "/junk.jsonl"),
+    "corrupt book data segment uploaded")
+sync({ C })
+local cbb = S.SQ3.open(C.state)
+check(tonumber(cbb:rowexec("SELECT count(*) FROM bad_segments WHERE name LIKE 'book-%'")) == 1, "corrupt book segment recorded as bad")
+cbb:close()
+check(not C.last_run.error, "and doesn't fail the sync")
+-- Rebuild from cloud
+C.store:forgetSeen()
+sync({ C })
+check(bookMerged(C) == bm and C.last_run.book_segments_imported > 0, "rebuild re-imports book data, same result")
 
 server.stop()
 S.finish("supersync integration test")

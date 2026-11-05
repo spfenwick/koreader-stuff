@@ -10,7 +10,10 @@ the same on several devices, through a server set up in Cloud storage.
   supersync/store.lua the databases, supersync/webdav.lua and
   supersync/netjob.lua the network (in a subprocess), supersync/plugin.lua
   connects them to KOReader. Annotations: supersync/annstore.lua (data),
-  supersync/annsync.lua (in the reader). See DESIGN.md and ANNOTATIONS.md.
+  supersync/annsync.lua (in the reader). Book data (status, rating, review,
+  custom metadata, handmade table of contents), synced with annotations:
+  supersync/bookstore.lua and supersync/booksync.lua. See DESIGN.md,
+  ANNOTATIONS.md and BOOKDATA.md.
 
 supersync/migrate.lua takes over Settings sync's and Statistics sync's
 data on this device, the first time.
@@ -153,7 +156,7 @@ end
 --- Asks for a sync of statistics and/or annotations.
 -- what: { stats = bool, ann = bool }; nil for an automatic sync, of what's
 -- set to sync automatically.
-function SuperSync.trigger(reason, what, interactive, scanned)
+function SuperSync.trigger(reason, what, interactive, scanned, refreshed)
     if not what then
         what = { stats = Plugin.autoStats(), ann = Plugin.autoAnnotations() }
         if not what.stats and not what.ann then return end
@@ -162,6 +165,13 @@ function SuperSync.trigger(reason, what, interactive, scanned)
         -- Before the first sync of highlights and bookmarks: read the
         -- reading history, so books not opened since get sent too.
         if Plugin.annSync():scan(function() SuperSync.trigger(reason, what, interactive, true) end) then return end
+    end
+    if what.ann and not refreshed then
+        -- Book data changed in the file browser (status, rating, metadata):
+        -- read the sidecars that changed since last time.
+        if Plugin.bookSync():refresh(function() SuperSync.trigger(reason, what, interactive, true, true) end) then
+            return
+        end
     end
     local opts = { interactive = interactive, stats = what.stats or false, ann = what.ann or false }
     local engine = Plugin.engine()
@@ -219,17 +229,30 @@ Or send everything this device has to this folder?]]), Plugin.serverLocation() o
         if run.upload_error then
             table.insert(lines, T(_("Upload of statistics failed: %1"), run.upload_error))
         end
+        if run.book then
+            table.insert(lines, T(_("Book status and details: sent %1 changes, received %2."),
+                run.book_uploaded_records or 0, run.book_imported_records or 0))
+        end
         if run.ann_upload_error then
             table.insert(lines, T(_("Upload of highlights and bookmarks failed: %1"), run.ann_upload_error))
+        end
+        if run.book_upload_error then
+            table.insert(lines, T(_("Upload of book status and details failed: %1"), run.book_upload_error))
         end
         text = T(_("%1 synced."), syncWhat(run)) .. "\n" .. table.concat(lines, "\n")
     end
     UIManager:show(InfoMessage:new{ text = text, timeout = run.error and nil or 4 })
 end
 
+function SuperSync:onReadSettings(config)
+    -- Before KOReader fills in a missing status: was the book's sidecar new or reset?
+    if self.ui and self.ui.document then Plugin.bookSync():onReadSettings(self.ui, config) end
+end
+
 function SuperSync:onReaderReady()
     local ui = self.ui
     local function ready()
+        Plugin.bookSync():onReaderReady(ui)
         if Plugin.annSync():onReaderReady(ui) > 0 then
             UIManager:scheduleIn(1, function() Plugin.annSync():askHeld() end)
         end
@@ -245,6 +268,7 @@ end
 function SuperSync:onCloseDocument()
     -- KOReader has saved the book's annotations: record its changes now,
     -- while they're still in memory.
+    Plugin.bookSync():onClose(self.ui)
     local held = Plugin.annSync():onClose(self.ui)
     if held > 0 then
         UIManager:scheduleIn(1, function() Plugin.annSync():askHeld() end)
@@ -411,6 +435,8 @@ function SuperSync:showStatus()
     counts = ok and counts or {}
     local aok, a = pcall(function() return Plugin.annStore():counts() end)
     a = aok and a or {}
+    local bok, b = pcall(function() return Plugin.bookStore():counts() end)
+    b = bok and b or {}
     local function onOff(v) return v and _("on") or _("off") end
     local lines = {
         T(_("Server: %1"), self:serverText()),
@@ -436,6 +462,12 @@ function SuperSync:showStatus()
         T(_("Changes sent last time: %1, received: %2"), st.ann_uploaded or 0, st.ann_imported or 0),
         T(_("Files imported: %1, unreadable: %2"), counts.ann_seen or "?", counts.ann_bad or "?"),
         T(_("Reading history read: %1"), when(d.ann_scanned)),
+        "",
+        T(_("Book status and details (synced with highlights): %1 books"), b.books or "?"),
+        T(_("Changes waiting to be sent: %1"), b.outbox or "?"),
+        T(_("Books to update on this device: %1"), b.write or "?"),
+        T(_("Changes sent last time: %1, received: %2"), st.book_uploaded or 0, st.book_imported or 0),
+        T(_("Files imported: %1, unreadable: %2"), counts.book_seen or "?", counts.book_bad or "?"),
     }
     UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
 end
@@ -537,7 +569,9 @@ function SuperSync:menuItems()
             text = _("Sync highlights and bookmarks automatically"),
             help_text = _([[Sync highlights, notes and page bookmarks at the same times, for books with the same file on each device. Changes reach a book when it's open: right away for the book you're reading, otherwise when it's next opened.
 
-Notes are stored on the server as plain text.
+Book status (reading, on hold, finished), rating, review, custom metadata (title, authors, series…) and the handmade table of contents and hidden flows are synced with them. Status, rating, review and metadata are written into books that aren't open too; the table of contents waits until the book is opened.
+
+Notes and reviews are stored on the server as plain text.
 
 Turn off KOReader's "Export annotations on book closing" (in the reader's Bookmarks settings): the import that goes with it deletes highlights that aren't in the exported file.]]),
             checked_func = Plugin.autoAnnotations,

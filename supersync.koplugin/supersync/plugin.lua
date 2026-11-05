@@ -1,5 +1,5 @@
 --[[--
-Connects the statistics and annotations sync engine to KOReader: settings,
+Connects the statistics, annotations and book data sync engine to KOReader: settings,
 the server, subprocesses, the network state and the running statistics
 plugin. Also the settings and the server choice settings sync shares.
 
@@ -17,6 +17,8 @@ local logger = require("logger")
 
 local AnnStore = require("supersync/annstore")
 local AnnSync = require("supersync/annsync")
+local BookStore = require("supersync/bookstore")
+local BookSync = require("supersync/booksync")
 local Engine = require("supersync/engine")
 local Store = require("supersync/store")
 
@@ -249,6 +251,34 @@ function Plugin.annSync()
     return ann_sync
 end
 
+local book_store, book_sync
+
+function Plugin.bookStore()
+    if not book_store then
+        book_store = BookStore.new{ sq3 = require("lua-ljsqlite3/init"), state_path = paths().state }
+    end
+    return book_store
+end
+
+--- The process-wide book data sync (KOReader side): status, rating,
+-- review, custom metadata, handmade table of contents. Synced with
+-- highlights and bookmarks.
+function Plugin.bookSync()
+    if book_sync then return book_sync end
+    book_sync = BookSync.new{
+        store = Plugin.bookStore(),
+        getDeviceId = Plugin.deviceId,
+        now = os.time,
+        logger = logger,
+        ui_manager = UIManager,
+        enabled = function() return true end,
+        schedule = function(delay, fn)
+            if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
+        end,
+    }
+    return book_sync
+end
+
 local controller
 
 --- The process-wide engine.
@@ -279,7 +309,10 @@ function Plugin.engine()
             if not lok then return false, "state database: " .. tostring(changed) end
             if changed then
                 logger.info("StatSync: server or folder changed, syncing everything with", location)
-                local aok, aerr = pcall(function() Plugin.annStore():requeueAll() end)
+                local aok, aerr = pcall(function()
+                    Plugin.annStore():requeueAll()
+                    Plugin.bookStore():requeueAll()
+                end)
                 if not aok then return false, "state database: " .. tostring(aerr) end
             end
             local stats_settings = G_reader_settings:readSetting("statistics")
@@ -343,6 +376,11 @@ function Plugin.engine()
             store = Plugin.annStore(),
             collect = function() Plugin.annSync():collect() end,
             afterSync = function(run) Plugin.annSync():afterSync(run) end,
+        },
+        book = {
+            store = Plugin.bookStore(),
+            collect = function() Plugin.bookSync():collect() end,
+            afterSync = function(run) Plugin.bookSync():afterSync(run) end,
         },
         saveStatus = function(status)
             Plugin.deviceState().status = status
