@@ -16,6 +16,7 @@ Calibre-Web's OPDS entries have no series and no last-modified date, so:
 ]]
 
 local Feed = require("cloudlibrary/feed")
+local Timing = require("cloudlibrary/timing")
 
 local Sync = {}
 Sync.__index = Sync
@@ -26,8 +27,33 @@ function Sync.new(o)
     assert(o.store and o.root and o.fetch, "Sync.new needs store, root and fetch")
     o.now = o.now or os.time
     o.progress = o.progress or function() end
+    o.clock = o.clock or Timing.clock
     o.requests = 0
+    -- Milliseconds spent in each part, and bytes received.
+    o.spent = { network = 0, parsing = 0, database = 0, bytes = 0 }
     return setmetatable(o, Sync)
+end
+
+-- Runs fn and adds its duration to self.spent[part].
+function Sync:timed(part, fn, ...)
+    local t0 = self.clock()
+    local results = { fn(...) }
+    self.spent[part] = self.spent[part] + (self.clock() - t0)
+    return unpack(results)
+end
+
+--- Timings for this sync, in the form Timing.recordAll() takes.
+function Sync:timings(total_ms, phases)
+    local sp = self.spent
+    local t = {
+        total = { ms = total_ms, note = string.format("%d requests, %.1f MB", self.requests, sp.bytes / 1048576) },
+        network = { ms = sp.network, note = self.requests > 0
+            and string.format("%.0f ms a request", sp.network / self.requests) or nil },
+        parsing = { ms = sp.parsing },
+        database = { ms = sp.database },
+    }
+    for name, ms in pairs(phases or {}) do t[name] = { ms = ms } end
+    return t
 end
 
 --- Resolves href against base, the way a browser would for these feeds.
@@ -43,15 +69,16 @@ end
 
 function Sync:get(url)
     self.requests = self.requests + 1
-    local body, err = self.fetch(url)
+    local body, err = self:timed("network", self.fetch, url)
     if not body then return nil, err or "request failed" end
+    self.spent.bytes = self.spent.bytes + #body
     return body
 end
 
 function Sync:getFeed(url)
     local body, err = self:get(url)
     if not body then return nil, err end
-    local feed, perr = Feed.parse(body)
+    local feed, perr = self:timed("parsing", Feed.parse, body)
     if not feed then return nil, (perr or "can't parse feed") .. ": " .. url end
     return feed
 end
@@ -135,26 +162,36 @@ end
 -- or nil, error.
 function Sync:full()
     local started = self.now()
+    local t_start = self.clock()
     local e, err = self:endpoints()
     if not e then return nil, err end
     local stamp = started
     local seen, added = 0, 0
     local store = self.store
+    local t_books = self.clock()
     local ok, perr = self:eachPage(e.all, function(feed, page)
-        store:begin()
-        local ok_tx, res = pcall(store.upsertBooks, store, feed.books, stamp)
-        if not ok_tx then store:rollback(); error(res) end
-        store:commit()
+        local res = self:timed("database", function()
+            store:begin()
+            local ok_tx, n = pcall(store.upsertBooks, store, feed.books, stamp)
+            if not ok_tx then store:rollback(); error(n) end
+            store:commit()
+            return n
+        end)
         added = added + res
         seen = seen + #feed.books
         self.progress("books", page, seen)
     end)
     if not ok then return nil, perr end
-    store:begin()
-    local deleted = store:deleteUnseen(stamp)
-    store:commit()
+    local deleted = self:timed("database", function()
+        store:begin()
+        local n = store:deleteUnseen(stamp)
+        store:commit()
+        return n
+    end)
+    local books_ms = self.clock() - t_books
 
     local in_series = 0
+    local t_series = self.clock()
     if e.series then
         local n, serr = self:syncSeries(e.series, stamp)
         if n then in_series = n else return nil, serr end
@@ -163,6 +200,8 @@ function Sync:full()
         added = added, updated = seen - added, deleted = deleted, total = store:count(),
         in_series = in_series, requests = self.requests, seconds = self.now() - started,
     }
+    result.timing = self:timings(self.clock() - t_start,
+        { ["books list"] = books_ms, series = self.clock() - t_series })
     store:setMeta("last_full_sync", stamp)
     store:setMeta("last_sync", stamp)
     return result
@@ -181,11 +220,13 @@ function Sync:syncSeries(series_url, stamp)
         local url = Sync.resolve(series_url, s.href)
         store:begin()
         local okp, pages, perr = pcall(self.eachPage, self, url, function(feed)
-            for _j, b in ipairs(feed.books) do
-                position = position + 1
-                store:setSeries(b.uuid, s.title, position, stamp)
-                in_series = in_series + 1
-            end
+            self:timed("database", function()
+                for _j, b in ipairs(feed.books) do
+                    position = position + 1
+                    store:setSeries(b.uuid, s.title, position, stamp)
+                    in_series = in_series + 1
+                end
+            end)
         end)
         if not okp then store:rollback(); error(pages) end
         if not pages then store:rollback(); return nil, perr end
@@ -202,6 +243,7 @@ end
 -- removed, or more were added than the new-books feed showed).
 function Sync:quick()
     local started = self.now()
+    local t_start = self.clock()
     local store = self.store
     if store:count() == 0 or not store:getMeta("last_full_sync") then
         return { needs_full = true, added = 0, total = store:count(), requests = self.requests }
@@ -212,7 +254,8 @@ function Sync:quick()
     if remote and remote == store:count() then
         store:setMeta("last_sync", started)
         return { added = 0, needs_full = false, remote_count = remote, total = remote,
-            requests = self.requests, seconds = self.now() - started }
+            requests = self.requests, seconds = self.now() - started,
+            timing = self:timings(self.clock() - t_start) }
     end
     if not e.new then
         return { added = 0, needs_full = true, remote_count = remote, total = store:count(),
@@ -237,7 +280,8 @@ function Sync:quick()
     store:setMeta("last_sync", started)
     return { added = added, remote_count = remote, total = total,
         needs_full = remote ~= nil and remote ~= total,
-        requests = self.requests, seconds = self.now() - started }
+        requests = self.requests, seconds = self.now() - started,
+        timing = self:timings(self.clock() - t_start) }
 end
 
 return Sync

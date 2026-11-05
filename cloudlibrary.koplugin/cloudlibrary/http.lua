@@ -1,38 +1,41 @@
 --[[
-Fetches catalog pages with HTTP Basic auth, like KOReader's OPDS plugin.
-Blocking: call it from a subprocess.
+HTTP GET with Basic auth, like KOReader's OPDS plugin. Blocking: call it
+from a subprocess.
 ]]
 
 local Http = {}
 
---- Returns fetch(url) -> body, or nil and an error message.
+--- Returns body, or nil and an error message.
 -- server: { url, username, password } as in KOReader's OPDS settings.
-function Http.fetcher(server)
+function Http.get(server, url)
     local http = require("socket.http")
     local ltn12 = require("ltn12")
     local socket = require("socket")
     local socketutil = require("socketutil")
-    return function(url)
-        local sink = {}
-        socketutil:set_timeout(socketutil.LARGE_BLOCK_TIMEOUT, socketutil.LARGE_TOTAL_TIMEOUT)
-        local code, _headers, status = socket.skip(1, http.request{
-            url = url,
-            method = "GET",
-            headers = {
-                ["Accept-Encoding"] = "identity",
-                ["Accept"] = "application/atom+xml, application/xml;q=0.9, */*;q=0.5",
-            },
-            sink = ltn12.sink.table(sink),
-            user = server.username,
-            password = server.password,
-        })
-        socketutil:reset_timeout()
-        if code == 200 then return table.concat(sink) end
-        if code == 401 or code == 403 then
-            return nil, "The server refused the user name or password (" .. tostring(code) .. ")."
-        end
-        return nil, "Request failed: " .. tostring(status or code) .. " " .. url
+    local sink = {}
+    socketutil:set_timeout(socketutil.LARGE_BLOCK_TIMEOUT, socketutil.LARGE_TOTAL_TIMEOUT)
+    local code, _headers, status = socket.skip(1, http.request{
+        url = url,
+        method = "GET",
+        headers = {
+            ["Accept-Encoding"] = "identity",
+            ["Accept"] = "application/atom+xml, application/xml;q=0.9, image/*;q=0.8, */*;q=0.5",
+        },
+        sink = ltn12.sink.table(sink),
+        user = server.username,
+        password = server.password,
+    })
+    socketutil:reset_timeout()
+    if code == 200 then return table.concat(sink) end
+    if code == 401 or code == 403 then
+        return nil, "The server refused the user name or password (" .. tostring(code) .. ")."
     end
+    return nil, "Request failed: " .. tostring(status or code) .. " " .. url
+end
+
+--- fetch(url) for Sync.
+function Http.fetcher(server)
+    return function(url) return Http.get(server, url) end
 end
 
 return Http

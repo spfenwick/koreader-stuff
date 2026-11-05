@@ -20,6 +20,7 @@ local Store = require("cloudlibrary/store")
 local Sync = require("cloudlibrary/sync")
 local Matcher = require("cloudlibrary/matcher")
 local Virtual = require("cloudlibrary/virtual")
+local Covers = require("cloudlibrary/covers")
 
 local failures, checks = 0, 0
 local function check(cond, msg)
@@ -452,6 +453,166 @@ do
     eq(Matcher.scan(folder, store), 1, "changed file read again")
     local files = store:localFiles()
     check(files[folder .. "/Stranger.pdf"] == nil, "removed file forgotten")
+    store:close()
+end
+
+-- Store: upgrade from the phase 1 schema ---------------------------------------------------
+
+do
+    local SQ3 = require("lua-ljsqlite3/init")
+    local path = TMP .. "/db/v1.sqlite3"
+    os.remove(path)
+    local conn = SQ3.open(path)
+    conn:exec([[CREATE TABLE books (uuid TEXT PRIMARY KEY, calibre_id INTEGER, title TEXT,
+        authors TEXT, tags TEXT, language TEXT, publisher TEXT, published INTEGER, added INTEGER,
+        pages INTEGER, summary TEXT, formats TEXT, cover TEXT, size INTEGER, series TEXT,
+        series_index REAL, seen INTEGER, series_seen INTEGER);
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE local_files (path TEXT PRIMARY KEY, mtime INTEGER, size INTEGER, uuids TEXT,
+            title TEXT, authors TEXT);
+        INSERT INTO books (uuid, title, cover, added) VALUES ('old-1', 'Kept', '/opds/cover/1', 5);
+        INSERT INTO meta VALUES ('last_full_sync', '123');
+        PRAGMA user_version=1;]])
+    conn:close()
+    local store = Store.open(path, false)
+    eq(store:count(), 1, "upgrade keeps books")
+    eq(store:getMeta("last_full_sync"), "123", "upgrade keeps sync state")
+    store:setCover("old-1", "old-1.webp", 300, 450)
+    local listing = store:listing()
+    eq(listing[1].cover_file, "old-1.webp", "cover columns added")
+    store:close()
+end
+
+-- Covers ------------------------------------------------------------------------------
+
+do
+    eq(Covers.imageType("RIFF\0\0\0\0WEBPVP8 xx"), "webp", "webp detected")
+    eq(Covers.imageType("\255\216\255\224\0\16JFIF\0\1\1"), "jpg", "jpeg detected")
+    eq(Covers.imageType("\137PNG\r\n\26\n\0\0\0\13"), "png", "png detected")
+    eq(Covers.imageType("<html>Not found</html>"), nil, "html isn't an image")
+
+    local Blitbuffer = require("ffi/blitbuffer")
+    local png_path = TMP .. "/sample.png"
+    local bb = Blitbuffer.new(30, 45, Blitbuffer.TYPE_BB8)
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    bb:writePNG(png_path)
+    bb:free()
+    local f = io.open(png_path, "rb"); local png = f:read("*a"); f:close()
+
+    local store = Store.open(TMP .. "/db/covers.sqlite3", false)
+    local books = makeBooks(5)
+    local server = Server.new(books, 10)
+    newSync(store, server, 100):full()
+    local with_cover, downloaded = store:coverCounts()
+    eq(with_cover, 5, "books with a cover on the server")
+    eq(downloaded, 0, "none downloaded yet")
+    local missing = store:missingCovers(nil, 0)
+    eq(#missing, 5, "all covers missing")
+    eq(missing[1].id, books[5].uuid, "newest book first")
+    eq(missing[1].href, "/opds/cover/1005", "cover link")
+
+    local dir = TMP .. "/covers"
+    rmrf(dir); mkdir(dir)
+    local asked = {}
+    local fetch = function(url)
+        table.insert(asked, url)
+        if url:find("/1001$") then return "<html>oops</html>" end
+        if url:find("/1002$") then return nil, "404" end
+        return png
+    end
+    local r = Covers.download(fetch, ORIGIN .. "/", store, dir, store:missingCovers(nil, 0),
+        { now = function() return 5000 end })
+    eq(r.fetched, 3, "covers downloaded")
+    eq(r.failed, 2, "bad responses counted as failed")
+    eq(asked[1], ORIGIN .. "/opds/cover/1005", "cover URL resolved against the catalog")
+    local res = r.results[books[5].uuid]
+    check(res and res.w == 30 and res.h == 45, "image size recorded")
+    check(lfs.attributes(dir .. "/" .. res.file, "mode") == "file", "cover file written")
+    check(lfs.attributes(dir .. "/" .. res.file .. ".part") == nil, "no partial file left")
+    eq(r.results[books[1].uuid], false, "html response failed")
+    local _w, have = store:coverCounts()
+    eq(have, 3, "store knows the downloaded covers")
+    eq(#store:missingCovers(nil, 1000), 0, "failed covers aren't retried at once")
+    eq(#store:missingCovers(nil, 6000), 2, "failed covers retried later")
+    local l = {}
+    for _i, b in ipairs(store:listing()) do l[b.id] = b end
+    eq(l[books[5].uuid].cover_w, 30, "listing has the cover size")
+    eq(l[books[1].uuid].cover_failed, 5000, "listing has the failure time")
+
+    -- A deadline stops the batch.
+    local t = 0
+    local r2 = Covers.download(fetch, ORIGIN .. "/", store, dir, store:missingCovers(nil, 6000),
+        { now = function() t = t + 1; return t end, deadline = 2 })
+    eq(r2.fetched + r2.failed, 1, "deadline respected")
+
+    -- Books gone from the catalog lose their cover file.
+    local f2 = io.open(dir .. "/stray.webp", "w"); f2:write("x"); f2:close()
+    table.remove(books, 5)
+    newSync(store, server, 200):full()
+    eq(Covers.cleanup(store, dir), 2, "unused cover files removed")
+    check(lfs.attributes(dir .. "/" .. res.file) == nil, "removed book's cover deleted")
+    store:close()
+
+    -- Cover states.
+    local can = true
+    Virtual.canFetchCovers = function() return can end
+    local ready = { id = "r", cover = png_path, cover_w = 30, cover_h = 45 }
+    eq(Virtual.coverState(ready), "ready", "downloaded cover is ready")
+    local unsized = { id = "u", cover = png_path }
+    eq(Virtual.coverState(unsized), "ready", "cover size found by decoding")
+    eq(unsized.cover_w, 30, "decoded size kept")
+    local pending = { id = "p", cover_href = "/opds/cover/1" }
+    eq(Virtual.coverState(pending), "pending", "cover can be downloaded")
+    can = false
+    eq(Virtual.coverState(pending), "none", "offline: no cover for now")
+    can = true
+    pending.cover_failed = 1
+    eq(Virtual.coverState(pending), "none", "failed cover isn't asked for again")
+    eq(Virtual.coverState({ id = "n" }), "none", "no cover on the server")
+    Virtual.canFetchCovers = nil
+end
+
+-- Timings ------------------------------------------------------------------------------
+
+do
+    local Timing = require("cloudlibrary/timing")
+    Timing.reset()
+    check(Timing.text():find("No timings yet", 1, true), "empty timings")
+    Timing.record("catalog: load", 120, "2154 books")
+    Timing.record("catalog: load", 80)
+    Timing.record("sync (full): network", 30500, "157 requests")
+    local st = Timing.stats["catalog: load"]
+    eq(st.count, 2, "timing count")
+    eq(st.total, 200, "timing total")
+    eq(st.max, 120, "timing max")
+    eq(st.last, 80, "timing last")
+    local text = Timing.text()
+    check(text:find("CATALOG", 1, true) and text:find("SYNC (FULL)", 1, true), "grouped by step")
+    check(text:find("load: 80.0 ms  (avg 100 ms, max 120 ms, 2×)", 1, true), "summary line: " .. text)
+    check(text:find("network: 30.5 s", 1, true), "seconds for long steps")
+    Timing.recordAll({ total = { ms = 5, note = "x" }, bad = "no" }, "covers (all): ")
+    check(Timing.stats["covers (all): total"] and not Timing.stats["covers (all): bad"], "recordAll")
+    local t0 = Timing.start()
+    check(Timing.since(t0) >= 0, "clock runs forward")
+    Timing.reset()
+
+    -- Sync and cover results carry their timings.
+    local store = Store.open(TMP .. "/db/timing.sqlite3", false)
+    local server = Server.new(makeBooks(4), 2)
+    local r = newSync(store, server):full()
+    local t = r.timing
+    check(t and t.total and t.network and t.parsing and t.database and t["books list"] and t.series,
+        "full sync timings")
+    check(t.total.note:find("requests", 1, true), "requests in the note")
+    check(t.network.ms >= 0 and t.total.ms >= t.network.ms, "network time within the total")
+    local q = newSync(store, server):quick()
+    check(q.timing and q.timing.total, "quick sync timings")
+    local png = io.open(TMP .. "/sample.png", "rb"):read("*a")
+    local cr = Covers.download(function() return png end, ORIGIN .. "/", store, TMP .. "/covers",
+        store:missingCovers(2, 0))
+    check(cr.timing and cr.timing.network and cr.timing["reading images"] and cr.timing.saving,
+        "cover download timings")
+    check(cr.timing.total.note:find("2 covers", 1, true), "cover count in the note")
     store:close()
 end
 

@@ -7,6 +7,10 @@ Everything here changes KOReader and CoverBrowser functions only:
   FileChooser:getList              adds the entries to the library folder
   BookInfoManager:getBookInfo      metadata and cover for a virtual path
   BookInfoManager:getDocProps      metadata for sorting and book info
+  BookInfoManager:extractInBackground / :isExtractingInBackground
+                                   covers not downloaded yet are fetched when
+                                   CoverBrowser (or ZenOS) asks to extract
+                                   them, and it redraws them as they arrive
   FileChooser:onMenuSelect         tapping a virtual book shows its details
   FileChooser:onMenuHold           long-press on a virtual book
   ReaderUI:showReader / :switchDocument
@@ -25,6 +29,7 @@ details are shown instead. Without it, nothing else changes.
 local logger = require("logger")
 local util = require("util")
 local _ = require("gettext")
+local Timing = require("cloudlibrary/timing")
 
 local Virtual = {
     folder = nil, -- library folder, no trailing slash
@@ -95,29 +100,84 @@ local function attributes(book)
     }
 end
 
--- Decoded only when a cover is asked for, and not kept: the caller owns the
--- bitmap (CoverBrowser and ZenOS cache what they draw). The cover's size
--- comes from the catalog (the cover cache records it when it saves a cover);
--- if it's missing, the cover is decoded once to find it.
-local function decodeCover(book)
-    local lfs = require("libs/libkoreader-lfs")
-    if not (book.cover and lfs.attributes(book.cover, "mode") == "file") then return nil end
-    local RenderImage = require("ui/renderimage")
-    local ok, bb = pcall(RenderImage.renderImageFile, RenderImage, book.cover, false)
-    if ok and bb then return bb end
-    logger.warn("CloudLibrary: can't decode cover", book.cover, bb)
+-- Covers ----------------------------------------------------------------------
+
+-- Hooks set by the library (see library.lua and covers.lua).
+Virtual.canFetchCovers = nil -- function() -> true if covers can be downloaded now
+Virtual.requestCovers = nil  -- function(books) -> true if they'll be downloaded
+Virtual.coversBusy = nil     -- function() -> true while downloading
+
+--- "ready", "pending" (can be downloaded now) or "none".
+function Virtual.coverState(book)
+    if book.cover then
+        if book.cover_w == nil then
+            -- No size recorded (test catalogs): decode once to find it.
+            local RenderImage = require("ui/renderimage")
+            local ok, bb = pcall(RenderImage.renderImageFile, RenderImage, book.cover, false)
+            if ok and bb then
+                book.cover_w, book.cover_h = bb:getWidth(), bb:getHeight()
+                bb:free()
+            else
+                book.cover_w = false
+            end
+        end
+        if book.cover_w then return "ready" end
+    end
+    if book.cover_href and not book.cover_failed and not book.cover
+            and Virtual.canFetchCovers and Virtual.canFetchCovers() then
+        return "pending"
+    end
+    return "none"
 end
 
-local function coverSize(book)
-    if book.cover_w == nil then
-        book.cover_w = false
-        local bb = decodeCover(book)
-        if bb then
-            book.cover_w, book.cover_h = bb:getWidth(), bb:getHeight()
-            bb:free()
+-- Covers are decoded at most at half the screen (a cover is never shown
+-- bigger), and the last few are kept decoded so paging back and forth
+-- doesn't decode them again. Callers get a copy, which they own.
+local DECODED_MAX = 18
+local decoded, decoded_order = {}, {}
+
+local function coverLimit()
+    local Screen = require("device").screen
+    return math.floor(Screen:getWidth() / 2), math.floor(Screen:getHeight() / 2)
+end
+
+local function fitted(book)
+    local max_w, max_h = coverLimit()
+    local w, h = book.cover_w, book.cover_h
+    local scale = math.min(1, max_w / w, max_h / h)
+    return math.max(1, math.floor(w * scale + 0.5)), math.max(1, math.floor(h * scale + 0.5)), scale < 1
+end
+
+local function decodedCover(book)
+    local bb = decoded[book.cover]
+    if not bb then
+        local w, h, scaled = fitted(book)
+        local RenderImage = require("ui/renderimage")
+        local t0 = Timing.start()
+        local ok, res = pcall(RenderImage.renderImageFile, RenderImage, book.cover, false,
+            scaled and w or nil, scaled and h or nil)
+        Timing.record("covers: decode one", Timing.since(t0),
+            string.format("%dx%d%s", w, h, scaled and ", scaled" or ""), true)
+        if not (ok and res) then
+            logger.warn("CloudLibrary: can't decode cover", book.cover, res)
+            book.cover, book.cover_w, book.cover_failed = nil, nil, os.time()
+            return nil
+        end
+        bb = res
+        decoded[book.cover] = bb
+        table.insert(decoded_order, book.cover)
+        while #decoded_order > DECODED_MAX do
+            local old = table.remove(decoded_order, 1)
+            if decoded[old] then decoded[old]:free() end
+            decoded[old] = nil
         end
     end
-    if book.cover_w then return book.cover_w, book.cover_h end
+    return bb:copy()
+end
+
+function Virtual.forgetDecodedCovers()
+    for _path, bb in pairs(decoded) do bb:free() end
+    decoded, decoded_order = {}, {}
 end
 
 local function docProps(book)
@@ -134,28 +194,30 @@ local function docProps(book)
 end
 
 -- Same shape as a bookinfo_cache row, so CoverBrowser and ZenOS draw it like
--- any other book. The cover is reported at its full size so that
--- isCachedCoverInvalid() never asks for a bigger one (which would mean
--- extracting from a file that doesn't exist).
+-- any other book. The size reported is the size the cover is decoded at, so
+-- isCachedCoverInvalid() never asks for a bigger one. A cover that can be
+-- downloaded now is reported as not fetched yet: CoverBrowser then asks for
+-- it through extractInBackground(), and redraws the book when it's ready.
 local function bookInfo(book, get_cover)
     local directory, filename = util.splitFilePathName(book.path)
-    local cover_w, cover_h = coverSize(book)
     local info = docProps(book)
     info.directory = directory
     info.filename = filename
     info.filesize = book.size
     info.filemtime = book.added
     info.in_progress = 0
-    info.cover_fetched = "Y"
     info.has_meta = "Y"
-    if cover_w then
+    local state = Virtual.coverState(book)
+    if state == "ready" then
+        info.cover_fetched = "Y"
         info.has_cover = "Y"
-        info.cover_w, info.cover_h = cover_w, cover_h
-        info.cover_sizetag = cover_w .. "x" .. cover_h
-        if get_cover then
-            info.cover_bb = decodeCover(book)
-        end
-    end
+        info.cover_w, info.cover_h = fitted(book)
+        info.cover_sizetag = info.cover_w .. "x" .. info.cover_h
+        if get_cover then info.cover_bb = decodedCover(book) end
+        if get_cover and not info.cover_bb then info.has_cover = nil end
+    elseif state == "none" then
+        info.cover_fetched = "Y"
+    end -- pending: cover_fetched stays nil
     return info
 end
 
@@ -232,6 +294,8 @@ local function installListing()
         local dirs, files, readable = orig_getList(self, path, collate)
         if self.name == "filemanager" and Virtual.folder
                 and normalize(path) == Virtual.folder then
+            Virtual.ensureOutermost()
+            local t0 = Timing.start()
             for _i, book in ipairs(Virtual.books) do
                 if collate then
                     table.insert(files, self:getListItem(path, book.filename,
@@ -240,45 +304,99 @@ local function installListing()
                     table.insert(files, true)
                 end
             end
+            if collate then
+                Timing.record("listing: add cloud books", Timing.since(t0), #Virtual.books .. " books")
+            end
         end
         return dirs, files, readable
     end
 end
 
+-- The getBookInfo hook stays the outermost one: other plugins (ZenOS) wrap
+-- it with caches of their own, which would keep "cover not fetched yet"
+-- after the cover arrives. Virtual books are answered here directly; this is
+-- re-checked whenever the library folder is listed.
+local BookInfoManager
+local our_getBookInfo, our_getDocProps
+
+local function wrapBookInfo()
+    local inner = BookInfoManager.getBookInfo
+    our_getBookInfo = function(self, filepath, get_cover)
+        local book = Virtual.by_path[filepath]
+        if book then return bookInfo(book, get_cover) end
+        return inner(self, filepath, get_cover)
+    end
+    BookInfoManager.getBookInfo = our_getBookInfo
+    if type(BookInfoManager.getDocProps) == "function" then
+        local inner_props = BookInfoManager.getDocProps
+        our_getDocProps = function(self, filepath)
+            local book = Virtual.by_path[filepath]
+            if book then return docProps(book) end
+            return inner_props(self, filepath)
+        end
+        BookInfoManager.getDocProps = our_getDocProps
+    end
+end
+
+function Virtual.ensureOutermost()
+    if BookInfoManager and BookInfoManager.getBookInfo ~= our_getBookInfo then
+        wrapBookInfo()
+    end
+end
+
+-- Times building the library folder's listing (when it's built: file
+-- browsers that cache listings, like ZenOS, skip this when they can).
+local function installListingTimer()
+    local FileChooser = require("ui/widget/filechooser")
+    local orig = FileChooser.genItemTableFromPath
+    FileChooser.genItemTableFromPath = function(self, path, ...)
+        if not (Virtual.folder and self.name == "filemanager" and normalize(path) == Virtual.folder) then
+            return orig(self, path, ...)
+        end
+        local t0 = Timing.start()
+        local results = { orig(self, path, ...) }
+        Timing.record("listing: build library folder", Timing.since(t0),
+            #(results[1] or {}) .. " entries, sorted")
+        return unpack(results)
+    end
+end
+
 local function installBookInfo()
-    local ok, BookInfoManager = pcall(require, "bookinfomanager")
-    if not ok or type(BookInfoManager) ~= "table"
-            or type(BookInfoManager.getBookInfo) ~= "function" then
+    local ok, bim = pcall(require, "bookinfomanager")
+    if not ok or type(bim) ~= "table" or type(bim.getBookInfo) ~= "function" then
         logger.warn("CloudLibrary: CoverBrowser unavailable, no covers for cloud books")
         return false
     end
-    local orig_getBookInfo = BookInfoManager.getBookInfo
-    BookInfoManager.getBookInfo = function(self, filepath, get_cover)
-        local book = Virtual.by_path[filepath]
-        if book then return bookInfo(book, get_cover) end
-        return orig_getBookInfo(self, filepath, get_cover)
-    end
-    if type(BookInfoManager.getDocProps) == "function" then
-        local orig_getDocProps = BookInfoManager.getDocProps
-        BookInfoManager.getDocProps = function(self, filepath)
-            local book = Virtual.by_path[filepath]
-            if book then return docProps(book) end
-            return orig_getDocProps(self, filepath)
-        end
-    end
-    -- Never try to read a file that isn't there.
+    BookInfoManager = bim
+    wrapBookInfo()
+    -- Virtual books are never extracted from a file: their covers are
+    -- downloaded instead.
     if type(BookInfoManager.extractInBackground) == "function" then
         local orig_extract = BookInfoManager.extractInBackground
-        BookInfoManager.extractInBackground = function(self, files)
-            if type(files) == "table" then
-                local real = {}
-                for _i, file in ipairs(files) do
-                    local filepath = type(file) == "table" and file.filepath or file
-                    if not Virtual.by_path[filepath] then table.insert(real, file) end
-                end
-                files = real
+        BookInfoManager.extractInBackground = function(self, files, ...)
+            if type(files) ~= "table" then return orig_extract(self, files, ...) end
+            local real, wanted = {}, {}
+            for _i, file in ipairs(files) do
+                local filepath = type(file) == "table" and file.filepath or file
+                local book = Virtual.by_path[filepath]
+                if book then table.insert(wanted, book) else table.insert(real, file) end
             end
-            return orig_extract(self, files)
+            if #wanted > 0 and not (Virtual.requestCovers and Virtual.requestCovers(wanted)) then
+                -- Can't download now (Wi-Fi went off): show them without a
+                -- cover for this session instead of waiting.
+                for _i, book in ipairs(wanted) do book.cover_failed = book.cover_failed or os.time() end
+            end
+            if #real > 0 then return orig_extract(self, real, ...) end
+            -- Report success even when nothing was started: CoverBrowser
+            -- shows an error otherwise. It stops waiting once
+            -- isExtractingInBackground() is false.
+            return true
+        end
+    end
+    if type(BookInfoManager.isExtractingInBackground) == "function" then
+        local orig_busy = BookInfoManager.isExtractingInBackground
+        BookInfoManager.isExtractingInBackground = function(self, ...)
+            return orig_busy(self, ...) or (Virtual.coversBusy and Virtual.coversBusy()) or false
         end
     end
     return true
@@ -366,6 +484,7 @@ function Virtual.install()
     if Virtual.installed then return end
     Virtual.installed = true
     installListing()
+    installListingTimer()
     Virtual.has_bookinfo = installBookInfo()
     installSelect()
     installHold()

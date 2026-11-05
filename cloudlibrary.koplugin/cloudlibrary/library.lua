@@ -22,9 +22,15 @@ local util = require("util")
 local _ = require("gettext")
 local T = ffiutil.template
 
+local Covers = require("cloudlibrary/covers")
 local Matcher = require("cloudlibrary/matcher")
 local Store = require("cloudlibrary/store")
+local Timing = require("cloudlibrary/timing")
 local Virtual = require("cloudlibrary/virtual")
+
+Virtual.canFetchCovers = Covers.canFetch
+Virtual.requestCovers = Covers.request
+Virtual.coversBusy = Covers.busy
 
 local Library = {
     job = nil,          -- running sync: { pid, fd, mode, started }
@@ -34,6 +40,8 @@ local Library = {
 
 local QUICK_INTERVAL = 60 * 60       -- auto sync at most hourly
 local FULL_INTERVAL = 24 * 60 * 60   -- and a full sync daily
+local PREFETCH_COVERS = 300          -- covers downloaded by each sync, newest first
+local PREFETCH_SECONDS = 180
 
 -- Settings ----------------------------------------------------------------------
 
@@ -87,6 +95,10 @@ function Library.dbPath(server)
     return dir .. "/" .. serverKey(server) .. ".sqlite3"
 end
 
+function Library.coversDir(server)
+    return DataStorage:getSettingsDir() .. "/cloudlibrary/" .. serverKey(server) .. "-covers"
+end
+
 local function openStore(server)
     return Store.open(Library.dbPath(server), Device:canUseWAL())
 end
@@ -113,15 +125,27 @@ function Library.load()
     local s = Library.settings()
     if not server or not folder or s.show == false then
         Library.stats = {}
+        Covers.configure(nil)
         showCatalog(folder, {})
         return
     end
-    local started = os.clock()
+    local t_load = Timing.start()
+    local covers_dir = Library.coversDir(server)
+    Covers.configure{ server = server, db_path = Library.dbPath(server), dir = covers_dir,
+        wal = Device:canUseWAL() }
+    local t0 = Timing.start()
     local store = openStore(server)
     local books = store:listing()
+    local with_cover, downloaded = store:coverCounts()
+    for _i, b in ipairs(books) do
+        if b.cover_file then b.cover = covers_dir .. "/" .. b.cover_file end
+    end
     local files = store:localFiles()
     store:close()
+    Timing.record("catalog: read database", Timing.since(t0), #books .. " books")
+    t0 = Timing.start()
     local matched, unmatched = Matcher.match(folder, files, books)
+    Timing.record("catalog: match local files", Timing.since(t0))
     local cloud = {}
     for _i, b in ipairs(books) do
         if not matched[b.id] then table.insert(cloud, b) end
@@ -129,10 +153,15 @@ function Library.load()
     Library.matched = matched
     Library.stats = {
         catalog = #books, cloud = #cloud, on_device = #books - #cloud,
-        unmatched_files = #unmatched, load_ms = math.floor((os.clock() - started) * 1000),
+        unmatched_files = #unmatched,
+        covers = downloaded, covers_available = with_cover,
     }
     logger.info("CloudLibrary: loaded", Library.stats)
+    t0 = Timing.start()
     showCatalog(folder, cloud)
+    Timing.record("catalog: show in folder", Timing.since(t0))
+    Timing.record("catalog: load", Timing.since(t_load),
+        string.format("%d cloud books, %d on this device", #cloud, #books - #cloud))
 end
 
 --- Full details for the details sheet (summary, formats...).
@@ -147,12 +176,20 @@ end
 
 -- Syncing ----------------------------------------------------------------------
 
-local function runJob(server, folder, mode, db_path, wal)
+local function runJob(server, folder, mode, db_path, wal, covers_dir)
     local Sync = require("cloudlibrary/sync")
     local Http = require("cloudlibrary/http")
     local result = { mode = mode }
     local store = Store.open(db_path, wal)
     local ok, err = pcall(function()
+        if mode == "covers" or mode == "prefetch" then
+            util.makePath(covers_dir)
+            local opts = mode == "prefetch"
+                and { limit = PREFETCH_COVERS, deadline = os.time() + PREFETCH_SECONDS } or nil
+            result.covers = Covers.downloadMissing(Http.fetcher(server), server.url, store, covers_dir, opts)
+            result.covers.results = nil
+            return
+        end
         if mode ~= "scan" then
             local sync = Sync.new{ store = store, root = server.url, fetch = Http.fetcher(server) }
             local r, serr
@@ -167,8 +204,13 @@ local function runJob(server, folder, mode, db_path, wal)
                 end
             end
             result.sync, result.error = r, serr
+            if r and r.deleted then Covers.cleanup(store, covers_dir) end
         end
-        if folder then result.scanned = Matcher.scan(folder, store) end
+        if folder then
+            local t0 = Timing.start()
+            result.scanned = Matcher.scan(folder, store)
+            result.scan_ms = Timing.since(t0)
+        end
     end)
     store:close()
     if not ok then result.error = tostring(err) end
@@ -186,6 +228,9 @@ end
 
 local function describeResult(r)
     if r.error then return T(_("Cloud library sync failed: %1"), r.error) end
+    if r.mode == "covers" and r.covers then
+        return T(_("Cloud library: %1 covers downloaded."), r.covers.fetched)
+    end
     local s = r.sync
     if not s then return _("Cloud library: device books checked.") end
     if s.deleted ~= nil then
@@ -195,8 +240,8 @@ local function describeResult(r)
     return _("Cloud library is up to date.")
 end
 
---- Starts a sync in a subprocess. mode: "quick", "full" or "scan" (local
--- files only). quiet: no notifications unless something changed or failed.
+--- Starts a sync in a subprocess. mode: "quick", "full", "scan" (local
+-- files only), "covers" (all missing covers) or "prefetch" (some). quiet: no notifications unless something changed or failed.
 function Library.sync(mode, quiet)
     if Library.job then
         if not quiet then notify(_("Cloud library: already syncing.")) end
@@ -211,17 +256,22 @@ function Library.sync(mode, quiet)
         end
         return false
     end
-    local db_path, wal = Library.dbPath(server), Device:canUseWAL()
+    local db_path, wal, covers_dir = Library.dbPath(server), Device:canUseWAL(), Library.coversDir(server)
     local pid, fd = ffiutil.runInSubProcess(function(_pid, child_fd)
-        local result = runJob(server, folder, mode, db_path, wal)
+        local result = runJob(server, folder, mode, db_path, wal, covers_dir)
         ffiutil.writeToFD(child_fd, require("dump")(result), true)
     end, true)
     if not pid then
         if not quiet then notify(T(_("Cloud library sync failed: %1"), tostring(fd))) end
         return false
     end
-    Library.job = { pid = pid, fd = fd, mode = mode, quiet = quiet, started = os.time() }
-    if not quiet and mode ~= "scan" then notify(_("Cloud library: syncing…")) end
+    Library.job = { pid = pid, fd = fd, mode = mode, quiet = quiet, started = os.time(),
+        t0 = Timing.start() }
+    if not quiet and mode == "covers" then
+        notify(_("Cloud library: downloading covers…"))
+    elseif not quiet and mode ~= "scan" then
+        notify(_("Cloud library: syncing…"))
+    end
     UIManager:scheduleIn(1, Library.poll)
     return true
 end
@@ -246,15 +296,32 @@ function Library.poll()
     result.finished = os.time()
     Library.last_result = result
     logger.info("CloudLibrary: sync done", result)
+    local label = ({ quick = "sync (quick)", full = "sync (full)", scan = "folder check",
+        covers = "covers (all)", prefetch = "covers (prefetch)" })[job.mode] or job.mode
+    if result.sync and result.sync.escalated then label = "sync (full)" end
+    Timing.record(label .. ": job", Timing.since(job.t0), "in the background, from start to result (checked every second)")
+    if result.sync then Timing.recordAll(result.sync.timing, label .. ": ") end
+    if result.covers then Timing.recordAll(result.covers.timing, label .. ": ") end
+    if result.scan_ms then
+        Timing.record("folder check: scan files", result.scan_ms,
+            string.format("%d files read", result.scanned or 0))
+    end
     Library.load()
     local changed = result.sync and ((result.sync.added or 0) > 0 or (result.sync.deleted or 0) > 0)
     if not job.quiet or result.error or changed then
-        if job.mode ~= "scan" or result.error then notify(describeResult(result)) end
+        if (job.mode ~= "scan" and job.mode ~= "prefetch") or result.error then
+            notify(describeResult(result))
+        end
+    end
+    -- After a sync, download some missing covers (newest books first).
+    if result.sync and not result.error and Covers.canFetch() then
+        Library.sync("prefetch", true)
     end
 end
 
 --- Called when the file browser opens: load, then sync if it's due.
 function Library.onFileManagerReady()
+    local t_start = Timing.start()
     Library.load()
     local server = Library.server()
     if not server or Library.job then return end
@@ -271,6 +338,7 @@ function Library.onFileManagerReady()
     end
     -- Even without syncing, check the folder for new or changed files.
     Library.sync(due and "quick" or "scan", true)
+    Timing.record("startup: plugin", Timing.since(t_start), "catalog load and starting the background check")
 end
 
 -- Menu -------------------------------------------------------------------------
@@ -302,6 +370,7 @@ function Library.statusText()
         table.insert(lines, T(_("On this device: %1"), st.on_device))
         table.insert(lines, T(_("Shown as cloud books: %1"), st.cloud))
         table.insert(lines, T(_("Files in the folder not in the catalog: %1"), st.unmatched_files))
+        table.insert(lines, T(_("Covers downloaded: %1 of %2"), st.covers, st.covers_available))
     end
     table.insert(lines, T(_("Last sync: %1"), ago(last)))
     table.insert(lines, T(_("Last full sync: %1"), ago(last_full)))
@@ -327,6 +396,34 @@ function Library.menuItems()
                     help_text = _("Reads the whole catalog again: picks up edited and removed books, and series."),
                     enabled_func = function() return Library.server() ~= nil end,
                     callback = function() Library.sync("full") end,
+                },
+                {
+                    text = _("Download all covers"),
+                    help_text = _("Covers are otherwise downloaded as you browse, and some with each sync."),
+                    enabled_func = function() return Library.server() ~= nil end,
+                    callback = function() Library.sync("covers") end,
+                },
+                {
+                    text = _("Timings"),
+                    sub_item_table = {
+                        {
+                            text = _("Show timings"),
+                            keep_menu_open = true,
+                            callback = function()
+                                local TextViewer = require("ui/widget/textviewer")
+                                UIManager:show(TextViewer:new{
+                                    title = _("Cloud library timings"),
+                                    text = Timing.text(),
+                                    monospace_font = false,
+                                })
+                            end,
+                        },
+                        {
+                            text = _("Reset timings"),
+                            keep_menu_open = true,
+                            callback = function() Timing.reset() end,
+                        },
+                    },
                 },
                 {
                     text = _("Status"),

@@ -12,7 +12,7 @@ does. formats is "type\tsize\thref" lines.
 local SQ3 = require("lua-ljsqlite3/init")
 local logger = require("logger")
 
-local SCHEMA_VERSION = 1
+local SCHEMA_VERSION = 2
 
 local SCHEMA = [[
 CREATE TABLE IF NOT EXISTS books (
@@ -33,7 +33,11 @@ CREATE TABLE IF NOT EXISTS books (
     series TEXT,
     series_index REAL,
     seen INTEGER,
-    series_seen INTEGER
+    series_seen INTEGER,
+    cover_file TEXT,
+    cover_w INTEGER,
+    cover_h INTEGER,
+    cover_failed INTEGER
 );
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -76,7 +80,13 @@ function Store.open(path, wal)
     conn:set_busy_timeout(5000)
     conn:exec(wal and "PRAGMA journal_mode=WAL;" or "PRAGMA journal_mode=TRUNCATE;")
     local version = tonumber(conn:rowexec("PRAGMA user_version;")) or 0
-    if version ~= 0 and version ~= SCHEMA_VERSION then
+    if version == 1 then
+        -- 1 -> 2: covers.
+        conn:exec([[ALTER TABLE books ADD COLUMN cover_file TEXT;
+            ALTER TABLE books ADD COLUMN cover_w INTEGER;
+            ALTER TABLE books ADD COLUMN cover_h INTEGER;
+            ALTER TABLE books ADD COLUMN cover_failed INTEGER;]])
+    elseif version ~= 0 and version ~= SCHEMA_VERSION then
         -- A cache: start again rather than migrate.
         logger.info("CloudLibrary: catalog schema", version, "-> rebuilding")
         conn:exec("DROP TABLE IF EXISTS books; DROP TABLE IF EXISTS meta; DROP TABLE IF EXISTS local_files;")
@@ -194,13 +204,15 @@ end
 function Store:listing()
     local out = {}
     local stmt = self.conn:prepare([[SELECT uuid, title, authors, tags, language,
-        added, size, series, series_index, pages, cover FROM books;]])
+        added, size, series, series_index, pages, cover, cover_file, cover_w, cover_h,
+        cover_failed FROM books;]])
     for row in stmt:rows() do
         table.insert(out, {
             id = row[1], title = row[2], authors = split(row[3]), tags = split(row[4]),
             language = row[5], added = num(row[6]), size = num(row[7]),
             series = row[8], series_index = num(row[9]), pages = num(row[10]),
-            cover_href = row[11],
+            cover_href = row[11], cover_file = row[12], cover_w = num(row[13]),
+            cover_h = num(row[14]), cover_failed = num(row[15]),
         })
     end
     stmt:close()
@@ -229,6 +241,54 @@ function Store:getBook(uuid)
     end
     stmt:close()
     return book
+end
+
+-- Covers ------------------------------------------------------------------------
+
+--- Records a downloaded cover (file name in the covers folder, image size).
+function Store:setCover(uuid, file, w, h)
+    local stmt = self.conn:prepare(
+        "UPDATE books SET cover_file = ?, cover_w = ?, cover_h = ?, cover_failed = NULL WHERE uuid = ?;")
+    stmt:bind(file, w, h, uuid):step()
+    stmt:close()
+end
+
+function Store:setCoverFailed(uuid, when)
+    local stmt = self.conn:prepare("UPDATE books SET cover_failed = ? WHERE uuid = ?;")
+    stmt:bind(when, uuid):step()
+    stmt:close()
+end
+
+--- Books with a cover on the server but not here, newest first. Failed
+-- downloads are retried once they're older than retry_before.
+function Store:missingCovers(limit, retry_before)
+    local out = {}
+    local stmt = self.conn:prepare([[SELECT uuid, cover FROM books
+        WHERE cover IS NOT NULL AND cover_file IS NULL
+          AND (cover_failed IS NULL OR cover_failed < ?)
+        ORDER BY added DESC LIMIT ?;]])
+    stmt:bind(retry_before or 0, limit or -1)
+    for row in stmt:rows() do
+        table.insert(out, { id = row[1], href = row[2] })
+    end
+    stmt:close()
+    return out
+end
+
+function Store:coverCounts()
+    local with_cover, downloaded = self.conn:rowexec([[SELECT
+        COUNT(CASE WHEN cover IS NOT NULL THEN 1 END),
+        COUNT(cover_file) FROM books;]])
+    return tonumber(with_cover) or 0, tonumber(downloaded) or 0
+end
+
+--- Cover file names in use.
+function Store:coverFiles()
+    local out = {}
+    local stmt = self.conn:prepare("SELECT cover_file FROM books WHERE cover_file IS NOT NULL;")
+    for row in stmt:rows() do out[row[1]] = true end
+    stmt:close()
+    return out
 end
 
 -- Local files ------------------------------------------------------------------
