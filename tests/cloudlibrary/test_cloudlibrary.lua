@@ -784,7 +784,9 @@ do
         { entry = { path = "/lib/other.epub" }, dimen = Geom:new{ x = 200, y = 0, w = 160, h = 200 } },
     } }
     Badge.isOnDevice = function(path) return path == "/lib/local.epub" end
-    Badge.enabled = true
+    Badge.isCloud = function(path) return path == "/lib/cloud-x.epub" end
+    check(Badge.cloud_enabled and not Badge.local_enabled, "defaults: cloud badge on, local badge off")
+    Badge.local_enabled = true
     Badge.paintOn(menu, bb)
     local x, y, size = Badge.place(cover.dimen)
     check(x + size <= 140 and y + size <= 190 and x > 20, "badge inside the cover's corner")
@@ -799,11 +801,30 @@ do
     check(changed(x, y, size, size), "badge drawn on the local book")
     check(not changed(200, 0, 160, 200), "no badge on a book not on the device")
     bb:fill(Blitbuffer.COLOR_GRAY)
-    Badge.enabled = false
+    Badge.local_enabled = false
     Badge.paintOn(menu, bb)
-    check(not changed(x, y, size, size), "badge can be turned off")
-    Badge.enabled = true
-    Badge.isOnDevice = nil
+    check(not changed(x, y, size, size), "local badge can be turned off")
+
+    -- Cloud badge: drawn on cloud-only books, with the plugin's icon.
+    menu.item_group[2].entry.path = "/lib/cloud-x.epub"
+    check(Badge.kind("/lib/cloud-x.epub") == "cloud" and Badge.kind("/lib/local.epub") == nil, "badge kinds")
+    Badge.paintOn(menu, bb)
+    local cx, cy, csize = Badge.place(menu.item_group[2].dimen)
+    check(changed(cx, cy, csize, csize), "cloud badge drawn on the cloud book")
+    check(not changed(x, y, size, size), "no cloud badge on the local book")
+    local inner = {}
+    for yy = cy + math.floor(csize / 4), cy + math.floor(csize * 3 / 4) do
+        for xx = cx + math.floor(csize / 4), cx + math.floor(csize * 3 / 4) do
+            if bb:getPixel(xx, yy):getColor8().a < 128 then table.insert(inner, 1) end
+        end
+    end
+    check(#inner > 10, "cloud icon loaded (dark pixels inside the badge)")
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    Badge.cloud_enabled = false
+    Badge.paintOn(menu, bb)
+    check(not changed(cx, cy, csize, csize), "cloud badge can be turned off")
+    Badge.cloud_enabled, Badge.local_enabled = true, false
+    Badge.isOnDevice, Badge.isCloud = nil, nil
     bb:free()
 end
 

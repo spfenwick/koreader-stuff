@@ -130,7 +130,7 @@ def main() -> int:
         (s.ko_home / "settings.reader.lua").write_text("return " + proto_b.lua({
             "home_dir": str(s.library),
             "cloudlibrary": {"server": {"url": server["url"], "username": server["username"]},
-                             "folder": str(s.library)},
+                             "folder": str(s.library), "badge_local": True},
         }) + "\n")
         s.launches = 1
         root = s.tmp / "rt1"

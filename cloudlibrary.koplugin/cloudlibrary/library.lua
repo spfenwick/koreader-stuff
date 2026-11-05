@@ -8,7 +8,8 @@ Settings (G_reader_settings "cloudlibrary"):
   folder     library folder (default: KOReader's download folder, else home)
   show       show cloud books (default true)
   auto_sync  sync when the file browser opens and Wi-Fi is on (default true)
-  badge      on-device badge on local catalog books (default true)
+  badge_cloud  cloud badge on cloud-only books (default true)
+  badge_local  on-device badge on local catalog books (default false)
   search     cloud books in file search results (default true)
 
 The password stays in KOReader's OPDS settings and is read from there.
@@ -46,6 +47,7 @@ local Library = {
 
 Library.on_device = {} -- path -> true: local files that are catalog books
 Badge.isOnDevice = function(path) return Library.on_device[path] == true end
+Badge.isCloud = function(path) return Virtual.by_path[path] ~= nil end
 
 local QUICK_INTERVAL = 60 * 60       -- auto sync at most hourly
 local FULL_INTERVAL = 24 * 60 * 60   -- and a full sync daily
@@ -62,6 +64,12 @@ function Library.save(key, value)
     local s = Library.settings()
     s[key] = value
     G_reader_settings:saveSetting("cloudlibrary", s)
+end
+
+--- Redraws the file browser (after a badge setting changed).
+function Library.repaint()
+    local FileManager = require("apps/filemanager/filemanager")
+    if FileManager.instance then UIManager:setDirty(FileManager.instance, "ui") end
 end
 
 function Library.opdsServers()
@@ -132,7 +140,8 @@ end
 function Library.load()
     local server, folder = Library.server(), Library.folder()
     local s = Library.settings()
-    Badge.enabled = s.badge ~= false
+    Badge.cloud_enabled = s.badge_cloud ~= false
+    Badge.local_enabled = s.badge_local == true
     Search.enabled = s.search ~= false
     if not server or not folder or s.show == false then
         Library.stats = {}
@@ -651,14 +660,23 @@ function Library.menuEntry()
                     end,
                 },
                 {
+                    text = _("Mark cloud books"),
+                    help_text = _("A cloud on the cover of books that are only in your cloud library."),
+                    checked_func = function() return Library.settings().badge_cloud ~= false end,
+                    callback = function()
+                        Library.save("badge_cloud", Library.settings().badge_cloud == false)
+                        Badge.cloud_enabled = Library.settings().badge_cloud ~= false
+                        Library.repaint()
+                    end,
+                },
+                {
                     text = _("Mark books on this device"),
                     help_text = _("A check mark on the cover of downloaded books that are in your cloud library."),
-                    checked_func = function() return Library.settings().badge ~= false end,
+                    checked_func = function() return Library.settings().badge_local == true end,
                     callback = function()
-                        Library.save("badge", Library.settings().badge == false)
-                        Badge.enabled = Library.settings().badge ~= false
-                        local FileManager = require("apps/filemanager/filemanager")
-                        if FileManager.instance then UIManager:setDirty(FileManager.instance, "ui") end
+                        Library.save("badge_local", Library.settings().badge_local ~= true)
+                        Badge.local_enabled = Library.settings().badge_local == true
+                        Library.repaint()
                     end,
                 },
                 {

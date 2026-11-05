@@ -1,6 +1,7 @@
 --[[
-The "on this device" badge: a check mark in a white circle, drawn on the
-bottom-right corner of the cover of local books that are in the catalog.
+Cover badges, in a white circle on the bottom-right corner of the cover:
+- cloud: a cloud on books that are only in the cloud library (default on);
+- local: a check mark on local books that are in the catalog (default off).
 
 Drawn after the file browser (FileChooser) and book lists (BookList: search
 results, history, collections) paint, over whatever drew the items: stock
@@ -13,15 +14,22 @@ local Device = require("device")
 local Screen = Device.screen
 
 local Badge = {
-    enabled = true,
+    local_enabled = false,
+    cloud_enabled = true,
     isOnDevice = nil, -- function(path) -> true for local books in the catalog
+    isCloud = nil,    -- function(path) -> true for cloud-only books
     installed = false,
 }
 
-local widgets = {} -- size -> widget
+-- The plugin's own cloud icon (KOReader has none).
+local CLOUD_ICON = (debug.getinfo(1, "S").source:match("^@(.*)/cloudlibrary/[^/]*$") or ".")
+    .. "/icons/cloud.svg"
 
-local function badgeWidget(size)
-    local w = widgets[size]
+local widgets = {} -- kind .. size -> widget
+
+local function badgeWidget(size, kind)
+    local key = kind .. size
+    local w = widgets[key]
     if w then return w end
     local FrameContainer = require("ui/widget/container/framecontainer")
     local CenterContainer = require("ui/widget/container/centercontainer")
@@ -38,10 +46,12 @@ local function badgeWidget(size)
         color = Blitbuffer.COLOR_BLACK,
         CenterContainer:new{
             dimen = Geom:new{ w = inner, h = inner },
-            IconWidget:new{ icon = "check", width = icon, height = icon },
+            kind == "cloud"
+                and IconWidget:new{ file = CLOUD_ICON, alpha = true, width = icon, height = icon }
+                or IconWidget:new{ icon = "check", width = icon, height = icon },
         },
     }
-    widgets[size] = w
+    widgets[key] = w
     return w
 end
 
@@ -80,14 +90,21 @@ function Badge.place(rect)
     return rect.x + rect.w - size - margin, rect.y + rect.h - size - margin, size
 end
 
+--- Which badge a path gets: "cloud", "local" or nil.
+function Badge.kind(path)
+    if Badge.cloud_enabled and Badge.isCloud and Badge.isCloud(path) then return "cloud" end
+    if Badge.local_enabled and Badge.isOnDevice and Badge.isOnDevice(path) then return "local" end
+end
+
 function Badge.paintOn(menu, bb)
-    if not (Badge.enabled and Badge.isOnDevice and menu.item_group) then return end
+    if not ((Badge.cloud_enabled or Badge.local_enabled) and menu.item_group) then return end
     eachItem(menu.item_group, function(item, path)
-        if not Badge.isOnDevice(path) then return end
+        local kind = Badge.kind(path)
+        if not kind then return end
         local rect = coverRect(item, 0, {}) or item.dimen
         if rect.w < 20 or rect.h < 20 then return end
         local x, y, size = Badge.place(rect)
-        badgeWidget(size):paintTo(bb, x, y)
+        badgeWidget(size, kind):paintTo(bb, x, y)
     end, 0, {})
 end
 

@@ -251,8 +251,8 @@ function Sync:quick()
     end
     local e, err = self:endpoints()
     if not e then return nil, err end
-    local remote = self:remoteCount()
     if not e.new then
+        local remote = self:remoteCount()
         local same = remote ~= nil and remote == store:count()
         if same then store:setMeta("last_sync", started) end
         return { added = 0, needs_full = not same, remote_count = remote, total = store:count(),
@@ -277,6 +277,9 @@ function Sync:quick()
         return known or page >= 10
     end)
     if not ok then return nil, perr end
+    -- Counted after reading the new books, so a book added in between
+    -- doesn't make the counts differ.
+    local remote = self:remoteCount()
     local total = store:count()
     store:setMeta("last_sync", started)
     return { added = added, remote_count = remote, total = total,
