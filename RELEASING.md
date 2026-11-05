@@ -11,13 +11,19 @@ updates".
 
 1. Set `version` in the plugin's `_meta.lua` (semantic versioning: the
    updater only installs a higher version).
-2. Commit and push to main.
-3. Either push a tag `<plugin>-v<version>` (e.g. `supersync-v1.0.0`), or run
-   Actions → "Release plugin" → Run workflow on main, choosing the plugin
-   (this creates the tag).
+2. Commit and push to main. That's all: a push to main that changes a
+   plugin's `_meta.lua` releases every plugin whose version has no
+   `<plugin>-v<version>` release yet, tagging the commit pushed. Change
+   both plugins' versions in one push and both are released.
+
+To release without a push to main (or again after a failed run): push a tag
+`<plugin>-v<version>` (e.g. `supersync-v1.0.0`) yourself, or run Actions →
+"Release plugin" → Run workflow on main, choosing the plugin (this creates
+the tag).
 
 The workflow (`.github/workflows/release.yml`) checks the tag matches
-`_meta.lua`, runs every plugin's tests (`scripts/test.sh` and
+`_meta.lua` (or that the version isn't released yet), runs every plugin's
+tests once (`scripts/test.sh` and
 `scripts/test-supersync.sh`), zips `<plugin>.koplugin`, publishes it with a
 `plugin.json` (version, URL, SHA-256) on the versioned release, and then
 copies `plugin.json` to the plugin's rolling release, named after the plugin
