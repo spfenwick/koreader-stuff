@@ -403,6 +403,32 @@ function AnnStore:applied(md5, kind, items)
     end)
 end
 
+--- Books with merged changes not in their list yet, where this device has
+-- seen them: { { md5, kind, path }, … }.
+function AnnStore:toWrite()
+    return self:_read(function(conn)
+        local out = {}
+        for _, r in ipairs(rows(conn:prepare([[
+            SELECT md5, kind, path FROM ann_books
+            WHERE pending = 1 AND path IS NOT NULL ORDER BY path, kind;]]))) do
+            out[#out + 1] = { md5 = r[1], kind = r[2], path = r[3] }
+        end
+        return out
+    end)
+end
+
+--- The kinds of list seen at this path for this book (to tell an empty
+-- list's kind).
+function AnnStore:kindsAt(md5, path)
+    return self:_read(function(conn)
+        local stmt = conn:prepare("SELECT kind FROM ann_books WHERE md5 = ? AND path = ? AND observed = 1;")
+        stmt:bind(md5, path)
+        local out = {}
+        for _, r in ipairs(rows(stmt)) do out[#out + 1] = r[1] end
+        return out
+    end)
+end
+
 function AnnStore:isPending(md5, kind)
     return self:_read(function(conn)
         local b = loadBook(conn, md5, kind)

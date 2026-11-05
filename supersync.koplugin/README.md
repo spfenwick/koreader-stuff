@@ -78,11 +78,10 @@ sync gets exactly one more sync after it. The network part runs in a
 background process, so reading isn't interrupted; it's stopped after 3
 minutes, keeping what it finished (the next sync carries on).
 
-Changes to highlights are recorded when a book is closed, and changes from
-other devices are put into a book when it's opened (or right away for the
-book being read), whether or not automatic sync is on. Book status,
-rating, review and custom metadata are also written into books that aren't
-open, right after a sync.
+Changes to highlights are recorded when a book is closed. Changes from
+other devices are written into books right after a sync, including books
+that aren't open (if they've been opened on that device before), and put
+into a book when it's opened, whether or not automatic sync is on.
 
 ## On the server
 

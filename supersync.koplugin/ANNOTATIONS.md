@@ -294,7 +294,10 @@ it's retried every 2 seconds for up to 3 minutes (so "Sync now", which keeps
 the menu open, still applies once the menu closes), and after that left for
 the next sync, close or open.
 
-### Other books: on next open (default)
+### Other books: on next open (as first built)
+
+(Superseded: closed books are now written straight away, see the next
+section. Opening a book still applies anything that couldn't be written.)
 
 - Books with merged changes not yet in their sidecar are listed in
   `ann_pending`.
@@ -306,15 +309,36 @@ the next sync, close or open.
 - Cost: until a book is opened, its highlight count in the file browser and
   exports (e.g. to Readwise or Joplin) don't include synced annotations.
 
-### Other books: straight into the sidecar (not planned)
+### Other books: straight into the sidecar (as built)
 
-For books with a known path (`ann_files`, from reading history and opens):
-open the sidecar with `DocSettings:open`, merge, set
-`annotations_externally_modified`, flush. KOReader then recomputes page
-numbers and re-sorts on the next open, as it does for KOHighlights. Skipped
-for the open book and for sidecars whose list is the other kind. More work
-and more risk (writing files KOReader owns, the three sidecar locations,
-`.old` backups); only worth it if up-to-date counts and exports matter.
+After each sync (`AnnSync:writeAll`), for books with merged changes not yet
+in their list (`ann_books.pending`) and a known path (from the reading
+history scan and opens):
+
+1. Open the sidecar with `DocSettings:open`. Skip it if the file is gone,
+   has no sidecar, now has another MD5, has no `annotations` list yet (not
+   opened since KOReader's 2024 format change), or uses a pre-2020 DOM.
+2. Only the list KOReader loads first (`annotations`) is written, and only
+   if it's the kind being synced (by its items; an empty list's kind is the
+   one seen at that path before). The list kept aside for the other engine
+   (`annotations_rolling`/`annotations_paging`) waits until the book is
+   opened with it: KOReader only updates the main list's page numbers.
+3. Record the sidecar's own changes first (the same change detection as on
+   close, mass-deletion guard included), so nothing made outside is
+   overwritten; held deletions are left out of what's written.
+4. Apply the plan as for the open book (replace in place, remove, append),
+   set `annotations_externally_modified`, flush. KOReader recomputes page
+   numbers and re-sorts on the next open, as it does for KOHighlights.
+5. Record the result as this device's copy, and reset the file browser's
+   cached info for the book.
+
+Skipped for the open book (applied live instead). A few books per UI tick.
+"Restore them here" for a closed book writes it back at once.
+
+Cost: writing files KOReader owns. `DocSettings:flush` keeps KOReader's
+`.old` backup, and the sidecar location is KOReader's own choice. A closed
+sidecar emptied or edited outside is only noticed when there's next
+something to write into it, or when the book is opened.
 
 ## Sync cycle
 
@@ -413,8 +437,9 @@ nothing ran on a device.
 ## Decided
 
 1. "Newest change wins", with its reliance on device clocks, is acceptable.
-2. Books that aren't open get synced changes when they're next opened only;
-   writing their sidecars directly isn't planned.
+2. Books that aren't open get synced changes written into their sidecars
+   right after a sync (changed from "on next open only", at the user's
+   request).
 3. Mass deletions are the user's choice: they're asked whether to restore
    or remove everywhere (see "Guard against mass deletion").
 

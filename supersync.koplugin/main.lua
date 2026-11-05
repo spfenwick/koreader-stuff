@@ -567,7 +567,7 @@ function SuperSync:menuItems()
         },
         {
             text = _("Sync highlights and bookmarks automatically"),
-            help_text = _([[Sync highlights, notes and page bookmarks at the same times, for books with the same file on each device. Changes reach a book when it's open: right away for the book you're reading, otherwise when it's next opened.
+            help_text = _([[Sync highlights, notes and page bookmarks at the same times, for books with the same file on each device. Changes from other devices are written into books right after a sync, including books that aren't open (if they've been opened on this device before).
 
 Book status (reading, on hold, finished), rating, review, custom metadata (title, authors, series…) and the handmade table of contents and hidden flows are synced with them. Status, rating, review and metadata are written into books that aren't open too; the table of contents waits until the book is opened.
 

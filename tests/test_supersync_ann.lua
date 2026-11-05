@@ -91,6 +91,9 @@ local function newDev(name)
         event = { new = function(_, name, args) return { name = name, args = args } end },
         ui_manager = { getTopmostVisibleWidget = function() return dev.top or dev.ui end, setDirty = function() dev.dirty = true end },
         confirm = function(h, text, done) table.insert(dev.asked, { h = h, text = text, done = done }) end,
+        -- No book files unless a test sets some up (closed-book writes skip).
+        lfs = { attributes = function() return nil end },
+        booklist = { resetBookInfoCache = function(p) dev.cache_reset = p end },
     }
     return dev
 end
@@ -564,6 +567,106 @@ do -- history scan
     -- Scanning again finds nothing new
     A.sync:scan()
     check(A:export() == nil, "second scan: nothing new")
+end
+
+do -- closed books: merged changes written into their sidecars
+    local A, B = newDev("A"), newDev("B")
+    local PATH = "/books/" .. M1 .. ".epub"
+    local files, flushes = {}, 0
+    B.sync.deps.docsettings = {
+        hasSidecarFile = function(_, p) return files[p] ~= nil end,
+        open = function(_, p)
+            local data = deepcopy(files[p])
+            return { readSetting = function(_, k) return data[k] end,
+                     saveSetting = function(_, k, v) data[k] = v end,
+                     flush = function() flushes = flushes + 1; files[p] = deepcopy(data) end }
+        end,
+    }
+    B.sync.deps.lfs = { attributes = function(p) return files[p] and "file" or nil end }
+    local function sidecarList() return files[PATH].annotations end
+    local function texts(list)
+        local out = {}
+        for _, it in ipairs(list) do out[#out + 1] = it.text end
+        table.sort(out)
+        return table.concat(out, ",")
+    end
+
+    -- B read the book once, with one highlight; it's closed now.
+    A:open(M1, "rolling"); local a1 = A:highlight(1, 1, 0, 5); tick(); A:close()
+    B:import(A:export(), A.id)
+    B:open(M1, "rolling"); B:close()
+    files[PATH] = { partial_md5_checksum = M1, doc_props = { title = "One" }, annotations = deepcopy(B:sidecar(M1)) }
+    check(#sidecarList() == 1, "B's closed sidecar has the first highlight")
+
+    -- A adds two and edits the first; B syncs with the book closed.
+    A:open(M1, "rolling")
+    tick(); A:highlight(2, 1, 0, 5); tick(); A:highlight(3, 1, 0, 5)
+    tick(); A:edit(A.ui.annotation.annotations[1], { note = "edited on A" })
+    A:close()
+    B:import(A:export(), A.id)
+    B.sync:afterSync({})
+    local list = sidecarList()
+    check(#list == 3 and files[PATH].annotations_externally_modified == true,
+        "written into the closed book, flagged for KOReader to update (" .. #list .. ")")
+    local noted
+    for _, it in ipairs(list) do if it.note == "edited on A" then noted = it end end
+    check(noted and noted.text == a1.text and noted.pageno == nil, "edit written, layout fields left for KOReader")
+    check(B.cache_reset == PATH, "file browser's cache refreshed")
+    check(B:outbox() == 0 and not B.store:isPending(M1, "rolling"), "nothing echoed back, nothing left to apply")
+
+    -- A change made in the closed sidecar (KOHighlights, say) isn't overwritten: it's sent.
+    local xp4 = xp(4, 1, 0)
+    table.insert(files[PATH].annotations, { datetime = "2026-07-07 07:07:07", drawer = "lighten", text = "outside",
+                                            page = xp4, pos0 = xp4, pos1 = xp(4, 1, 5) })
+    A:open(M1, "rolling"); A:remove(A.ui.annotation.annotations[2]); tick(); A:close()
+    B:import(A:export(), A.id)
+    B.sync:afterSync({})
+    check(#sidecarList() == 3 and texts(sidecarList()):find("outside", 1, true), "removal from A written, outside addition kept")
+    local _, r = B:export()
+    check(r and r.records == 1, "the outside addition is sent from B")
+
+    -- The book open on B: not written (the reader has it, it's applied live).
+    A:open(M1, "rolling"); tick(); A:highlight(5, 1, 0, 5); A:close()
+    B:import(A:export(), A.id)
+    local before = flushes
+    B.ui = { document = { file = PATH } }
+    B.sync:writeAll()
+    check(flushes == before, "the open book's sidecar isn't written")
+    B.ui = nil
+    B.sync:afterSync({})
+    check(flushes == before + 1 and #sidecarList() == 4, "written once the book is closed")
+
+    -- The sidecar's main list is for the other engine: left for when it's opened that way.
+    local saved = files[PATH]
+    files[PATH] = { partial_md5_checksum = M1, annotations = { { datetime = "2025-01-01 00:00:00", page = 3,
+        pos0 = { x = 1, y = 1, page = 3 }, pos1 = { x = 2, y = 1, page = 3 } } }, annotations_rolling = saved.annotations }
+    A:open(M1, "rolling"); tick(); A:highlight(6, 1, 0, 5); A:close()
+    B:import(A:export(), A.id)
+    before = flushes
+    B.sync:afterSync({})
+    check(flushes == before and #files[PATH].annotations_rolling == 4, "other engine's list not written")
+    check(B.store:isPending(M1, "rolling"), "still to apply when opened")
+    files[PATH] = saved
+
+    -- Emptied outside (settings reset): held, the user is asked, nothing restored on its own.
+    A:open(M1, "rolling"); tick(); A:highlight(7, 1, 0, 5); A:close()
+    B:import(A:export(), A.id)
+    B.sync:afterSync({})
+    check(#sidecarList() == 6, "six in the closed book after catching up")
+    tick()
+    files[PATH].annotations = {}
+    files[PATH].annotations_externally_modified = nil
+    B.asked = {}
+    -- Noticed when there's next something to write into it.
+    A:open(M1, "rolling"); tick(); A:highlight(8, 1, 0, 5); A:close()
+    B:import(A:export(), A.id)
+    B.sync:afterSync({})
+    check(#files[PATH].annotations == 1 and #B.asked == 1 and B.asked[1].text:find("6 of 7", 1, true),
+        "emptied closed book: held and asked, only the new one written ("
+        .. #files[PATH].annotations .. ", " .. tostring(B.asked[1] and B.asked[1].text) .. ")")
+    check(B:export() == nil, "nothing removed elsewhere")
+    B.asked[1].done("restore")
+    check(#sidecarList() == 7, "restore: written back into the closed book at once")
 end
 
 do -- status counts and requeue

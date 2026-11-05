@@ -136,7 +136,7 @@ fills in "reading" and removes the reset marker.
   recorded, so a change made meanwhile isn't overwritten. Books without a
   sidecar (never opened on the device) are not written; they get the
   values on first open. The TOC and flows wait for the book to be opened.
-  (Annotations, by contrast, are never written into closed books: see
+  (Annotations are written into closed books the same way: see
   ANNOTATIONS.md.)
 
 ## Local state (in `supersync.sqlite3`)

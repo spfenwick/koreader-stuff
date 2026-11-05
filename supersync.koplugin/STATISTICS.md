@@ -120,11 +120,13 @@ and removals.
   doesn't share them. Reflowable books (EPUB and the like) and PDF/DjVu keep
   separate lists, as in KOReader: opening a book with the other engine
   doesn't touch the first list.
-- **When they arrive.** For the book you're reading, right after a sync
-  (once any menu or dialog is closed). Other books get theirs when they're
-  next opened; until then the file browser's highlight counts and exports
-  don't include them. Books first opened with KOReader's rendering from
-  before 2020 are left out.
+- **When they arrive.** Right after a sync: for the book you're reading
+  once any menu or dialog is closed, and written into other books opened on
+  that device before. A book never opened on a device gets them when first
+  opened. A book opened with both engines (a PDF also opened as
+  reflowable, say) keeps a second list, which gets them when opened that
+  way. Books first opened with KOReader's rendering from before 2020 are
+  left out.
 - **The first sync** of highlights on a device first reads the highlights
   of every book in the reading history, so they're sent too, not only
   those of books you open later.

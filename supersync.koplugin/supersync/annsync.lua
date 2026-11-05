@@ -3,9 +3,14 @@ Annotation sync inside KOReader: reading the open book's annotations,
 applying merged changes to it, scanning the reading history, and asking the
 user about held deletions. The data side is supersync/annstore.lua.
 
-Changes reach a book only while it's open: live for the open book after a
-sync, otherwise when it's next opened. Sidecars of closed books are only
-read (by the history scan), never written.
+Changes reach the open book live, after a sync. Closed books that this
+device has seen (opened, or read by the history scan) get them right after
+a sync too: written into the sidecar's annotation list, with KOReader's
+`annotations_externally_modified` set so it recomputes page numbers and
+sorts the list when the book is next opened (as for KOHighlights). Only the
+list KOReader loads first is written; the one kept aside for the other
+engine (a PDF also opened as reflowable, say) waits until the book is
+opened with that engine.
 --]]
 
 local AnnFormat = require("supersync/annformat")
@@ -185,7 +190,8 @@ function AnnSync:collect()
     if ui then self:observe(ui) end
 end
 
---- After a sync: apply what came in to the open book, then ask about held deletions.
+--- After a sync: apply what came in to the open book, write it into closed
+-- books, then ask about held deletions.
 function AnnSync:afterSync(run)
     local ui = self:_readerUI()
     local book = ui and self:bookOf(ui)
@@ -197,7 +203,107 @@ function AnnSync:afterSync(run)
             if not n and why == "busy" then self:_applyLater(0) end
         end
     end
-    self:askHeld()
+    if not self:writeAll(function() self:askHeld() end) then self:askHeld() end
+end
+
+-- Closed books -------------------------------------------------------------------------------
+
+function AnnSync:_bookList()
+    if self.deps.booklist then return self.deps.booklist end
+    local ok, BookList = pcall(require, "ui/widget/booklist")
+    return ok and BookList or nil
+end
+
+--- Writes the merged state of (md5, kind) into a closed book's sidecar.
+-- The sidecar's own changes are recorded first, so nothing made there is
+-- overwritten. Returns the number of changes written and of deletions
+-- newly held.
+function AnnSync:writeClosed(path, md5, kind)
+    local deps = self.deps
+    local DocSettings = deps.docsettings or require("docsettings")
+    local lfs = deps.lfs or require("libs/libkoreader-lfs")
+    if lfs.attributes(path, "mode") ~= "file" or not DocSettings:hasSidecarFile(path) then return 0, 0 end
+    local ds = DocSettings:open(path)
+    if ds:readSetting("partial_md5_checksum") ~= md5 then return 0, 0 end -- another file there now
+    local list = ds:readSetting("annotations")
+    if type(list) ~= "table" then return 0, 0 end -- not opened since 2024: KOReader converts it first
+    local list_kind = AnnFormat.listKind(list)
+    if not list_kind then
+        local kinds = deps.store:kindsAt(md5, path)
+        if #kinds == 1 then list_kind = kinds[1] end
+    end
+    if list_kind ~= kind then return 0, 0 end -- the other engine's list: on open
+    local dom = ds:readSetting("cre_dom_version")
+    if kind == "rolling" and type(dom) == "number" and dom < AnnSync.MIN_DOM_VERSION then return 0, 0 end
+    local props = ds:readSetting("doc_props") or {}
+    local res = deps.store:observe{
+        md5 = md5, kind = kind, items = list, now = deps.now(), device = deps.getDeviceId(),
+        title = props.display_title or props.title, authors = props.authors, path = path,
+    }
+    local ops = deps.store:plan(md5, kind, list)
+    if #ops == 0 then return 0, res.held end
+    local removals = {}
+    for _, op in ipairs(ops) do
+        if op.op == "replace" then
+            local item = list[op.index]
+            for k in pairs(item) do item[k] = nil end
+            for k, v in pairs(op.item) do item[k] = v end
+        elseif op.op == "remove" then
+            removals[#removals + 1] = op.index
+        end
+    end
+    table.sort(removals, function(a, b) return a > b end)
+    for _, index in ipairs(removals) do table.remove(list, index) end
+    for _, op in ipairs(ops) do
+        if op.op == "add" then
+            if kind == "paging" then op.item.pageno = op.item.page end
+            table.insert(list, op.item)
+        end
+    end
+    ds:saveSetting("annotations", list)
+    -- KOReader recomputes page numbers and sorts the list on the next open.
+    ds:saveSetting("annotations_externally_modified", true)
+    ds:flush()
+    deps.store:applied(md5, kind, list)
+    local BookList = self:_bookList()
+    if BookList and BookList.resetBookInfoCache then BookList.resetBookInfoCache(path) end
+    self.log.info("StatSync: wrote", #ops, "annotation changes into", path)
+    return #ops, res.held
+end
+
+--- Writes merged changes into every closed book that needs them, a few
+-- per UI tick. done(written, held). Returns false if already running.
+function AnnSync:writeAll(done)
+    if self.writing or not self.deps.enabled() then return false end
+    self.writing = true
+    local ui = self:_readerUI()
+    local open_file = ui and ui.document and ui.document.file
+    local list = {}
+    for _, w in ipairs(self.deps.store:toWrite()) do
+        if w.path ~= open_file then list[#list + 1] = w end
+    end
+    local i, written, held = 0, 0, 0
+    local function step()
+        for _ = 1, AnnSync.SCAN_CHUNK do
+            i = i + 1
+            local w = list[i]
+            if not w then
+                self.writing = false
+                if written > 0 then self.log.info("StatSync: wrote", written, "annotation changes into closed books") end
+                if done then done(written, held) end
+                return
+            end
+            local ok, n, h = pcall(self.writeClosed, self, w.path, w.md5, w.kind)
+            if ok then
+                written, held = written + n, held + h
+            else
+                self.log.warn("StatSync: writing annotations into", w.path, "failed:", n)
+            end
+        end
+        self.deps.schedule(0, step)
+    end
+    self.deps.schedule(0, step)
+    return true
 end
 
 AnnSync.RETRY_DELAY = 2   -- s between tries while the user is busy (a menu, a dialog)
@@ -297,6 +403,8 @@ function AnnSync:resolve(h, answer)
         if book and book.md5 == h.md5 and book.kind == h.kind then
             self:observe(ui)
             self:apply(ui, true)
+        else
+            self:writeAll() -- a closed book: back into its sidecar
         end
     end
 end
