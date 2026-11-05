@@ -14,11 +14,39 @@ With a transport (see webdav.lua) rooted at <configured folder>/Statistics:
    that isn't seen or known bad; otherwise, for each device, the segment
    numbers from the first one not imported, skipping imported ones, until
    one isn't there (a 404). So an ordinary sync costs one small listing
-   plus one request per device, however long the history.
+   plus one request per device, however long the history; and on servers
+   whose folder dates can be trusted, nothing for a device folder that
+   hasn't changed since this device last went through it (see below).
+5. On a full listing with params.pack: pack this device's own small
+   segments into one (see pack.lua), and delete the segments of packs made
+   long enough ago (params.pack.delete).
 
-Sequence numbers are kept contiguous: a device writes the first number not
-in use, so readers can ask for "the next one" by name. Anything out of
-sequence (a gap, a stray file) is picked up by the next full listing.
+A device writes the first number not in use above the highest one it has
+used itself (seen here, or, for a device restored from a backup, the
+highest packed one its meta.json gives): never a lower free one, as a
+number once used may have been imported by others even if its segment has
+since gone into a pack (and been deleted). So numbers stay contiguous, and
+readers can ask for "the next one" by name; a reader that finds a gap (the
+segments of a pack, deleted) carries on after the highest number it has.
+Anything else out of sequence (a stray file) is picked up by the next full
+listing.
+
+Folder dates: the listing of devices/ gives each device folder's last
+modified date, which changes whenever a segment is moved in or deleted (on
+most servers: rclone, for one, keeps reporting the date it first saw).
+params.folders says, per device folder, the date it had when this device
+last went through it completely (and for which streams). An ordinary sync
+skips a folder whose date hasn't changed since; the caller passes folders
+only once this device's own folder has been seen to change date after an
+upload (params.own_check: its date before the last upload; a changed date
+sets result.dates_confirmed, the same one result.dates_unreliable). Full
+listings still list every folder, and check: a folder whose date didn't
+change but that holds segments this device hasn't seen also means the
+server's dates can't be trusted.
+result.folders gives each folder's date (and whether it's old enough to
+rely on: a few seconds older than the server's clock) and the streams gone
+through completely, for the caller to record once the downloads are
+imported.
 
 Downloads go to tmp_dir, each to a .part file renamed when complete.
 `report(result)` is called after each step that changes the result, so the
@@ -27,7 +55,7 @@ was done so far (complete downloads, a verified upload) is still used.
 
 There are three streams of segments in each device folder: statistics
 (seg-N), annotations (ann-N) and book data (book-N). Each has its own
-numbering; steps 3 and 4 run for each stream the sync is for (params.stats
+numbering; steps 3 to 5 run for each stream the sync is for (params.stats
 unless false, params.ann and params.book when given).
 
 params.expect_own: this device has files in the folder already (it has
@@ -40,18 +68,29 @@ Result: { ok, error, stage, full_listed, uploaded = { name, size, etag,
           verified }, upload_error, ann_uploaded, ann_upload_error, book_uploaded,
           book_upload_error, missing_own,
           devices = { id, … }, downloads = { {stream, device, name, size,
-          etag, path}, … }, remote_more, segment_errors, bytes_up,
-          bytes_down, requests }
+          etag, path}, … }, remote_more, segment_errors,
+          packed = { {stream, name, first, last, size, etag}, … },
+          deleted = { [pack name] = segments deleted }, left = { [pack name]
+          = its segments still there },
+          folders = { [id] = { modified, reliable, complete = { [stream] = true } } },
+          own_modified, own_reliable, dates_confirmed, dates_unreliable,
+          bytes_up, bytes_down, requests }
 (stream is "stats", "ann" or "book").
 --]]
 
 local AnnFormat = require("omnisync/annformat")
 local BookFormat = require("omnisync/bookformat")
 local Codec = require("omnisync/codec")
+local Pack = require("omnisync/pack")
 
 local NetJob = {}
 
 NetJob.DEVICES = "devices"
+
+--- A folder date is relied on only when it's at least this many seconds
+-- older than the server's clock: a segment moved in during the same second
+-- wouldn't change it.
+NetJob.DATE_MARGIN = 2
 
 function NetJob.validDeviceId(id)
     return type(id) == "string" and #id >= 4 and #id <= 64 and not id:find("[^%w%-_]")
@@ -80,6 +119,16 @@ local function firstFree(used, segmentName)
     return n
 end
 
+--- The highest segment number among these names (0 if none).
+local function highest(def, names)
+    local top = 0
+    for name in pairs(names) do
+        local s = def.seq(name)
+        if s and s > top then top = s end
+    end
+    return top
+end
+
 local function listedNames(entries)
     local set = {}
     for _, e in ipairs(entries) do
@@ -88,15 +137,43 @@ local function listedNames(entries)
     return set
 end
 
+--- An HTTP date (RFC 1123, as WebDAV servers give them) in seconds since
+-- the epoch, or nil.
+function NetJob.parseHttpDate(s)
+    if type(s) ~= "string" then return nil end
+    local d, mon, y, h, mi, sec = s:match("(%d+) (%a%a%a) (%d%d%d%d) (%d%d):(%d%d):(%d%d)")
+    local months = { Jan = 1, Feb = 2, Mar = 3, Apr = 4, May = 5, Jun = 6, Jul = 7, Aug = 8, Sep = 9, Oct = 10, Nov = 11, Dec = 12 }
+    local m = months[mon or ""]
+    if not m then return nil end
+    y, d = tonumber(y), tonumber(d)
+    -- Days from the civil date (no time zones: the dates are GMT).
+    local yy = m <= 2 and y - 1 or y
+    local era = math.floor(yy / 400)
+    local yoe = yy - era * 400
+    local doy = math.floor((153 * (m + (m > 2 and -3 or 9)) + 2) / 5) + d - 1
+    local doe = yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy
+    local days = era * 146097 + doe - 719468
+    return days * 86400 + tonumber(h) * 3600 + tonumber(mi) * 60 + tonumber(sec)
+end
+
 --- params: device_id, pending = { path, size } | nil, meta_path,
 --  seen and bad ({ [device] = { [name] = { size, etag } } }), full_list (bool),
 --  tmp_dir, max_download_bytes (optional), stats (false: annotations only),
 --  expect_own, and for annotations
 --  ann = { pending = { path, size } | nil, bad } (seen is shared: names differ),
---  and for book data, book (the same shape)
+--  and for book data, book (the same shape); rewrite_meta (this device's
+--  meta.json on the server is out of date: written on a full listing);
+--  folders ({ [id] = { modified,
+--  streams = { [stream] = true } } }, nil when the server's dates can't be
+--  trusted) and own_check (see above); and pack = { after = { [stream] =
+--  last segment number packed }, delete = { { stream, name, first, last,
+--  holders = { name, … } }, … }, deadline (os.time() after which no more
+--  segments are gathered for a pack), caps = { stats, ann, book } (records
+--  at most), zstd (optional) }
 function NetJob.run(params, transport, report)
     report = report or function() end
-    local result = { stage = "start", devices = {}, downloads = {}, segment_errors = {} }
+    local result = { stage = "start", devices = {}, downloads = {}, segment_errors = {},
+                     packed = {}, deleted = {}, left = {}, folders = {} }
     local function update(stage)
         result.stage = stage
         result.bytes_up, result.bytes_down, result.requests = transport.bytes_up, transport.bytes_down, transport.requests
@@ -146,15 +223,41 @@ function NetJob.run(params, transport, report)
         end
         dev_entries = {}
     end
+    local server_time = NetJob.parseHttpDate(dev_entries.server_date)
     local ids, own_exists = {}, false
+    local dates = {} -- id -> { modified, reliable }
     for _, d in ipairs(dev_entries) do
         if d.is_dir and NetJob.validDeviceId(d.name) then
             ids[#ids + 1] = d.name
             if d.name == own_id then own_exists = true end
+            local t = NetJob.parseHttpDate(d.modified)
+            dates[d.name] = { modified = d.modified,
+                              reliable = t and server_time and t <= server_time - NetJob.DATE_MARGIN or false }
         end
     end
     table.sort(ids)
     result.devices = ids
+
+    -- This device's own folder kept its date across the upload last time:
+    -- dates on this server don't follow changes.
+    local own_date = dates[own_id]
+    if params.own_check and own_date then
+        if own_date.modified == params.own_check then
+            result.dates_unreliable = true
+        elseif own_date.modified then
+            result.dates_confirmed = true
+        end
+    end
+    result.own_modified = own_date and own_date.modified
+    result.own_reliable = own_date and own_date.reliable or false
+
+    -- Unchanged since this device last went through it, for this stream?
+    local folders = (not result.dates_unreliable) and params.folders or nil
+    local function unchanged(id, stream_id)
+        local rec, now = folders and folders[id], dates[id]
+        return rec ~= nil and now ~= nil and now.modified ~= nil and rec.modified == now.modified
+            and rec.streams ~= nil and rec.streams[stream_id] == true and next(seen[id] or {}) ~= nil
+    end
 
     local listings = {} -- device id -> entries, when listed
     if not own_exists then
@@ -180,20 +283,45 @@ function NetJob.run(params, transport, report)
         end
     end
     local own_listing = listings[own_id]
+    local packed_floor = {} -- stream -> highest packed number, from meta.json on the server
     if own_listing then
         local has_meta = false
         for _, e in ipairs(own_listing) do
             if e.name == "meta.json" then has_meta = true end
             if e.name:match("^%.upload%-.*%.part$") then transport:delete(own .. "/" .. e.name) end
         end
-        if not has_meta and params.meta_path then
+        if has_meta then
+            local path = params.tmp_dir .. "/own-meta.json.part"
+            local ok = transport:get(own .. "/meta.json", path)
+            local f = ok and io.open(path, "rb")
+            local meta = f and Codec.decode(f:read("*a"))
+            if f then f:close() end
+            os.remove(path)
+            if type(meta) == "table" and type(meta.packed) == "table" then
+                for k, v in pairs(meta.packed) do
+                    if type(v) == "number" then packed_floor[k] = v end
+                end
+            end
+        end
+        if (not has_meta or params.rewrite_meta) and params.meta_path then
             local ok, perr = transport:put(own .. "/meta.json", params.meta_path)
-            if not ok then segErr("writing meta.json: " .. tostring(perr)) end
+            if ok then result.meta_written = true else segErr("writing meta.json: " .. tostring(perr)) end
         end
     end
     update("listed")
 
-    -- 3. Upload
+    -- The highest number this device has used in a stream: what it has seen
+    -- of its own (its uploads and packs), or its meta.json's highest pack.
+    local function floorOf(stream)
+        return math.max(highest(stream.def, seen[own_id] or {}), packed_floor[stream.id] or 0)
+    end
+
+    -- 3. Upload, as the first free number above the highest used.
+    local function freeAbove(floor, used, def)
+        local n = floor + 1
+        while used(def.name(n)) do n = n + 1 end
+        return n
+    end
     local function upload(stream)
         local def = stream.def
         local used
@@ -201,9 +329,10 @@ function NetJob.run(params, transport, report)
             local names = listedNames(listings[own_id])
             used = function(name) return names[name] end
         else
-            used = known(own_id, stream) -- own uploads are recorded as seen
+            used = known(own_id, stream)
         end
-        local next_seq = firstFree(used, def.name)
+        local floor = floorOf(stream)
+        local next_seq = freeAbove(floor, used, def)
         local up, up_err
         for _ = 1, 3 do
             local name = def.name(next_seq)
@@ -229,7 +358,7 @@ function NetJob.run(params, transport, report)
                 end
                 listings[own_id] = entries
                 local names = listedNames(entries)
-                next_seq = firstFree(function(n) return names[n] end, def.name)
+                next_seq = freeAbove(math.max(floor, next_seq), function(n) return names[n] end, def)
             else
                 up_err = tostring(uerr)
                 break
@@ -239,6 +368,7 @@ function NetJob.run(params, transport, report)
         result[def.result] = up
         result[def.err] = up_err
         stream.uploaded_name = up and up.name
+        stream.uploaded_seq = up and next_seq
     end
     for _, stream in ipairs(streams) do
         if stream.pending then
@@ -270,6 +400,12 @@ function NetJob.run(params, transport, report)
         return true
     end
 
+    local complete = {} -- id -> { [stream] = true }: gone through, nothing left behind
+    local function done(id, stream_id)
+        complete[id] = complete[id] or {}
+        complete[id][stream_id] = true
+    end
+
     local function downloadStream(stream)
         local def = stream.def
         local up_name = stream.uploaded_name
@@ -277,6 +413,7 @@ function NetJob.run(params, transport, report)
             if downloaded >= budget then result.remote_more = true; break end
             local dev_seen, dev_bad = seen[id] or {}, stream.bad[id] or {}
             local entries = listings[id]
+            local whole = true -- nothing failed or was put off for this folder
             if entries then
                 local cands = {}
                 for _, e in ipairs(entries) do
@@ -292,36 +429,208 @@ function NetJob.run(params, transport, report)
                         end
                     end
                 end
+                -- The folder's date says nothing changed since this device
+                -- went through it, yet there's something new: the dates
+                -- can't be trusted.
+                if #cands > 0 and unchanged(id, stream.id) then result.dates_unreliable = true end
                 table.sort(cands, function(a, b) return a.seq < b.seq end)
                 for _, c in ipairs(cands) do
-                    if downloaded >= budget then result.remote_more = true; break end
+                    if downloaded >= budget then result.remote_more = true; whole = false; break end
                     local ok, derr = download(stream, id, c.name, c.size, c.etag)
-                    if not ok then segErr(id .. "/" .. c.name .. ": " .. tostring(derr)) end
+                    if not ok then
+                        whole = false
+                        segErr(id .. "/" .. c.name .. ": " .. tostring(derr))
+                    end
                 end
+            elseif unchanged(id, stream.id) then
+                -- Skipped: nothing changed in this folder.
+                whole = true
             else
                 local is_known = known(id, stream)
                 local seq = firstFree(is_known, def.name)
+                -- A gap below numbers already seen (a pack's segments,
+                -- deleted): carry on once after the highest seen.
+                local top = highest(def, dev_seen)
+                if id == own_id and stream.uploaded_seq and stream.uploaded_seq > top then top = stream.uploaded_seq end
                 while true do
-                    if downloaded >= budget then result.remote_more = true; break end
+                    if downloaded >= budget then result.remote_more = true; whole = false; break end
                     local name = def.name(seq)
                     if not (is_known(name) or (id == own_id and name == up_name)) then
                         local ok, derr, dcode = download(stream, id, name)
                         if not ok then
-                            if dcode ~= 404 then segErr(id .. "/" .. name .. ": " .. tostring(derr)) end
-                            break
+                            if dcode ~= 404 then
+                                whole = false
+                                segErr(id .. "/" .. name .. ": " .. tostring(derr))
+                                break
+                            end
+                            if seq >= top then break end
+                            seq = top
                         end
                     end
                     seq = seq + 1
                 end
             end
+            if whole then done(id, stream.id) end
         end
     end
     for _, stream in ipairs(streams) do downloadStream(stream) end
+
+    for _, id in ipairs(result.devices) do
+        local d = dates[id]
+        -- This device's own folder changes with its own upload: its date
+        -- from before it is no use for the next sync.
+        local changed_own = id == own_id and (result.uploaded or result.ann_uploaded or result.book_uploaded)
+        if d and d.modified and not changed_own then
+            result.folders[id] = { modified = d.modified, reliable = d.reliable, complete = complete[id] or {} }
+        end
+    end
+
+    -- 5. Packing this device's own small segments
+    if params.pack and full_ok and listings[own_id] then
+        NetJob.pack(params, transport, result, streams, listings[own_id], update, floorOf)
+    end
 
     result.full_listed = full_ok or nil
     result.ok = true
     update("done")
     return result
+end
+
+-- Packing ---------------------------------------------------------------------------
+
+--- Step 5 (on a full listing): for each stream, delete the segments of
+-- packs made long enough ago (as long as the pack, or a later pack holding
+-- it, is there), then pack the next run of small segments if there are
+-- enough.
+function NetJob.pack(params, transport, result, streams, own_listing, update, floorOf)
+    local P = params.pack
+    local own = NetJob.DEVICES .. "/" .. params.device_id
+    local zstd = P.zstd or require("omnisync/zstd")
+    local listed = listedNames(own_listing)
+    for _, stream in ipairs(streams) do
+        local def = stream.def
+        local segs = {}
+        local top = (P.after and P.after[stream.id]) or 0
+        for _, e in ipairs(own_listing) do
+            local s = not e.is_dir and def.seq(e.name)
+            if s then
+                segs[s] = e
+                if s > top then top = s end
+            end
+        end
+
+        -- Segments of packs made long enough ago.
+        for _, p in ipairs(P.delete or {}) do
+            if p.stream == stream.id then
+                local held = false
+                for _, h in ipairs(p.holders or { p.name }) do
+                    if listed[h] then held = true end
+                end
+                local left = 0
+                for n = p.first, p.last do
+                    if segs[n] then
+                        if held and transport:delete(own .. "/" .. segs[n].name) then
+                            segs[n] = nil
+                            result.deleted[p.name] = (result.deleted[p.name] or 0) + 1
+                        else
+                            left = left + 1
+                        end
+                    end
+                end
+                result.left[p.name] = left
+            end
+        end
+
+        -- The next run of small segments after the last packed one: big
+        -- ones (a first sync's) are left as they are, and so are gaps. A
+        -- run too short to pack that a big segment or a gap ends will never
+        -- grow, so it's left as it is too, and the search goes on past it;
+        -- only the last run waits for more.
+        local small = function(n) return segs[n] and (segs[n].size or 0) <= Pack.SMALL end
+        local first = ((P.after and P.after[stream.id]) or 0) + 1
+        local run
+        while true do
+            while first <= top and not small(first) do first = first + 1 end
+            run = {}
+            local n = first
+            while small(n) and #run < Pack.MAX do
+                table.insert(run, n)
+                n = n + 1
+            end
+            if #run >= Pack.MIN or n > top then break end
+            first = n
+        end
+        if #run >= Pack.MIN then
+            local builder = Pack.builder(stream.id)
+            local cap = (P.caps and P.caps[stream.id]) or 5000
+            local last, full
+            for _, seq in ipairs(run) do
+                if P.deadline and os.time() > P.deadline then break end
+                local name = def.name(seq)
+                local part = params.tmp_dir .. "/pack__" .. name
+                local plain = part .. ".jsonl"
+                local ok, gerr = transport:get(own .. "/" .. name, part)
+                local seg, rerr
+                if ok then
+                    local dok, derr = zstd.decompressFile(part, plain)
+                    if dok then seg, rerr = builder:read(plain) else rerr = derr end
+                end
+                os.remove(part)
+                os.remove(plain)
+                if not ok then
+                    -- Couldn't download it: stop here, pack what came before.
+                    result.segment_errors[#result.segment_errors + 1] = "packing " .. name .. ": " .. tostring(gerr)
+                    break
+                end
+                if seg then
+                    if last and builder:count() + builder:size(seg) > cap then
+                        full = true
+                        break
+                    end
+                    builder:add(seg)
+                else
+                    -- A bad segment: nothing in it can be imported, so the
+                    -- pack holds nothing of it.
+                    result.segment_errors[#result.segment_errors + 1] = "packing: skipping bad " .. name .. ": " .. tostring(rerr)
+                end
+                last = seq
+            end
+            -- A full pack is made however few segments it holds: the next
+            -- one starts where it ends, so a run of busy segments is packed
+            -- in parts rather than never.
+            if last and (full or last - first + 1 >= Pack.MIN) then
+                -- The pack is this device's next segment.
+                local floor = math.max(floorOf(stream), stream.uploaded_seq or 0, (P.after and P.after[stream.id]) or 0)
+                local seq = floor + 1
+                while segs[seq] or listed[def.name(seq)] do seq = seq + 1 end
+                local pname = def.name(seq)
+                local plain = params.tmp_dir .. "/" .. pname .. ".jsonl"
+                local packed = params.tmp_dir .. "/" .. pname
+                local wok, werr = builder:write(plain, params.device_id, os.time())
+                local size = wok and zstd.compressFile(plain, packed)
+                os.remove(plain)
+                local up_ok, up_err = false, werr
+                if size then up_ok, up_err = transport:put_new(own .. "/" .. pname, packed) end
+                if up_ok then
+                    local st = transport:stat(own .. "/" .. pname)
+                    if st and (st.size == nil or st.size == size) then
+                        table.insert(result.packed, { stream = stream.id, name = pname, first = first, last = last,
+                                                      size = size, etag = st.etag })
+                    else
+                        up_err = "pack not found with the right size"
+                        up_ok = false
+                    end
+                elseif up_ok == false then
+                    up_err = "name taken"
+                end
+                if not up_ok then
+                    result.segment_errors[#result.segment_errors + 1] = "packing " .. pname .. ": " .. tostring(up_err)
+                end
+                os.remove(packed)
+                update("packed")
+            end
+        end
+    end
 end
 
 return NetJob

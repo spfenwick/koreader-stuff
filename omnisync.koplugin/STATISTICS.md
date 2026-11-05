@@ -31,6 +31,15 @@ mixing them gives confusing results.
     …
 ```
 
+**Packs:** most syncs upload a small file, so once a day each device packs
+its own small files into one, once it has at least 100 of a kind: up to
+500 in a pack. The pack is an ordinary file, the device's next one, and
+every device imports it like any other (what it already has changes
+nothing). A week later the device deletes the small files the pack holds,
+so a device that joins later downloads one file instead of hundreds. A
+file's number is never used again once it's been used, so a gap in the
+numbers is normal.
+
 A segment is a text file compressed with zstd (`zstd -d` unpacks it), one
 JSON object per line: a header (format and
 version, device, time), one line per book (`md5`, title, authors, series,
@@ -65,11 +74,18 @@ files.)
   `page_stat_data` is the same.
 - **Files are never overwritten.** A segment is uploaded under a temporary
   name and then moved to its final name, refusing to replace an existing
-  file. An interrupted upload leaves no partial segment.
+  file. An interrupted upload leaves no partial segment. The only files
+  ever deleted are a device's own small segments, a week after it packed
+  them (see Packs above).
 - **Only new data moves.** An ordinary sync lists `devices/` and asks each
   device for its next segment by name; with nothing new that's one small
-  request per device. Once a day (and on a sync by hand) every device folder is
-  listed in full, to find anything out of sequence.
+  request per device. On servers that change a folder's date when a file
+  arrives in it, a folder whose date hasn't changed since this device last
+  went through it is skipped, so a sync with nothing new is one request in
+  all. (Each device checks this first: after an upload, its own folder's
+  date must have changed. rclone, for one, doesn't do this.) Once a day
+  (and on a sync by hand) every device folder is listed in full, to find
+  anything out of sequence.
 - **Failures fix themselves.** Nothing is marked as sent until the server
   shows the file with the right size, nor imported until it's in the
   database. A failed or skipped sync is caught up by the next one.

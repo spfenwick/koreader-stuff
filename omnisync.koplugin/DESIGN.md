@@ -12,7 +12,8 @@ description, and what couldn't be verified. Written against KOReader
 | `omnisync/plugin.lua` | main | Wires the engine to KOReader: settings, server, subprocess, network state, the statistics plugin |
 | `omnisync/engine.lua` | main | The sync cycle; one at a time plus one re-run |
 | `omnisync/store.lua` | main | Export diff, merge/import, totals, local state DB |
-| `omnisync/netjob.lua` | subprocess | Upload, discovery, downloads |
+| `omnisync/netjob.lua` | subprocess | Upload, discovery (with folder dates), downloads, packing |
+| `omnisync/pack.lua` | subprocess | Packs: merging a run of segments into one |
 | `omnisync/webdav.lua` | subprocess | WebDAV transport (`list`, `stat`, `get`, `put`, `put_new`, `mkdir`, `delete`) |
 | `omnisync/codec.lua` | both | JSON, segment format, validation |
 | `omnisync/annformat.lua` | both | Annotation records, keys, annotation segment format |
@@ -306,19 +307,72 @@ deleted whatever order files arrive in.
   which this version can't do; I'd want an undo (e.g. deletions only apply
   to events from segments older than the `del`) before shipping it.
 
-## Compaction (phase 3, designed, not implemented)
+## Packs
 
-A designated device (setting) writes `snapshots/snap-<n>.jsonl`: the merged
-events of all devices, with a header listing, per device, the last segment
-number it includes. A new device imports the newest snapshot, marks the
-covered segments as seen without downloading them, then continues normally.
-Old segments are never rewritten. Merging is idempotent, so overlap between a
-snapshot and segments is harmless.
+Real use uploads a small segment after most reading sessions (a sync runs on
+closing a book, waking, connecting and starting), so a busy device writes
+thousands a year. The daily full listing and a new device's first sync (one
+request per segment) grow with them. So each device packs its own small
+segments (`pack.lua`, step 5 of `netjob.lua`):
 
-Not implemented because it saves little: events from different devices
-rarely share keys, so a snapshot is about as big as all segments together
-(2.4 MB compressed for the benchmark's new device); it only saves requests
-(25 → 1).
+- **When:** on a full listing (daily), for each stream, once there are at
+  least 100 small segments (64 KB or less compressed) after the last one
+  packed. A pack takes up to 500 of them, and no more records than one
+  upload holds (20,000 readings, 5,000 annotation or book data records), so
+  importing it blocks the screen no longer than any segment. A pack that
+  reaches that record limit is made however few segments it holds, so busy
+  segments are packed in parts. Big segments (a first sync's) and gaps are
+  left as they are; a run too short to pack that one of them ends will
+  never grow, so it's left too and packing goes on past it. 64 KB is about
+  12,000 readings (5 to 10 bytes each compressed; a 60-page session is
+  about 600 bytes), so nearly every everyday segment counts as small.
+- **What:** an ordinary segment, the device's next number, holding exactly
+  what importing its segments would leave: statistics keep every book
+  record and the longest of each reading; annotations and book data keep,
+  per key, the records with the highest (updated, device) (the importer
+  breaks ties by content hash). A bad segment adds nothing. Every device,
+  any version, imports it like any segment: once each, and what it already
+  had changes nothing. That's the cost of plain numbering (rather than a
+  name saying which segments it holds): every device downloads and imports
+  each pack once, a couple of seconds on an e-reader. In exchange, readers
+  need nothing new, and old versions read packs.
+- **Deleting:** at a full listing a week after making it
+  (`status.packs`: name -> stream, first, last, time, done), the owner
+  deletes the segments a pack holds, as long as the pack (or a later pack
+  holding it) is on the server.
+- **Numbering:** a number once used is never used again, as others may
+  have imported its segment: a device writes the first free number above
+  the highest it has used itself (its seen segments, or for a copy restored
+  from an old backup, the highest pack its `meta.json` gives: `"packed"`,
+  per stream). Free numbers below that are gaps, not to be filled. A
+  device about to upload with no record of its own segments lists its
+  folder first. Readers asking for the next number by name carry on once
+  past a gap, after the highest number they have.
+
+## Folder dates
+
+An ordinary sync asks each device folder for its next segment by name: one
+request per device and stream, even with nothing new. The listing of
+`devices/` it makes anyway gives each folder's last-modified date, which on
+most servers changes when a file is moved in or deleted. So a folder whose
+date is the same as when this device last went through it completely (for
+that stream, with everything imported) is skipped (`status.folders`):
+with nothing new, an ordinary sync is that one listing.
+
+- **Trust is earned:** dates are used only once this device's own folder
+  has been seen to change date after an upload (`status.own_check`, then
+  `status.folder_dates = "reliable"`). If it keeps its date, or a full
+  listing finds a segment this device hasn't seen in a folder whose date
+  didn't change, the dates are "unreliable" for good and every folder is
+  asked as before. rclone serve webdav keeps reporting a folder's first
+  date, and is caught by the first check.
+- **The same second:** a date is relied on only when it's at least 2 s
+  older than the server's clock (the listing's `Date` header), so a segment
+  moved in during the same second as the listing isn't missed.
+- **Nothing skipped** for a device with no seen segments in a folder (a
+  rebuild from cloud), for a stream not gone through before, after a
+  download failed or the download budget ran out, or on full listings,
+  which still list every folder (and check the dates).
 
 ## Recommendations and things I think are a bad idea
 

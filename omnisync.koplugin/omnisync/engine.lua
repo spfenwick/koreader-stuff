@@ -45,6 +45,7 @@ local AnnFormat = require("omnisync/annformat")
 local BookFormat = require("omnisync/bookformat")
 local Codec = require("omnisync/codec")
 local NetJob = require("omnisync/netjob")
+local Pack = require("omnisync/pack")
 
 local Engine = {}
 Engine.__index = Engine
@@ -57,6 +58,8 @@ local DEFAULTS = {
     max_book_records = 5000,   -- book data records per uploaded segment
     max_download_bytes = 32 * 1024 * 1024, -- per cycle
     full_list_interval = 24 * 3600, -- seconds between full listings of every device folder
+    pack_grace = Pack.GRACE,   -- seconds between a pack appearing and its segments being deleted
+    pack = true,               -- pack this device's small segments (see pack.lua)
 }
 
 function Engine.new(deps)
@@ -269,12 +272,41 @@ function Engine:_export(run)
     end
 
     local meta_path = d.work_dir .. "/meta.json"
+    -- meta.json says the highest number each stream's packs took, so a copy
+    -- of this device restored from an old backup doesn't use numbers whose
+    -- segments are packed and gone.
+    local packed = {}
+    for name, p in pairs(self.status.packs or {}) do
+        local seq = NetJob.STREAMS[p.stream].seq(name)
+        if seq and seq > (packed[p.stream] or 0) then packed[p.stream] = seq end
+    end
+    local packed_key = next(packed) and Codec.encode(packed) or nil
     writeFileAtomic(meta_path, Codec.encode{
         deviceId = run.device_id, deviceName = d.device_name or "", schema = Codec.VERSION,
-        createdAt = d.now(),
+        createdAt = d.now(), packed = next(packed) and packed or nil,
     })
+    run.meta_key = packed_key
+    -- Packing, on full listings (see netjob.lua and pack.lua).
+    local pack_params
+    if run.full_list and d.pack then
+        pack_params = self:_packParams()
+        pack_params.deadline = os.time() + math.floor(d.time_limit / 2)
+        pack_params.caps = { stats = d.max_events, ann = d.ann and d.ann.max_records or d.max_ann_records,
+                             book = d.book and d.book.max_records or d.max_book_records }
+    end
+    -- Folders are skipped only once this server's folder dates are known
+    -- to follow changes (see netjob.lua).
+    local dates_known = self.status.folder_dates == "reliable"
+    local dates_ok = self.status.folder_dates ~= "unreliable"
     -- This device has sent files to the folder before: they must be there.
     local seen = d.store:seenSegments()
+    -- About to upload with no record of its own segments (a new device, or
+    -- its state database deleted): list everything first, so it doesn't
+    -- reuse a number.
+    if not next(seen[run.device_id] or {}) and (exp or (ann_params and ann_params.pending)
+            or (book_params and book_params.pending)) then
+        run.full_list = true
+    end
     local params = {
         stats = run.stats,
         expect_own = next(seen[run.device_id] or {}) ~= nil,
@@ -288,6 +320,10 @@ function Engine:_export(run)
         max_download_bytes = d.max_download_bytes,
         ann = ann_params,
         book = book_params,
+        pack = pack_params,
+        rewrite_meta = run.meta_key ~= nil and self.status.meta_key ~= run.meta_key,
+        folders = dates_known and self.status.folders or nil,
+        own_check = dates_ok and self.status.own_check or nil,
     }
     local result_path = run.result_path
     local makeTransport = d.makeTransport
@@ -399,9 +435,88 @@ function Engine:_collect(run)
         os.remove(run.book_packed_path)
     end
 
+    self:_packs(run, result)
+
     run.queue = result.downloads or {}
     run.qi = 1
     d.schedule(0, function() self:_step(run, "import") end)
+end
+
+--- This device's packs (status.packs: name -> { stream, first, last, t,
+-- done }) as the network step wants them: where the next pack starts, and
+-- which packs' segments may go. A pack is "held" while its own file, or a
+-- later pack it went into, is on the server.
+function Engine:_packParams()
+    local d = self.deps
+    local packs = self.status.packs or {}
+    local after, delete = {}, {}
+    for _, p in pairs(packs) do
+        if p.last > (after[p.stream] or 0) then after[p.stream] = p.last end
+    end
+    for name, p in pairs(packs) do
+        if not p.done and d.now() - p.t >= d.pack_grace then
+            local holders, current = { name }, name
+            for _ = 1, 64 do
+                local seq = NetJob.STREAMS[p.stream].seq(current)
+                local next_holder
+                for other, q in pairs(packs) do
+                    if q.stream == p.stream and seq and q.first <= seq and seq <= q.last then next_holder = other end
+                end
+                if not next_holder then break end
+                holders[#holders + 1] = next_holder
+                current = next_holder
+            end
+            delete[#delete + 1] = { stream = p.stream, name = name, first = p.first, last = p.last, holders = holders }
+        end
+    end
+    return { after = after, delete = delete }
+end
+
+--- What the network step did with packs and folder dates (folder dates are
+-- recorded in _finish, once the downloads are imported).
+function Engine:_packs(run, result)
+    local d = self.deps
+    local packs = self.status.packs or {}
+    for _, p in ipairs(result.packed or {}) do
+        packs[p.name] = { stream = p.stream, first = p.first, last = p.last, t = d.now() }
+        -- Its records are this device's own: nothing to import.
+        local ok, err = pcall(d.store.markSeen, d.store, run.device_id,
+            { { name = p.name, size = p.size, etag = p.etag, exact = true } }, d.now())
+        if not ok then self.log.warn("StatSync: recording pack", p.name, "failed:", err) end
+        self.log.info("StatSync: packed segments", p.first, "to", p.last, "into", p.name)
+    end
+    local deleted = 0
+    for name, n in pairs(result.deleted or {}) do deleted = deleted + n end
+    for name, left in pairs(result.left or {}) do
+        if packs[name] and left == 0 then packs[name].done = true end
+    end
+    -- Done ones can go after a while, but not the last of each stream:
+    -- it says where the next pack starts.
+    local last = {}
+    for name, p in pairs(packs) do
+        if not last[p.stream] or p.last > packs[last[p.stream]].last then last[p.stream] = name end
+    end
+    for name, p in pairs(packs) do
+        if p.done and d.now() - p.t > 4 * d.pack_grace and last[p.stream] ~= name then packs[name] = nil end
+    end
+    self.status.packs = next(packs) and packs or nil
+    run.packed = #(result.packed or {})
+    run.deleted_originals = deleted
+    if deleted > 0 then self.log.info("StatSync: deleted", deleted, "segments now in packs") end
+
+    -- This device's own folder must change date with its upload.
+    if result.ok then
+        local uploaded = (result.uploaded and result.uploaded.verified) or (result.ann_uploaded and result.ann_uploaded.verified)
+            or (result.book_uploaded and result.book_uploaded.verified)
+        self.status.own_check = uploaded and result.own_reliable and result.own_modified or nil
+    end
+    run.folders = result.folders
+    run.dates_unreliable = result.dates_unreliable
+    if result.dates_confirmed and not result.dates_unreliable and self.status.folder_dates == nil then
+        self.status.folder_dates = "reliable"
+        self.log.info("StatSync: this server's folder dates follow changes: unchanged folders are skipped")
+    end
+    if result.meta_written then self.status.meta_key = run.meta_key end
 end
 
 -- One segment per UI tick, so a big first import doesn't freeze the screen.
@@ -436,6 +551,7 @@ function Engine:_import(run)
     run.import_cpu = (run.import_cpu or 0) + (os.clock() - t0)
     os.remove(item.path)
     os.remove(plain)
+
     if summary and is_book then
         run.book_segments_imported = run.book_segments_imported + 1
         run.book_imported_records = run.book_imported_records + summary.records
@@ -498,6 +614,30 @@ function Engine:_finish(run)
         if not ok then self.log.warn("StatSync: forgetting the folder failed:", err) end
     end
     local st = self.status
+    if run.dates_unreliable then
+        if st.folder_dates ~= "unreliable" then
+            self.log.warn("StatSync: this server's folder dates don't follow changes: every folder is checked from now on")
+        end
+        st.folder_dates, st.folders, st.own_check = "unreliable", nil, nil
+    elseif run.folders and not run.error and st.folder_dates ~= "unreliable" then
+        -- Folders gone through completely, now that their segments are
+        -- imported: skipped while their date stays the same.
+        local folders = {}
+        for _, id in ipairs(run.result and run.result.devices or {}) do
+            local now, rec = run.folders[id], (st.folders or {})[id]
+            if now and now.reliable then
+                local streams = {}
+                if rec and rec.modified == now.modified then
+                    for k, v in pairs(rec.streams or {}) do streams[k] = v end
+                end
+                for k in pairs(now.complete or {}) do streams[k] = true end
+                if next(streams) then folders[id] = { modified = now.modified, streams = streams } end
+            elseif rec and now and rec.modified == now.modified then
+                folders[id] = rec
+            end
+        end
+        st.folders = next(folders) and folders or nil
+    end
     st.last_attempt = run.started
     st.last_error = run.error or run.upload_error or run.ann_upload_error or run.book_upload_error
     if run.full_listed then

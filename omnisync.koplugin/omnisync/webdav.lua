@@ -3,7 +3,8 @@ WebDAV transport for statsync.
 
 A transport is an object with:
 
-    list(path)               -> { {name=, is_dir=, size=, etag=}, … } | nil, err, code
+    list(path)               -> { {name=, is_dir=, size=, etag=, modified=}, …,
+                                  server_date = <the response's Date> } | nil, err, code
     stat(path)               -> { size=, etag= } | nil, err, code
     get(path, local_path)    -> true, { etag= } | nil, err, code
     put(path, local_path)    -> true | nil, err, code     (create or replace)
@@ -176,7 +177,7 @@ local function fail(code, what)
 end
 
 local PROPFIND_BODY = '<?xml version="1.0" encoding="utf-8"?>'
-    .. '<D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getcontentlength/><D:getetag/></D:prop></D:propfind>'
+    .. '<D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:getcontentlength/><D:getetag/><D:getlastmodified/></D:prop></D:propfind>'
 
 local function hrefPath(href)
     href = xmlUnescape(href)
@@ -192,6 +193,7 @@ local function parseMultistatus(body)
             local is_dir = item:find("<[%w]*:?collection[^>]*/>") or item:find("<[%w]*:?collection[^>]*>%s*</")
             local size = item:match("<[%w]*:?getcontentlength[^>]*>%s*(%d+)%s*<")
             local etag = item:match("<[%w]*:?getetag[^>]*>%s*(.-)%s*</")
+            local modified = item:match("<[%w]*:?getlastmodified[^>]*>%s*(.-)%s*</")
             local p = hrefPath(href)
             entries[#entries + 1] = {
                 path = p,
@@ -199,6 +201,7 @@ local function parseMultistatus(body)
                 is_dir = is_dir and true or false,
                 size = tonumber(size),
                 etag = etag and etag ~= "" and xmlUnescape(etag) or nil,
+                modified = modified ~= "" and modified or nil,
             }
         end
     end
@@ -212,13 +215,16 @@ function WebDav:propfind(path, is_dir, depth)
         headers = { ["Depth"] = depth, ["Content-Type"] = "application/xml; charset=utf-8" },
     }
     if code ~= 207 then return fail(code, headers_or_err) end
-    return parseMultistatus(body), hrefPath(url)
+    local entries = parseMultistatus(body)
+    -- The server's clock, to tell whether a folder's date can be relied on.
+    entries.server_date = type(headers_or_err) == "table" and (headers_or_err.date or headers_or_err.Date) or nil
+    return entries, hrefPath(url)
 end
 
 function WebDav:list(path)
     local all, self_path, code = self:propfind(path, true, "1")
     if not all then return nil, self_path, code end
-    local entries = {}
+    local entries = { server_date = all.server_date }
     for _, e in ipairs(all) do
         if e.path ~= self_path then entries[#entries + 1] = e end
     end

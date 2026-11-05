@@ -436,7 +436,8 @@ do
     r = NetJob.run({ device_id = "dev1", pending = { path = pending, size = 1 }, meta_path = meta, seen = seen, tmp_dir = tmp,
                      full_list = true,
                      bad = { dev2 = { ["seg-0000000002.jsonl.zst"] = { size = 99 } } } }, t)
-    check(r.uploaded and r.uploaded.name == "seg-0000000002.jsonl.zst", "upload takes the first unused number")
+    check(r.uploaded and r.uploaded.name == "seg-0000000002.jsonl.zst",
+        "upload takes the first free number above the highest this device used")
     check(t.files["devices/dev1/.upload-dead.part"] == nil, "leftover temporary upload deleted")
     local got = names(r)
     check(got["dev1/seg-0000000005.jsonl.zst"] == "old", "own unseen segment downloaded (restore from backup)")
@@ -453,20 +454,26 @@ do
     got = names(r)
     check(got["dev2/seg-0000000003.jsonl.zst"] == "three" and got["dev2/seg-0000000004.jsonl.zst"] == "four" and #r.downloads == 2,
         "probing downloads the next segments in order")
-    check(t.requests == 5 and not r.full_listed, "ordinary sync: 1 listing + 2 downloads + 1 miss per device (" .. t.requests .. " requests)")
+    check(t.requests == 6 and not r.full_listed,
+        "ordinary sync: 1 listing + 2 downloads + 1 miss per device, and 1 past dev1's gap (" .. t.requests .. " requests)")
     -- Nothing new: one listing plus one miss per device
     t.log, t.requests = {}, 0
     r = NetJob.run({ device_id = "dev1", meta_path = meta, tmp_dir = tmp,
                      seen = seenSet{ dev1 = { 1, 2, 5 }, dev2 = { 1, 2, 3, 4 } } }, t)
-    check(#r.downloads == 0 and t.requests == 3, "nothing new: 3 small requests")
+    check(#r.downloads == 0 and t.requests == 4, "nothing new: 4 small requests")
 
     -- Own record behind (restored), ordinary sync: name taken, so list and continue after the highest
     t.files["devices/dev1/seg-0000000003.jsonl.zst"] = "lost"
     r = NetJob.run({ device_id = "dev1", pending = { path = pending, size = 1 }, meta_path = meta, tmp_dir = tmp,
                      seen = seenSet{ dev1 = { 1, 2, 5 }, dev2 = { 1, 2, 3, 4 } } }, t)
-    check(r.uploaded and r.uploaded.name == "seg-0000000004.jsonl.zst" and t.files["devices/dev1/seg-0000000003.jsonl.zst"] == "lost",
-        "taken name: not overwritten, upload takes the next unused number")
+    check(r.uploaded and r.uploaded.name == "seg-0000000006.jsonl.zst" and t.files["devices/dev1/seg-0000000003.jsonl.zst"] == "lost",
+        "upload above the highest number this device used, not in a gap below it")
     check(names(r)["dev1/seg-0000000003.jsonl.zst"] == "lost" and #r.downloads == 1, "and the lost own segment is downloaded")
+    -- Own record further behind: the name is taken, so list and take the first free one above
+    r = NetJob.run({ device_id = "dev1", pending = { path = pending, size = 1 }, meta_path = meta, tmp_dir = tmp,
+                     seen = seenSet{ dev1 = { 1 }, dev2 = { 1, 2, 3, 4 } } }, t)
+    check(r.uploaded and r.uploaded.name == "seg-0000000004.jsonl.zst" and t.files["devices/dev1/seg-0000000003.jsonl.zst"] == "lost",
+        "taken name: not overwritten, the first free number above it taken")
     -- A stray number far ahead doesn't make readers skip the real next ones
     t.files["devices/dev2/seg-0000000900.jsonl.zst"] = "stray"
     t.files["devices/dev2/seg-0000000005.jsonl.zst"] = "five"
@@ -552,6 +559,342 @@ do
     check(e:request("e") == "started", "next request starts again")
     drain()
     check(runs == 3, "and runs once")
+end
+
+-- Packs ------------------------------------------------------------------------------------
+local Pack = require("omnisync/pack")
+local AnnFormat = require("omnisync/annformat")
+local AnnStore = require("omnisync/annstore")
+local BookFormat = require("omnisync/bookformat")
+local BookStore = require("omnisync/bookstore")
+local Zstd = require("omnisync/zstd")
+
+
+-- A pack leaves the database exactly as importing its segments does.
+local function writeLines(path, lines) S.writeFile(path, table.concat(lines, "\n") .. "\n") end
+local function buildPack(stream, paths, out)
+    local b = Pack.builder(stream)
+    for _, path in ipairs(paths) do b:add(assert(b:read(path))) end
+    assert(b:write(out, "dev1", 1700000000))
+    return b:count()
+end
+do
+    math.randomseed(7)
+    local md5s = { string.rep("a", 32), string.rep("b", 32), string.rep("c", 32) }
+    local titles = { "One", "Two — Ünïcødé", "Three" }
+    -- Statistics: the same readings again with other durations, book
+    -- records with other last-opened times and titles.
+    local paths = {}
+    for i = 1, 12 do
+        local books, events, used = {}, {}, {}
+        for _ = 1, 6 do
+            local m = math.random(#md5s)
+            if not used[m] then
+                used[m] = true
+                books[#books + 1] = Codec.bookLine{ md5 = md5s[m], title = titles[m] .. (math.random(3) == 1 and " (ed.)" or ""),
+                    authors = "A", series = "S" .. math.random(2), language = "en", pages = 100, last_open = 1000 + math.random(50) }
+            end
+            events[#events + 1] = Codec.eventLine(md5s[m], math.random(5), 2000 + math.random(10), math.random(60), 100 + math.random(2))
+        end
+        local lines = { Codec.headerLine("dev1", 1700000000 + i) }
+        for _, l in ipairs(books) do lines[#lines + 1] = l end
+        for _, l in ipairs(events) do lines[#lines + 1] = l end
+        lines[#lines + 1] = Codec.trailerLine(#books, #events)
+        paths[i] = TMP .. "/pk-seg-" .. i .. ".jsonl"
+        writeLines(paths[i], lines)
+    end
+    local X, Y = device("PackSeq"), device("PackOne")
+    for i, path in ipairs(paths) do assert(X.store:importSegment(path, "dev1", Codec.segmentName(i), nil, nil, 1)) end
+    local pack = TMP .. "/pk-stats.jsonl"
+    local n = buildPack("stats", paths, pack)
+    check(n < 12 * 6, "the pack keeps one of each reading: " .. n)
+    check(Codec.readSegment(pack), "the pack is a valid statistics file")
+    assert(Y.store:importSegment(pack, "dev1", Codec.segmentName(13), nil, nil, 1))
+    local function books(d)
+        local out = {}
+        local conn = S.SQ3.open(d.db)
+        for r in conn:prepare("SELECT md5, title, authors, series, language, pages, last_open FROM book ORDER BY md5, title;"):rows() do
+            out[#out + 1] = table.concat({ tostring(r[1]), tostring(r[2]), tostring(r[3]), tostring(r[4]),
+                tostring(r[5]), tostring(r[6]), tostring(r[7]) }, "|")
+        end
+        conn:close()
+        return table.concat(out, "\n")
+    end
+    check(X:dump() == Y:dump() and books(X) == books(Y) and X:totalsMatch() and Y:totalsMatch(),
+        "statistics: the pack gives the same readings, books and totals as its segments")
+
+    -- Annotations and book data: edits, deletions, ties.
+    local function lwwCase(stream, fmt, Store, record, table_sql)
+        local lpaths = {}
+        for i = 1, 10 do
+            local lines = { fmt.headerLine("dev1", 1700000000 + i) }
+            local seen_books, recs = {}, {}
+            for _ = 1, 5 do
+                local m = math.random(#md5s)
+                if not seen_books[m] then
+                    seen_books[m] = true
+                    lines[#lines + 1] = fmt.bookLine{ md5 = md5s[m], title = titles[m], authors = "A" }
+                end
+                recs[#recs + 1] = record(md5s[m])
+            end
+            local nb = #lines - 1
+            for _, l in ipairs(recs) do lines[#lines + 1] = l end
+            lines[#lines + 1] = fmt.trailerLine(nb, #recs)
+            lpaths[i] = TMP .. "/pk-" .. stream .. "-" .. i .. ".jsonl"
+            writeLines(lpaths[i], lines)
+        end
+        local s1 = Store.new{ sq3 = S.SQ3, state_path = TMP .. "/pk-" .. stream .. "-seq.sqlite3" }
+        local s2 = Store.new{ sq3 = S.SQ3, state_path = TMP .. "/pk-" .. stream .. "-one.sqlite3" }
+        for i, path in ipairs(lpaths) do assert(s1:importSegment(path, "dev1", "x" .. i, nil, nil, 1)) end
+        local pack = TMP .. "/pk-" .. stream .. ".jsonl"
+        local n = buildPack(stream, lpaths, pack)
+        check(fmt.readSegment(pack), stream .. ": the pack is a valid file")
+        assert(s2:importSegment(pack, "dev1", "pack", nil, nil, 1))
+        local function dump(store)
+            local conn = S.SQ3.open(store.state_path)
+            local out = {}
+            for r in conn:prepare(table_sql):rows() do
+                local row = {}
+                for i = 1, 8 do row[i] = tostring(r[i]) end
+                out[#out + 1] = table.concat(row, "|")
+            end
+            conn:close()
+            return table.concat(out, "\n")
+        end
+        check(n < 50 and dump(s1) == dump(s2), stream .. ": the pack (" .. n .. " records) gives the same merged state")
+    end
+    lwwCase("ann", AnnFormat, AnnStore, function(md5)
+        local fields = math.random(3) > 1 and Codec.encode{ page = "/body/p[" .. math.random(9) .. "]", text = "t" .. math.random(3),
+            datetime = "2026-01-01 00:00:00" } or nil
+        return AnnFormat.recordLine{ md5 = md5, kind = "rolling", key = "k" .. math.random(4), updated = 10 + math.random(3),
+            device = "d" .. math.random(2), fields_json = fields }
+    end, "SELECT md5, kind, key, updated, device, deleted, hash, fields FROM ann_merged ORDER BY md5, kind, key;")
+    lwwCase("book", BookFormat, BookStore, function(md5)
+        local props = { "status", "rating", "note" }
+        local values = { status = '"complete"', rating = tostring(math.random(5)), note = '"n' .. math.random(3) .. '"' }
+        local prop = props[math.random(3)]
+        return BookFormat.recordLine{ md5 = md5, prop = prop, updated = 10 + math.random(3), device = "d" .. math.random(2),
+            value_json = math.random(4) > 1 and values[prop] or nil }
+    end, "SELECT md5, prop, updated, device, deleted, hash, value, md5 FROM book_merged ORDER BY md5, prop;")
+end
+
+-- The network step: packing this device's segments.
+do
+    local tmp = TMP .. "/packjob"
+    S.mkdirp(tmp)
+    local meta = TMP .. "/pack-meta.json"
+    S.writeFile(meta, "{}")
+    local t = memTransport()
+    t.files["devices"] = true
+    t.files["devices/dev1"] = true
+    t.files["devices/dev2"] = true
+    local function seg(i)
+        local lines = { Codec.headerLine("dev1", 1700000000 + i),
+            Codec.bookLine{ md5 = string.rep("a", 32), title = "T", authors = "A", pages = 10, last_open = i },
+            Codec.eventLine(string.rep("a", 32), i % 7, 3000 + i, 30, 10), Codec.trailerLine(1, 1) }
+        return assert(Zstd.compress(table.concat(lines, "\n") .. "\n"))
+    end
+    for i = 1, 120 do t.files["devices/dev1/" .. Codec.segmentName(i)] = seg(i) end
+    local own_seen = {}
+    for i = 1, 120 do own_seen[Codec.segmentName(i)] = { size = 1 } end
+    local function run(pack, extra)
+        local params = { device_id = "dev1", meta_path = meta, seen = { dev1 = own_seen }, tmp_dir = tmp, full_list = true,
+                         pack = pack or {} }
+        params.pack.caps = params.pack.caps or { stats = 20000 }
+        for k, v in pairs(extra or {}) do params[k] = v end
+        return NetJob.run(params, t)
+    end
+    local PNAME = Codec.segmentName(121)
+
+    local r = run()
+    check(r.ok and #r.packed == 1 and r.packed[1].name == PNAME and r.packed[1].first == 1 and r.packed[1].last == 120,
+        "120 small segments packed into the next segment, " .. PNAME)
+    check(t.files["devices/dev1/" .. Codec.segmentName(1)] and t.files["devices/dev1/" .. Codec.segmentName(120)],
+        "the segments stay for now")
+    local plain = tmp .. "/check.jsonl"
+    S.writeFile(tmp .. "/check.zst", t.files["devices/dev1/" .. PNAME])
+    assert(Zstd.decompressFile(tmp .. "/check.zst", plain))
+    local h = Codec.readSegment(plain)
+    check(h and h.events == 120 and h.device == "dev1", "the pack, an ordinary segment, holds every segment's readings")
+    own_seen[PNAME] = { size = 1 }
+
+    -- Readers: nothing special. A reader that had segments 1 to 120 gets
+    -- the next one, the pack, as it would any segment.
+    local all = {}
+    for i = 1, 120 do all[Codec.segmentName(i)] = { size = 1 } end
+    r = NetJob.run({ device_id = "dev2", meta_path = meta, seen = { dev1 = all }, tmp_dir = tmp }, t)
+    check(#r.downloads == 1 and r.downloads[1].name == PNAME, "a reader that had them gets the pack by probing")
+
+    -- Not packed again; nothing deleted before its time.
+    r = run{ after = { stats = 120 } }
+    check(#r.packed == 0 and not next(r.deleted), "the next day: nothing new to pack, nothing deleted yet")
+    -- A week later: the segments go, if the pack (or a later one holding it) is there.
+    local entry = { stream = "stats", name = PNAME, first = 1, last = 120, holders = { PNAME } }
+    local missing = { stream = "stats", name = Codec.segmentName(999), first = 1, last = 120, holders = { Codec.segmentName(999) } }
+    r = run{ after = { stats = 120 }, delete = { missing } }
+    check(not next(r.deleted) and r.left[missing.name] == 120 and t.files["devices/dev1/" .. Codec.segmentName(1)],
+        "a pack that isn't there: its segments are kept")
+    r = run{ after = { stats = 120 }, delete = { entry } }
+    check(r.deleted[PNAME] == 120 and r.left[PNAME] == 0 and not t.files["devices/dev1/" .. Codec.segmentName(1)]
+        and not t.files["devices/dev1/" .. Codec.segmentName(120)] and t.files["devices/dev1/" .. PNAME],
+        "then deleted, the pack kept")
+
+    -- Numbers once used are never used again, though their segments are gone.
+    local pending = TMP .. "/pack-pending.zst"
+    S.writeFile(pending, "x")
+    r = run({ after = { stats = 120 } }, { pending = { path = pending, size = 1 } })
+    check(r.uploaded and r.uploaded.name == Codec.segmentName(122), "after a listing: the next upload is 122")
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, tmp_dir = tmp, pending = { path = pending, size = 1 },
+                     seen = { dev1 = { [PNAME] = { size = 1 } } } }, t)
+    check(r.uploaded and r.uploaded.name == Codec.segmentName(123),
+        "without a listing, knowing only the pack: past it, not 1 (got " .. tostring(r.uploaded and r.uploaded.name) .. ")")
+    -- A new reader, after the deletion: its first sync is a full listing.
+    r = NetJob.run({ device_id = "dev2", meta_path = meta, seen = {}, tmp_dir = tmp, full_list = true }, t)
+    local got = {}
+    for _, d in ipairs(r.downloads) do got[d.name] = true end
+    check(got[PNAME] and got[Codec.segmentName(122)] and got[Codec.segmentName(123)] and #r.downloads == 3,
+        "a new reader gets the pack and what came after")
+
+    -- Too few small segments: no pack. Big ones are left out.
+    local u = memTransport()
+    u.files["devices"] = true
+    u.files["devices/dev1"] = true
+    for i = 1, 99 do u.files["devices/dev1/" .. Codec.segmentName(i)] = seg(i) end
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, full_list = true,
+                     pack = { caps = { stats = 20000 } } }, u)
+    check(#r.packed == 0, "99 small segments: not packed yet")
+    u.files["devices/dev1/" .. Codec.segmentName(1)] = u.files["devices/dev1/" .. Codec.segmentName(1)] .. string.rep("x", Pack.SMALL)
+    for i = 100, 101 do u.files["devices/dev1/" .. Codec.segmentName(i)] = seg(i) end
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, full_list = true,
+                     pack = { caps = { stats = 20000 } } }, u)
+    check(#r.packed == 1 and r.packed[1].first == 2 and r.packed[1].last == 101 and r.packed[1].name == Codec.segmentName(102),
+        "a big first segment is left as it is")
+    -- The cap: a pack holds no more records than one import.
+    local v = memTransport()
+    v.files["devices"] = true
+    v.files["devices/dev1"] = true
+    for i = 1, 150 do v.files["devices/dev1/" .. Codec.segmentName(i)] = seg(i) end
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, full_list = true,
+                     pack = { caps = { stats = 110 } } }, v)
+    check(#r.packed == 1 and r.packed[1].last == 110 and r.packed[1].name == Codec.segmentName(151),
+        "packs stop at the cap: " .. tostring(r.packed[1] and r.packed[1].last))
+
+    -- A short run ended by a big segment never grows: packing goes on past it.
+    local w = memTransport()
+    w.files["devices"] = true
+    w.files["devices/dev1"] = true
+    for i = 1, 160 do w.files["devices/dev1/" .. Codec.segmentName(i)] = seg(i) end
+    w.files["devices/dev1/" .. Codec.segmentName(50)] = seg(50) .. string.rep("x", Pack.SMALL)
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, full_list = true,
+                     pack = { caps = { stats = 20000 } } }, w)
+    check(#r.packed == 1 and r.packed[1].first == 51 and r.packed[1].last == 160,
+        "49 small, a big one, then 110 small: the 110 are packed (got "
+        .. tostring(r.packed[1] and r.packed[1].first) .. "-" .. tostring(r.packed[1] and r.packed[1].last) .. ")")
+    -- And past a gap, the same.
+    w.files["devices/dev1/" .. Codec.segmentName(50)] = nil
+    w.files["devices/dev1/" .. Codec.segmentName(161)] = nil -- the pack just made
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, full_list = true,
+                     pack = { caps = { stats = 20000 } } }, w)
+    check(#r.packed == 1 and r.packed[1].first == 51 and r.packed[1].last == 160, "past a gap too")
+    -- The last run, still short, waits for more.
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, full_list = true,
+                     pack = { after = { stats = 160 }, caps = { stats = 20000 } } }, w)
+    check(#r.packed == 0, "after the pack, the run is short and the newest: no pack yet")
+
+    -- Busy segments: the cap is reached before 100 of them. The pack is
+    -- made anyway, and the next one starts where it ends.
+    local x = memTransport()
+    x.files["devices"] = true
+    x.files["devices/dev1"] = true
+    for i = 1, 120 do x.files["devices/dev1/" .. Codec.segmentName(i)] = seg(i) end
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, full_list = true,
+                     pack = { caps = { stats = 40 } } }, x)
+    check(#r.packed == 1 and r.packed[1].first == 1 and r.packed[1].last == 40,
+        "a full pack of 40 is made, though fewer than 100 (got " .. tostring(r.packed[1] and r.packed[1].last) .. ")")
+    -- 41 to 121 (the pack) is too short to look at yet; once 100 have built
+    -- up, the next 40 are packed.
+    local pack2 = { device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, full_list = true,
+                    pack = { after = { stats = 40 }, caps = { stats = 40 } } }
+    r = NetJob.run(pack2, x)
+    check(#r.packed == 0, "the rest waits for 100 to build up")
+    for i = 122, 140 do x.files["devices/dev1/" .. Codec.segmentName(i)] = seg(i) end
+    r = NetJob.run(pack2, x)
+    check(#r.packed == 1 and r.packed[1].first == 41 and r.packed[1].last == 80,
+        "then the next 40 (got " .. tostring(r.packed[1] and r.packed[1].first) .. "-"
+        .. tostring(r.packed[1] and r.packed[1].last) .. ")")
+end
+
+-- Folder dates: unchanged folders are skipped by ordinary syncs.
+do
+    check(NetJob.parseHttpDate("Thu, 05 Nov 2026 21:31:52 GMT") == 1793914312
+        and NetJob.parseHttpDate("Thu, 01 Jan 1970 00:00:10 GMT") == 10
+        and NetJob.parseHttpDate("Sun, 29 Feb 2032 12:00:00 GMT") == 1961668800
+        and NetJob.parseHttpDate("nonsense") == nil, "HTTP dates (GMT, leap years), nonsense refused")
+
+    local tmp = TMP .. "/dates"
+    S.mkdirp(tmp)
+    local meta = TMP .. "/dates-meta.json"
+    S.writeFile(meta, "{}")
+    local t = memTransport()
+    local dates = {}
+    local list = t.list
+    t.server_date = "Fri, 06 Nov 2026 10:00:00 GMT"
+    function t:list(path)
+        local out, e, c = list(self, path)
+        if out then
+            for _, x in ipairs(out) do if x.is_dir then x.modified = dates[path .. "/" .. x.name] end end
+            out.server_date = self.server_date
+        end
+        return out, e, c
+    end
+    t.files["devices"] = true
+    for _, id in ipairs({ "dev1", "dev2", "dev3" }) do
+        t.files["devices/" .. id] = true
+        dates["devices/" .. id] = "Fri, 06 Nov 2026 09:00:00 GMT"
+    end
+    t.files["devices/dev2/seg-0000000001.jsonl.zst"] = "a"
+    t.files["devices/dev3/seg-0000000001.jsonl.zst"] = "b"
+    local seen = { dev1 = { [Codec.segmentName(1)] = { size = 1 } }, dev2 = { [Codec.segmentName(1)] = { size = 1 } },
+                   dev3 = { [Codec.segmentName(1)] = { size = 1 } } }
+    local r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = seen, tmp_dir = tmp }, t)
+    check(r.folders.dev2 and r.folders.dev2.reliable and r.folders.dev2.complete.stats
+        and r.folders.dev2.modified == dates["devices/dev2"], "folders gone through, with their dates")
+    local folders = {}
+    for id, f in pairs(r.folders) do folders[id] = { modified = f.modified, streams = f.complete } end
+    t.log, t.requests = {}, 0
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = seen, tmp_dir = tmp, folders = folders }, t)
+    check(t.requests == 1 and #r.downloads == 0, "nothing changed: one listing, no request per device (" .. t.requests .. ")")
+    -- dev3 adds a segment: its folder's date changes.
+    t.files["devices/dev3/seg-0000000002.jsonl.zst"] = "c"
+    dates["devices/dev3"] = "Fri, 06 Nov 2026 09:30:00 GMT"
+    t.log, t.requests = {}, 0
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = seen, tmp_dir = tmp, folders = folders }, t)
+    check(#r.downloads == 1 and r.downloads[1].device == "dev3" and t.requests == 3,
+        "a changed folder is gone through, the rest skipped (" .. t.requests .. " requests)")
+    -- Annotations weren't gone through before: not skipped for them.
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = seen, tmp_dir = tmp, folders = folders, ann = {} }, t)
+    local probed = false
+    for _, line in ipairs(t.log) do if line:find("dev2/ann%-") then probed = true end end
+    check(probed, "a stream not gone through before is checked")
+    -- A date too close to the server's clock isn't relied on.
+    dates["devices/dev2"] = "Fri, 06 Nov 2026 09:59:59 GMT"
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = seen, tmp_dir = tmp }, t)
+    check(r.folders.dev2 and not r.folders.dev2.reliable and r.folders.dev3.reliable, "a date within a second or two isn't relied on")
+    -- Without seen segments (a rebuild), nothing is skipped.
+    t.log, t.requests = {}, 0
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = {}, tmp_dir = tmp, folders = folders }, t)
+    check(#r.downloads >= 2, "nothing seen: every folder gone through")
+
+    -- The dates can't be trusted: a full listing finds a segment in a
+    -- folder whose date didn't change.
+    t.files["devices/dev2/seg-0000000002.jsonl.zst"] = "d"
+    dates["devices/dev2"] = "Fri, 06 Nov 2026 09:00:00 GMT"
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = seen, tmp_dir = tmp, folders = folders, full_list = true }, t)
+    check(r.dates_unreliable and #r.downloads >= 1, "full listing: an unchanged date with something new: dates not trusted")
+    -- Or this device's own folder kept its date across an upload.
+    r = NetJob.run({ device_id = "dev1", meta_path = meta, seen = seen, tmp_dir = tmp, folders = folders,
+                     own_check = dates["devices/dev1"] }, t)
+    check(r.dates_unreliable and t.requests > 1, "own folder's date unchanged after an upload: dates not trusted, nothing skipped")
 end
 
 S.finish("omnisync unit tests")

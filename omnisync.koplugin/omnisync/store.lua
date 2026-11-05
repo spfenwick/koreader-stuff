@@ -266,6 +266,38 @@ function Store:markExported(path, device_id, name, size, etag, now)
     end)
 end
 
+--- Records segments as seen without importing them: a pack's (whose
+-- records are already here, or were just imported) and the segments it
+-- covers. items: { name, size, etag, exact }; with exact, the row is
+-- replaced (size and ETag known), otherwise only added if missing.
+function Store:markSeen(device_id, items, now)
+    local conn = self:openState()
+    return withConn(conn, function()
+        conn:exec("BEGIN;")
+        local ok, err = pcall(function()
+            local put = conn:prepare(INSERT_SEEN)
+            local add = conn:prepare([[
+                INSERT OR IGNORE INTO seen_segments (device_id, name, size, etag, imported_at, events)
+                VALUES (?, ?, NULL, NULL, ?, NULL);]])
+            for _, it in ipairs(items) do
+                if it.exact then
+                    put:reset():bind(device_id, it.name, it.size, it.etag, now, it.events or 0):step()
+                else
+                    add:reset():bind(device_id, it.name, now):step()
+                end
+            end
+            put:close()
+            add:close()
+        end)
+        if not ok then
+            rollback(conn)
+            error(err, 0)
+        end
+        conn:exec("COMMIT;")
+        return true
+    end)
+end
+
 --- { [device_id] = { [name] = { size=, etag= } } } of imported segments.
 function Store:seenSegments()
     local conn = self:openState()

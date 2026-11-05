@@ -464,5 +464,116 @@ C.store:forgetSeen()
 sync({ C })
 check(bookMerged(C) == bm and C.last_run.book_segments_imported > 0, "rebuild re-imports book data, same result")
 
+-- 10. Packs ---------------------------------------------------------------------------------------
+-- Packing needs only a few segments here, and deleting waits for nothing,
+-- so it all happens in this test.
+local Pack = require("omnisync/pack")
+Pack.MIN = 3
+for _, d in ipairs(devices) do d.engine.deps.pack_grace = 0 end
+local function fullListingNext(list)
+    for _, d in ipairs(list) do d.engine.status.last_full_list, d.engine.status.ann_last_full_list = 0, 0 end
+end
+local function onServer(id, name) return io.open(REMOTE .. "/devices/" .. id .. "/" .. name) ~= nil end
+-- A reads in short sessions, syncing after each: small segments.
+for i = 1, 5 do
+    readSome(A, BOOKS[1 + i % 6], 3)
+    sync({ A })
+end
+fullListingNext({ A })
+for _, d in ipairs(devices) do d.engine.deps.pack_grace = 3600 end -- not deleted yet
+sync({ A })
+local a_pack, a_info
+for name, p in pairs(A.engine.status.packs or {}) do
+    if p.stream == "stats" and (not a_info or p.last > a_info.last) then a_pack, a_info = name, p end
+end
+check(a_pack and A.last_run.packed >= 1 and onServer(A.id, a_pack), "A packed its small segments: " .. tostring(a_pack)
+    .. (a_info and (" (" .. a_info.first .. " to " .. a_info.last .. ")") or ""))
+check(a_info and Codec.segmentSeq(a_pack) > a_info.last and onServer(A.id, Codec.segmentName(a_info.last)),
+    "the pack is A's next segment; the packed segments are still there")
+
+-- Everyone gets the pack as A's next segment, and a new device too.
+local D = newSim("D")
+converge("after packing", { A, B, C, D })
+
+-- The packed segments go (at A's next full listing, the wait being over).
+for _, d in ipairs(devices) do d.engine.deps.pack_grace = 0 end
+fullListingNext({ A })
+sync({ A })
+local still = 0
+for n = a_info and a_info.first or 1, a_info and a_info.last or 0 do
+    if onServer(A.id, Codec.segmentName(n)) then still = still + 1 end
+end
+check(a_info and A.last_run.deleted_originals > 0 and still == 0 and onServer(A.id, a_pack),
+    "A deleted its packed segments, and kept the pack (" .. tostring(A.last_run.deleted_originals) .. " deleted)")
+
+-- New readings on A carry on after the pack's number, and reach everyone,
+-- including a device that joins after the deletion.
+readSome(A, BOOKS[2], 4)
+local E = newSim("E")
+converge("after deleting packed segments", devices)
+-- E never saw the deleted numbers: an ordinary sync carries on past them.
+readSome(A, BOOKS[3], 4)
+sync({ A })
+sync({ E })
+check(E:dump() == A:dump() and not E.last_run.full_listed, "an ordinary sync on E gets A's new readings past the gap")
+
+-- rclone keeps a folder's first date: devices notice and check every folder.
+check(A.engine.status.folder_dates == "unreliable", "rclone's folder dates found unreliable: "
+    .. tostring(A.engine.status.folder_dates))
+
+-- 11. Folder dates on a server that keeps them -------------------------------------------------
+-- Listings report each folder's real date (from the files rclone serves),
+-- as servers that keep folder dates do.
+local lfs = require("lfs")
+local real_list = WebDav.list
+local function httpDate(t) return os.date("!%a, %d %b %Y %H:%M:%S GMT", t) end
+WebDav.list = function(self, path)
+    local entries, e, c = real_list(self, path)
+    if entries then
+        entries.server_date = httpDate(os.time())
+        for _, x in ipairs(entries) do
+            if x.is_dir then
+                local attr = lfs.attributes(REMOTE .. "/" .. (path == "" and "" or path .. "/") .. x.name)
+                x.modified = attr and httpDate(attr.modification) or nil
+            end
+        end
+    end
+    return entries, e, c
+end
+for _, d in ipairs(devices) do
+    d.engine.status.folder_dates, d.engine.status.folders, d.engine.status.own_check = nil, nil, nil
+end
+-- Each device uploads, and at its next sync finds its own folder's date
+-- changed: the dates can be trusted. (Dates a second or two old aren't
+-- relied on, hence the waits.)
+for round = 1, 2 do
+    S.sleep(3)
+    for i, d in ipairs(devices) do readSome(d, BOOKS[1 + (i + round) % 6], 2) end
+    sync(devices)
+end
+local trusted = true
+for _, d in ipairs(devices) do
+    if d.engine.status.folder_dates ~= "reliable" then trusted = false end
+end
+check(trusted, "every device found the folder dates follow changes")
+converge("folder dates kept")
+S.sleep(3)
+sync(devices) -- folders gone through and recorded
+local quiet = true
+sync(devices)
+for _, d in ipairs(devices) do
+    if d.last_run.result.requests ~= 1 then
+        quiet = false
+        print("  " .. d.name .. ": " .. tostring(d.last_run.result.requests) .. " requests")
+    end
+end
+check(quiet, "nothing new: one request per sync, every folder skipped")
+-- A change in one folder is still found by everyone.
+readSome(B, BOOKS[4], 5)
+sync({ B })
+S.sleep(3)
+converge("changed folder found while the others are skipped")
+WebDav.list = real_list
+
 server.stop()
 S.finish("omnisync integration test")
