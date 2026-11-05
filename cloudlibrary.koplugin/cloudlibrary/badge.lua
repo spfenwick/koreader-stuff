@@ -6,7 +6,8 @@ Cover badges, in a white circle on the bottom-right corner of the cover:
 Drawn after the file browser (FileChooser) and book lists (BookList: search
 results, history, collections) paint, over whatever drew the items: stock
 CoverBrowser or ZenOS. The cover's position comes from the ImageWidget that
-drew it; items without a cover image get the badge on the item's corner.
+drew it. In KOReader's plain list (no CoverBrowser) the badge goes before
+the name: Badge.decorate gives those rows an indent to make room for it.
 ]]
 
 local Blitbuffer = require("ffi/blitbuffer")
@@ -81,6 +82,27 @@ local function eachItem(widget, fn, depth, seen)
     for _i, c in ipairs(widget) do eachItem(c, fn, depth + 1, seen) end
 end
 
+--- Plain list rows: the badge's size, and the room reserved before the name.
+function Badge.plainSize()
+    return Screen:scaleBySize(20), Screen:scaleBySize(28)
+end
+
+--- Makes room for the badge in a plain list row (other views ignore indent).
+function Badge.decorate(item)
+    if item.path and Badge.kind(item.path) then
+        local _size, slot = Badge.plainSize()
+        item.indent = slot
+    end
+end
+
+-- A plain list row (KOReader's MenuItem): where its text starts, once painted.
+local function plainText(item)
+    local u = item._underline_container
+    if type(u) == "table" and type(u.dimen) == "table" and u.dimen.x and u.dimen.h then
+        return u.dimen
+    end
+end
+
 --- Where the badge goes for a cover (or item) rectangle, and its size.
 function Badge.place(rect)
     local min_size, max_size = Screen:scaleBySize(14), Screen:scaleBySize(30)
@@ -101,7 +123,16 @@ function Badge.paintOn(menu, bb)
     eachItem(menu.item_group, function(item, path)
         local kind = Badge.kind(path)
         if not kind then return end
-        local rect = coverRect(item, 0, {}) or item.dimen
+        local cover = coverRect(item, 0, {})
+        local text = not cover and plainText(item)
+        if text then
+            -- Plain row: before the name, if the row made room for it.
+            if (item.entry.indent or 0) <= 0 then return end
+            local size = math.min(Badge.plainSize(), math.floor(text.h * 0.8))
+            badgeWidget(size, kind):paintTo(bb, text.x, text.y + math.floor((text.h - size) / 2))
+            return
+        end
+        local rect = cover or item.dimen
         if rect.w < 20 or rect.h < 20 then return end
         local x, y, size = Badge.place(rect)
         badgeWidget(size, kind):paintTo(bb, x, y)

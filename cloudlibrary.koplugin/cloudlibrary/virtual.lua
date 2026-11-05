@@ -280,9 +280,18 @@ function Virtual.showDetails(path)
 end
 
 --- A file browser item for a virtual book (as in the library folder).
+-- Optional: decorate(item) adjusts a listed item (the badge reserves room
+-- for itself in plain list rows).
+Virtual.decorate = nil
+
+local function decorate(item)
+    if Virtual.decorate and type(item) == "table" then Virtual.decorate(item) end
+    return item
+end
+
 function Virtual.listItem(fc, book, collate)
     local dir = book.path:match("^(.*)/[^/]*$")
-    return fc:getListItem(dir, book.filename, book.path, attributes(book), collate)
+    return decorate(fc:getListItem(dir, book.filename, book.path, attributes(book), collate))
 end
 
 local function installListing()
@@ -302,6 +311,7 @@ local function installListing()
                 end
             end
             if collate then
+                for _i, item in ipairs(files) do decorate(item) end
                 Timing.record("listing: add cloud books", Timing.since(t0), #Virtual.books .. " books")
             end
         end

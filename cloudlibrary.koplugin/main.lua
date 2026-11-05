@@ -45,7 +45,14 @@ function CloudLibrary:init()
     if first then
         Virtual.details = Library.bookDetails
         Virtual.install()
-        require("cloudlibrary/badge").install()
+        local Badge = require("cloudlibrary/badge")
+        Badge.install()
+        if Badge.installed then
+            local Guard = require("cloudlibrary/guard")
+            Virtual.decorate = function(item)
+                if Guard.ok("badge") then Guard.call("badge", Badge.decorate, item) end
+            end
+        end
         require("cloudlibrary/search").install(Virtual)
     end
     if self.ui.document then return end -- reader: menu only

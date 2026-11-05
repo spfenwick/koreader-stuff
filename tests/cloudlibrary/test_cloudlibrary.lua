@@ -823,6 +823,27 @@ do
     Badge.cloud_enabled = false
     Badge.paintOn(menu, bb)
     check(not changed(cx, cy, csize, csize), "cloud badge can be turned off")
+    Badge.cloud_enabled = true
+
+    -- Plain list rows (no cover): room is made before the name, and the
+    -- badge drawn there.
+    local item = { path = "/lib/cloud-x.epub" }
+    Badge.decorate(item)
+    local _size, slot = Badge.plainSize()
+    check(item.indent == slot, "plain row: room made for the cloud badge")
+    local other = { path = "/lib/local.epub" }
+    Badge.decorate(other)
+    check(other.indent == nil, "plain row: no room for a book without a badge")
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    local row = { entry = item, dimen = Geom:new{ x = 0, y = 220, w = 400, h = 60 },
+        _underline_container = { dimen = Geom:new{ x = 50, y = 220, w = 300, h = 60 } } }
+    Badge.paintOn({ item_group = { row } }, bb)
+    check(changed(50, 230, 40, 40), "plain row: badge drawn before the name")
+    check(not changed(300, 220, 100, 60), "plain row: nothing on the row's right")
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    item.indent = nil
+    Badge.paintOn({ item_group = { row } }, bb)
+    check(not changed(0, 220, 400, 60), "plain row without room: no badge")
     Badge.cloud_enabled, Badge.local_enabled = true, false
     Badge.isOnDevice, Badge.isCloud = nil, nil
     bb:free()
