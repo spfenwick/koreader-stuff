@@ -5,7 +5,9 @@ Cover badges, in a white circle on the bottom-right corner of the cover:
 
 Drawn after the file browser (FileChooser) and book lists (BookList: search
 results, history, collections) paint, over whatever drew the items: stock
-CoverBrowser or ZenOS. The cover's position comes from the ImageWidget that
+CoverBrowser or ZenOS. Also after any other Menu listing books by path:
+ZenOS's Authors and Series pages are Menus. Only the items on the page
+shown are looked at. The cover's position comes from the ImageWidget that
 drew it. In KOReader's plain list (no CoverBrowser) the badge goes before
 the name: Badge.decorate gives those rows an indent to make room for it.
 ]]
@@ -152,6 +154,14 @@ function Badge.install()
         orig(self, bb, x, y)
         Badge.paintOn(self, bb)
     end, "BookList:paintTo")
+    -- BookList now has its own paintTo, so its lists aren't badged twice.
+    local ok_menu, Menu = pcall(require, "ui/widget/menu")
+    if ok_menu and type(Menu) == "table" and Menu ~= cls and rawget(cls, "paintTo") then
+        Guard.hook("badge", Menu, "paintTo", function(orig, self, bb, x, y)
+            orig(self, bb, x, y)
+            Badge.paintOn(self, bb)
+        end, "Menu:paintTo")
+    end
 end
 
 return Badge
