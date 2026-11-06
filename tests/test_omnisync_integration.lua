@@ -330,7 +330,7 @@ readSome(A, BOOKS[4], 20); readSome(B, BOOKS[4], 20); readSome(C, BOOKS[5], 20)
 sync({ A, B, C }) -- all three at once
 converge("simultaneous syncs")
 
--- Rebuild from cloud gives the same data
+-- Rebuild from server gives the same data
 C.store:forgetSeen()
 local cdump = C:dump()
 sync({ C })
@@ -420,7 +420,7 @@ cb:close()
 check(not C.last_run.error, "and doesn't fail the sync")
 observe(A, { annItem(1), annItem(3), annItem(6) }) -- A's next one goes after the corrupt name
 annConverge("after a corrupt annotation segment", { A, B, C })
--- Rebuild from cloud: same merged state again
+-- Rebuild from server: same merged state again
 local cmerged = annMerged(C)
 C.store:forgetSeen()
 sync({ C })
@@ -472,7 +472,7 @@ local cbb = S.SQ3.open(C.state)
 check(tonumber(cbb:rowexec("SELECT count(*) FROM bad_segments WHERE name LIKE 'book-%'")) == 1, "corrupt book segment recorded as bad")
 cbb:close()
 check(not C.last_run.error, "and doesn't fail the sync")
--- Rebuild from cloud
+-- Rebuild from server
 C.store:forgetSeen()
 sync({ C })
 check(bookMerged(C) == bm and C.last_run.book_segments_imported > 0, "rebuild re-imports book data, same result")
@@ -535,7 +535,7 @@ local cib = S.SQ3.open(C.state)
 check(tonumber(cib:rowexec("SELECT count(*) FROM bad_segments WHERE name LIKE 'id-%'")) == 1, "corrupt identity segment recorded as bad")
 cib:close()
 check(not C.last_run.error, "and doesn't fail the sync")
--- Rebuild from cloud
+-- Rebuild from server
 C.store:forgetSeen()
 sync({ C })
 check(idFacts(C) == idf and C.last_run.id_segments_imported > 0, "rebuild re-imports book identity, same result")

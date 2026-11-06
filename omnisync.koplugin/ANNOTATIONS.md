@@ -211,7 +211,7 @@ ann_outbox(md5, kind, key, updated)    -- changes waiting to be sent
   nothing is echoed back.
 - Segments imported are recorded in the statistics' `seen_segments` and
   `bad_segments` (the `ann-` names can't clash with `seg-`; bad ones carry
-  the annotation format's version), so "Rebuild from cloud" and a change of
+  the annotation format's version), so "Rebuild from server" and a change of
   server or folder cover both streams. A change of server or folder also
   queues the whole merged state again, as the statistics are all sent
   again.
@@ -358,7 +358,7 @@ flush stats → detect open book's annotation changes
   (`auto_stats`, `auto_annotations` in the shared settings; on unless
   false). Changes are always recorded on close and applied on open, so a
   sync by hand finds them whether or not automatic sync is on.
-- "Rebuild from cloud" re-imports both streams. A changed server or folder
+- "Rebuild from server" re-imports both streams. A changed server or folder
   resets both streams' records.
 
 ### Initial scan

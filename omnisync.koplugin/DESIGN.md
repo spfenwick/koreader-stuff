@@ -211,7 +211,7 @@ identity in IDENTITY.md.
 - **Download budget:** 32 MB per cycle; the next cycle continues.
 - **Offline:** `NetworkMgr:isConnected()` (cheap; `isOnline()` does a DNS
   lookup on the UI thread). Automatic syncs skip when offline unless
-  "Turn on Wi-Fi to sync" is on, which uses `NetworkMgr:runWhenConnected`.
+  "Turn on Wi-Fi for automatic syncs" is on, which uses `NetworkMgr:runWhenConnected`.
   **Assumption:** "Sync now" always uses `runWhenConnected`, i.e. follows
   KOReader's own "action when Wi-Fi is off" setting, like other network
   actions the user starts.

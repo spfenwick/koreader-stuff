@@ -38,29 +38,31 @@ It was called SuperSync, and takes over SuperSync's data on each device
 
 Tools → OmniSync, in both the file browser and the reader:
 
-- **Sync settings**, and **Preview settings sync** (what would change).
-- **Sync statistics**.
-- **Sync highlights and bookmarks**.
-- **Sync statistics automatically**: on unless you turn it off.
-- **Sync highlights and bookmarks automatically**: on unless you turn it off.
-- **Turn on Wi-Fi to sync**: for automatic syncs (off by default).
+- **Sync now**: statistics, highlights, bookmarks and book status.
+- **Removed highlights waiting for you** (only while there are some):
+  highlights and bookmarks removed in bulk on this device, waiting for you
+  to say whether to remove them everywhere.
 - **Discard pulled settings waiting for a restart** (only while there are
   some; see [SETTINGS.md](SETTINGS.md#moving-to-another-server)).
-- **Removed highlights waiting for you**: highlights and bookmarks removed
-  in bulk on this device, waiting for you to say whether to remove them
-  everywhere.
+- **Settings** → **Sync now**, **Preview changes** (what would change),
+  **Log**.
+- **Statistics** → **Sync now**, **Sync automatically** (on unless you turn
+  it off).
+- **Highlights and books** → **Sync now**, **Sync automatically** (on unless
+  you turn it off). Highlights, notes and bookmarks, with book status,
+  rating, review, metadata and the handmade table of contents.
 - **Server** and **Folder on server**.
+- **Turn on Wi-Fi for automatic syncs** (off by default).
 - **Status**: server and folders, last syncs and errors, devices seen, books known in more than one version,
   what was sent and received, this device's ID.
-- **Show last settings sync log**.
-- **Rebuild statistics and highlights from cloud**: imports every device's
-  files again. Nothing is deleted.
-- **Reset device ID**: for a device restored from a backup of another one.
+- **Troubleshooting** → **Rebuild from server** (imports every device's
+  files again; nothing is deleted), **Reset device ID** (for a device
+  restored from a backup of another one).
 - **Check for updates** and **Automatic updates** (see Updates).
 
-Each of the three syncs is also a gesture (General → "OmniSync: sync
-settings", "OmniSync: sync statistics", "OmniSync: sync highlights and
-bookmarks").
+The syncs are also gestures (General → "OmniSync: sync statistics and
+highlights", "OmniSync: sync settings", "OmniSync: sync statistics",
+"OmniSync: sync highlights and bookmarks").
 
 ## When it syncs
 
@@ -70,8 +72,8 @@ KOReader).
 Statistics and highlights sync automatically (each unless turned off): when
 a book is closed, on wake-up, when the network connects, and 20 seconds
 after KOReader starts. Without a network connection an automatic sync is
-skipped; nothing is queued, the next sync catches up. "Turn on Wi-Fi to
-sync" makes automatic syncs turn Wi-Fi on the way KOReader's network
+skipped; nothing is queued, the next sync catches up. "Turn on Wi-Fi for
+automatic syncs" makes automatic syncs turn Wi-Fi on the way KOReader's network
 settings say. A sync by hand asks to turn on Wi-Fi if needed, and shows the
 outcome.
 
@@ -130,7 +132,7 @@ In KOReader's `settings/omnisync/` folder:
 
 - `settings.lua`: the settings that are the same on every device:
   server's name (no password: that stays in Cloud storage's
-  `cloudstorage.lua`), folder, the automatic syncs, "Turn on Wi-Fi to sync",
+  `cloudstorage.lua`), folder, the automatic syncs, "Turn on Wi-Fi for automatic syncs",
   and `time_limit` (seconds before the network step of a statistics sync is
   stopped, default 180; not in the menu). **Fine to sync**: add
   `/settings/omnisync/settings.lua` to `sync.txt`. A synced change takes effect

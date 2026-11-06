@@ -115,6 +115,10 @@ local OmniSync = WidgetContainer:extend{
 local started -- once per KOReader process
 
 function OmniSync:onDispatcherRegisterActions()
+    Dispatcher:registerAction("omnisync_sync", {
+        category = "none", event = "OmniSyncNow", general = true,
+        title = _("OmniSync: sync statistics and highlights"),
+    })
     Dispatcher:registerAction("omnisync_settings", {
         category = "none", event = "OmniSyncSettings", general = true,
         title = _("OmniSync: sync settings"),
@@ -291,6 +295,11 @@ end
 
 function OmniSync:onResume() self.trigger("resume") end
 function OmniSync:onNetworkConnected() self.trigger("network") end
+
+function OmniSync:onOmniSyncNow()
+    self.trigger("manual", { stats = true, ann = true }, true)
+    return true
+end
 
 function OmniSync:onOmniSyncStatistics()
     self.trigger("manual", { stats = true }, true)
@@ -554,89 +563,123 @@ local function toggle(key)
     Plugin.saveSettings()
 end
 
+local function heldCount()
+    local ok, n = pcall(function() return #Plugin.annStore():held() end)
+    return ok and n or 0
+end
+
+function OmniSync:showSettingsLog(p)
+    local file = io.open(p.log, "r")
+    local log = file and file:read("*a")
+    if file then file:close() end
+    local apply = io.open(p.apply_log, "r")
+    if apply then
+        log = (log or "") .. "\n" .. apply:read("*a")
+        apply:close()
+    end
+    self:showLog(_("Settings sync log"), log or _("No settings sync has run yet."))
+end
+
 function OmniSync:menuItems()
     local p = settingsPaths()
     local items = {
         {
-            text = _("Sync settings"),
+            text = _("Sync now"),
+            help_text = _([[Sync statistics, highlights, bookmarks and book status. Settings are synced on their own, in Settings.]]),
+            keep_menu_open = true,
+            callback = function() self.trigger("manual", { stats = true, ann = true }, true) end,
+        },
+    }
+    -- Only when there's something to decide.
+    local held = heldCount()
+    if held > 0 then
+        table.insert(items, {
+            text = T(_("Removed highlights waiting for you: %1"), held),
+            help_text = _([[When many highlights and bookmarks of a book disappear at once (for example, its settings were reset), they're not removed on the other devices until you decide.]]),
+            callback = function(touchmenu_instance)
+                if touchmenu_instance then touchmenu_instance:closeMenu() end
+                Plugin.annSync():askHeld()
+            end,
+        })
+    end
+    if SettingsEngine.isPending(p) then
+        table.insert(items, {
+            text = _("Discard pulled settings waiting for a restart"),
+            callback = function(touchmenu_instance)
+                SettingsEngine.discardPending(p)
+                notify(_("Discarded. The next settings sync sends this device's settings."))
+                if touchmenu_instance then touchmenu_instance:closeMenu() end
+            end,
+        })
+    end
+    items[#items].separator = true
+
+    local more = {
+        {
+            text = _("Settings"),
             help_text = _([[Settings, plugins, patches, dictionaries, fonts and anything else in KOReader's folder that settings/omnisync/sync.txt lists. Pulled settings are put in place at the next start.]]),
-            callback = function(touchmenu_instance)
-                if touchmenu_instance then touchmenu_instance:closeMenu() end
-                self:syncSettings()
-            end,
+            sub_item_table = {
+                {
+                    text = _("Sync now"),
+                    callback = function(touchmenu_instance)
+                        if touchmenu_instance then touchmenu_instance:closeMenu() end
+                        self:syncSettings()
+                    end,
+                },
+                {
+                    text = _("Preview changes"),
+                    help_text = _("Shows what a sync would change, without changing anything."),
+                    callback = function(touchmenu_instance)
+                        if touchmenu_instance then touchmenu_instance:closeMenu() end
+                        self:syncSettings(true)
+                    end,
+                },
+                {
+                    text = _("Log"),
+                    help_text = _("The last settings sync, and putting pulled settings in place."),
+                    keep_menu_open = true,
+                    callback = function() self:showSettingsLog(p) end,
+                },
+            },
         },
         {
-            text = _("Preview settings sync (what would change)"),
-            callback = function(touchmenu_instance)
-                if touchmenu_instance then touchmenu_instance:closeMenu() end
-                self:syncSettings(true)
-            end,
+            text = _("Statistics"),
+            sub_item_table = {
+                {
+                    text = _("Sync now"),
+                    keep_menu_open = true,
+                    callback = function() self.trigger("manual", { stats = true }, true) end,
+                },
+                {
+                    text = _("Sync automatically"),
+                    help_text = _([[Sync reading statistics when a book is closed, on wake-up, when the network connects and when KOReader starts. Without a network connection, the sync is skipped; the next one catches up.]]),
+                    checked_func = Plugin.autoStats,
+                    callback = function() toggle("auto_stats") end,
+                },
+            },
         },
         {
-            text = _("Sync statistics"),
-            keep_menu_open = true,
-            callback = function() self.trigger("manual", { stats = true }, true) end,
-        },
-        {
-            text = _("Sync highlights and bookmarks"),
-            keep_menu_open = true,
-            callback = function() self.trigger("manual", { ann = true }, true) end,
-            separator = true,
-        },
-        {
-            text = _("Sync statistics automatically"),
-            help_text = _([[Sync reading statistics when a book is closed, on wake-up, when the network connects and when KOReader starts. Without a network connection, the sync is skipped; the next one catches up.]]),
-            checked_func = Plugin.autoStats,
-            callback = function() toggle("auto_stats") end,
-        },
-        {
-            text = _("Sync highlights and bookmarks automatically"),
-            help_text = _([[Sync highlights, notes and page bookmarks at the same times, for books with the same file on each device. Changes from other devices are written into books right after a sync, including books that aren't open (if they've been opened on this device before).
+            text = _("Highlights and books"),
+            help_text = _([[Highlights, notes and page bookmarks, with book status (reading, on hold, finished), rating, review, custom metadata (title, authors, series…), the handmade table of contents and hidden flows.]]),
+            sub_item_table = {
+                {
+                    text = _("Sync now"),
+                    keep_menu_open = true,
+                    callback = function() self.trigger("manual", { ann = true }, true) end,
+                },
+                {
+                    text = _("Sync automatically"),
+                    help_text = _([[Sync highlights, notes and page bookmarks at the same times as statistics, for books with the same file on each device. Changes from other devices are written into books right after a sync, including books that aren't open (if they've been opened on this device before).
 
 Book status (reading, on hold, finished), rating, review, custom metadata (title, authors, series…) and the handmade table of contents and hidden flows are synced with them. Status, rating, review and metadata are written into books that aren't open too; the table of contents waits until the book is opened.
 
 Notes and reviews are stored on the server as plain text.
 
 Turn off KOReader's "Export annotations on book closing" (in the reader's Bookmarks settings): the import that goes with it deletes highlights that aren't in the exported file.]]),
-            checked_func = Plugin.autoAnnotations,
-            callback = function() toggle("auto_annotations") end,
-        },
-        {
-            text = _("Turn on Wi-Fi to sync"),
-            help_text = _([[When off (the default), automatic syncs are skipped while offline. When on, they turn on Wi-Fi as set in KOReader's network settings.]]),
-            checked_func = function() return Plugin.settings().allow_wifi end,
-            callback = function()
-                local s = Plugin.settings()
-                s.allow_wifi = not s.allow_wifi
-                Plugin.saveSettings()
-            end,
-            separator = true,
-        },
-    }
-    if SettingsEngine.isPending(p) then
-        table.insert(items, {
-            text = _("Discard pulled settings waiting for a restart"),
-            keep_menu_open = true,
-            callback = function(touchmenu_instance)
-                SettingsEngine.discardPending(p)
-                notify(_("Discarded. The next settings sync sends this device's settings."))
-                if touchmenu_instance then touchmenu_instance:updateItems() end
-            end,
-        })
-    end
-    local more = {
-        {
-            text_func = function()
-                local ok, n = pcall(function() return #Plugin.annStore():held() end)
-                return T(_("Removed highlights waiting for you: %1"), ok and n or "?")
-            end,
-            help_text = _([[When many highlights and bookmarks of a book disappear at once (for example, its settings were reset), they're not removed on the other devices until you decide.]]),
-            enabled_func = function()
-                local ok, n = pcall(function() return #Plugin.annStore():held() end)
-                return ok and n > 0
-            end,
-            keep_menu_open = true,
-            callback = function() Plugin.annSync():askHeld() end,
+                    checked_func = Plugin.autoAnnotations,
+                    callback = function() toggle("auto_annotations") end,
+                },
+            },
             separator = true,
         },
         {
@@ -646,9 +689,19 @@ Turn off KOReader's "Export annotations on book closing" (in the reader's Bookma
         },
         {
             text_func = function() return T(_("Folder on server: %1"), Plugin.root()) end,
-            help_text = _([[Settings are synced in its Settings folder, statistics and highlights in its Statistics folder. Use the same server and folder on every device.]]),
+            help_text = _([[Settings are synced in its Files folder, statistics and highlights in its Statistics folder. Use the same server and folder on every device.]]),
             keep_menu_open = true,
             callback = function(touchmenu_instance) self:editRoot(touchmenu_instance) end,
+        },
+        {
+            text = _("Turn on Wi-Fi for automatic syncs"),
+            help_text = _([[When off (the default), automatic syncs are skipped while offline. When on, they turn on Wi-Fi as set in KOReader's network settings. Syncs from the menu always offer to connect.]]),
+            checked_func = function() return Plugin.settings().allow_wifi end,
+            callback = function()
+                local s = Plugin.settings()
+                s.allow_wifi = not s.allow_wifi
+                Plugin.saveSettings()
+            end,
             separator = true,
         },
         {
@@ -657,46 +710,38 @@ Turn off KOReader's "Export annotations on book closing" (in the reader's Bookma
             callback = function() self:showStatus() end,
         },
         {
-            text = _("Show last settings sync log"),
-            callback = function()
-                local file = io.open(p.log, "r")
-                local log = file and file:read("*a")
-                if file then file:close() end
-                local apply = io.open(p.apply_log, "r")
-                if apply then
-                    log = (log or "") .. "\n" .. apply:read("*a")
-                    apply:close()
-                end
-                self:showLog(_("Settings sync log"), log or _("No settings sync has run yet."))
-            end,
-        },
-        {
-            text = _("Rebuild statistics and highlights from cloud"),
-            keep_menu_open = true,
-            callback = function()
-                UIManager:show(ConfirmBox:new{
-                    text = _("Download and merge every device's statistics and highlights again?\n\nNothing is deleted. Use this if statistics are missing on this device."),
-                    ok_text = _("Rebuild"),
-                    ok_callback = function()
-                        Plugin.rebuild()
-                        self.trigger("rebuild", { stats = true, ann = true }, true)
+            text = _("Troubleshooting"),
+            sub_item_table = {
+                {
+                    text = _("Rebuild from server"),
+                    help_text = _("Downloads and merges every device's statistics and highlights again. Nothing is deleted."),
+                    keep_menu_open = true,
+                    callback = function()
+                        UIManager:show(ConfirmBox:new{
+                            text = _("Download and merge every device's statistics and highlights again?\n\nNothing is deleted. Use this if statistics are missing on this device."),
+                            ok_text = _("Rebuild"),
+                            ok_callback = function()
+                                Plugin.rebuild()
+                                self.trigger("rebuild", { stats = true, ann = true }, true)
+                            end,
+                        })
                     end,
-                })
-            end,
-        },
-        {
-            text = _("Reset device ID"),
-            keep_menu_open = true,
-            callback = function()
-                UIManager:show(ConfirmBox:new{
-                    text = _("Give this device a new ID?\n\nDo this on a device restored from a backup of another device, or copied from one, so the two don't share an ID."),
-                    ok_text = _("Reset"),
-                    ok_callback = function()
-                        local id = Plugin.resetDeviceId()
-                        notify(T(_("New device ID: %1"), id))
+                },
+                {
+                    text = _("Reset device ID"),
+                    keep_menu_open = true,
+                    callback = function()
+                        UIManager:show(ConfirmBox:new{
+                            text = _("Give this device a new ID?\n\nDo this on a device restored from a backup of another device, or copied from one, so the two don't share an ID."),
+                            ok_text = _("Reset"),
+                            ok_callback = function()
+                                local id = Plugin.resetDeviceId()
+                                notify(T(_("New device ID: %1"), id))
+                            end,
+                        })
                     end,
-                })
-            end,
+                },
+            },
             separator = true,
         },
     }
