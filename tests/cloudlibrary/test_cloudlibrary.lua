@@ -455,12 +455,20 @@ do
         { id = "00000000-0000-4000-8000-000000000004", title = "Twin", authors = { "One" } },
         { id = "00000000-0000-4000-8000-000000000005", title = "Twin", authors = { "Two" } },
         { id = "00000000-0000-4000-8000-000000000006", title = "Not Here", authors = { "Nobody" } },
+        { id = "333d496c-3946-448d-bb64-de3905aaaf83", title = "Rewritten", authors = { "Nagel" } },
     }
     -- 1: by UUID, though the EPUB's title differs.
     writeEpub(folder .. "/renamed.epub", [[
 <dc:identifier opf:scheme="calibre" id="calibre_id">7</dc:identifier>
 <dc:identifier opf:scheme="uuid" id="uuid_id">aaaaaaaa-0000-4000-8000-000000000001</dc:identifier>
 <dc:title>Something Else</dc:title><dc:creator>X</dc:creator>]])
+    -- 7: by UUID as Calibre 9 writes it ("uuid:..."), next to the package's
+    -- own UUID; the EPUB's title differs.
+    writeEpub(folder .. "/calibre9.epub", [[
+<dc:identifier>calibre:4644</dc:identifier>
+<dc:identifier>uuid:333D496C-3946-448D-BB64-DE3905AAAF83</dc:identifier>
+<dc:identifier id="uuid_id">uuid:dd15c660-aec5-41ff-af25-8a01b8b592eb</dc:identifier>
+<dc:title>Edited Elsewhere</dc:title><dc:creator>X</dc:creator>]])
     -- 2: KOReader's OPDS file name, several authors, punctuation changed.
     local f = io.open(folder .. "/John Roe, Ann Poe - Second_ A Story.pdf", "w"); f:write("x"); f:close()
     -- 3: EPUB without UUID: title and author.
@@ -475,10 +483,11 @@ do
     f = io.open(folder .. "/.hidden.epub", "w"); f:write("x"); f:close()
 
     local store = Store.open(TMP .. "/db/m.sqlite3", false)
-    eq(Matcher.scan(folder, store), 6, "scan reads every book file")
+    eq(Matcher.scan(folder, store), 7, "scan reads every book file")
     eq(Matcher.scan(folder, store), 0, "unchanged files aren't read again")
     local matched, unmatched = Matcher.match(folder, store:localFiles(), catalog)
     eq(matched[catalog[1].id], folder .. "/renamed.epub", "matched by UUID")
+    eq(matched[catalog[7].id], folder .. "/calibre9.epub", "matched by uuid:-prefixed UUID")
     eq(matched[catalog[2].id], folder .. "/John Roe, Ann Poe - Second_ A Story.pdf", "matched by file name")
     eq(matched[catalog[3].id], folder .. "/u.epub", "matched by EPUB title and author")
     eq(matched[catalog[5].id], folder .. "/Two - Twin.cbz", "same title, right author")
@@ -533,6 +542,16 @@ do
     eq(store3:listing()[1].cover_failed, nil, "old failure marks cleared")
     eq(store3:count(), 1, "books kept")
     store3:close()
+
+    -- 3 -> 4 reads every file again (UUIDs written "uuid:..." were missed).
+    local conn3 = SQ3.open(path)
+    conn3:exec([[INSERT INTO local_files (path, mtime, size, uuids) VALUES ('/x.epub', 1, 2, NULL);
+        PRAGMA user_version=3;]])
+    conn3:close()
+    local store4 = Store.open(path, false)
+    eq(next(store4:localFiles()), nil, "scanned files forgotten")
+    eq(store4:count(), 1, "books kept")
+    store4:close()
 end
 
 -- Covers ------------------------------------------------------------------------------

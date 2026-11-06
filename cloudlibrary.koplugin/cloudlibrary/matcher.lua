@@ -61,7 +61,8 @@ local function readEpub(path)
     if not opf then return nil end
     local info = { uuids = {}, authors = {} }
     for value in opf:gmatch("<dc:identifier[^>]*>%s*([^<]-)%s*</dc:identifier>") do
-        value = Feed.unescape(value):gsub("^urn:uuid:", ""):lower()
+        -- Calibre 6 writes the bare UUID, Calibre 9 "uuid:...", others "urn:uuid:...".
+        value = Feed.unescape(value):lower():gsub("^urn:", ""):gsub("^uuid:", "")
         if value:match(UUID) then table.insert(info.uuids, value) end
     end
     info.title = opf:match("<dc:title[^>]*>%s*([^<]-)%s*</dc:title>")

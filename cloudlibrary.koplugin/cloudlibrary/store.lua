@@ -12,7 +12,7 @@ does. formats is "type\tsize\thref" lines.
 local SQ3 = require("lua-ljsqlite3/init")
 local logger = require("logger")
 
-local SCHEMA_VERSION = 3
+local SCHEMA_VERSION = 4
 
 local SCHEMA = [[
 CREATE TABLE IF NOT EXISTS books (
@@ -91,6 +91,11 @@ function Store.open(path, wal)
         -- 2 -> 3: version 2 also marked covers as failed when the network
         -- was lost; forget those marks.
         conn:exec("UPDATE books SET cover_failed = NULL;")
+    end
+    if version >= 1 and version <= 3 then
+        -- 3 -> 4: the matcher missed UUIDs written "uuid:..." (newer
+        -- Calibre); read every file again.
+        conn:exec("DELETE FROM local_files;")
     elseif version ~= 0 and version ~= SCHEMA_VERSION then
         -- A cache: start again rather than migrate.
         logger.info("CloudLibrary: catalog schema", version, "-> rebuilding")
