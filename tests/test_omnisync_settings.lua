@@ -919,20 +919,28 @@ check(#notified == 0, "nothing more to report")
 
 local menu_items = {}
 plugin:addToMainMenu(menu_items)
-local function item(text)
-    for _, it in ipairs(menu_items.omnisync.sub_item_table_func()) do
-        local t = it.text or (it.text_func and it.text_func())
-        if t and t:find(text, 1, true) then return it end
+-- item("Folder on server") at the top; item("Statistics", "Sync now") in a submenu.
+local function item(...)
+    local path = { ... }
+    local list = menu_items.omnisync.sub_item_table_func()
+    for i, text in ipairs(path) do
+        local found
+        for _, it in ipairs(list) do
+            local t = it.text or (it.text_func and it.text_func())
+            if t and t:find(text, 1, true) then found = it break end
+        end
+        if not found or i == #path then return found end
+        list = found.sub_item_table or found.sub_item_table_func()
     end
 end
-check(item("Sync settings") and item("Sync statistics") and item("Sync highlights and bookmarks")
-    and item("Preview settings sync"), "a sync item each for settings, statistics and highlights")
-check(item("Sync statistics automatically").checked_func() and item("Sync highlights and bookmarks automatically").checked_func(),
+check(item("Settings", "Sync now") and item("Statistics", "Sync now") and item("Highlights and books", "Sync now")
+    and item("Settings", "Preview changes"), "a sync item each for settings, statistics and highlights")
+check(item("Statistics", "Sync automatically").checked_func() and item("Highlights and books", "Sync automatically").checked_func(),
     "automatic syncs shown on")
-item("Sync statistics automatically").callback()
+item("Statistics", "Sync automatically").callback()
 check(Settings.settings().auto_stats == false and not Settings.autoStats() and Settings.autoAnnotations(),
     "statistics' automatic sync turned off alone")
-item("Sync statistics automatically").callback()
+item("Statistics", "Sync automatically").callback()
 check(Settings.autoStats(), "and on again")
 check(item("Folder on server: /KOReader"), "folder shown")
 check(Settings.settingsRoot() == "/KOReader/Files", "settings in <folder>/Files")

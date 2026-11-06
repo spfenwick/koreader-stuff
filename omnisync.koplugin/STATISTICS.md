@@ -119,7 +119,7 @@ This version never deletes anything anywhere:
 
 - Statistics you delete on one device (Reading statistics → Reset
   statistics) are **not** deleted on the others.
-- They also stay deleted on this device until you use "Rebuild from cloud"
+- They also stay deleted on this device until you use "Rebuild from server"
   or set up the device afresh: then they **come back** from the other
   devices (and from this device's own earlier files).
 
@@ -231,8 +231,8 @@ Details in [IDENTITY.md](IDENTITY.md).
   folder): use "Reset device ID" on it, so two devices don't share an ID.
   Even without, nothing is lost: segments are never overwritten, and a
   device that finds segments under its ID it doesn't know imports them.
-- **Statistics missing on a device**: "Rebuild statistics and highlights
-  from cloud" re-imports every device's files. It only adds; it never deletes.
+- **Statistics missing on a device**: Troubleshooting → "Rebuild from
+  server" re-imports every device's files. It only adds; it never deletes.
 - **Starting over**: choose another folder on every device. Each device
   then uploads its whole history (including what it got from the others)
   there on its next syncs.

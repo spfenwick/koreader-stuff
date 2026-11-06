@@ -165,13 +165,23 @@ end
 
 local menu = menu_items.omnisync
 check(menu and menu.sorting_hint == "tools", "menu entry under Tools")
-local function item(text)
-    for _, it in ipairs(menu.sub_item_table_func()) do
-        local t = it.text or (it.text_func and it.text_func())
-        if t and t:find(text, 1, true) then return it end
+-- item("Folder on server") at the top; item("Statistics", "Sync now") in a submenu.
+local function item(...)
+    local path = { ... }
+    local list = menu.sub_item_table_func()
+    for i, text in ipairs(path) do
+        local found
+        for _, it in ipairs(list) do
+            local t = it.text or (it.text_func and it.text_func())
+            if t and t:find(text, 1, true) then found = it break end
+        end
+        if not found or i == #path then return found end
+        list = found.sub_item_table or found.sub_item_table_func()
     end
 end
 check(item("Check for updates") and item("Automatic updates"), "update items in the menu")
+check(menu.sub_item_table_func()[1].text == "Sync now" and item("Statistics", "Sync now")
+    and item("Highlights and books", "Sync now"), "a top-level Sync now and one per kind")
 
 local P = require("omnisync/plugin")
 local function fileData(name) return dofile(dev.dir .. "/" .. name) end
@@ -183,7 +193,7 @@ check(P.autoStats() and P.autoAnnotations(), "automatic syncs on by default")
 
 -- The first server is Dropbox: fine for settings, not for statistics.
 check(item("Server: Box (Dropbox)"), "first server used when none chosen")
-item("Sync statistics").callback()
+item("Statistics", "Sync now").callback()
 check(wasShown("need a WebDAV server"), "statistics on Dropbox: told why")
 local sub = item("Server:").sub_item_table_func()
 check(#sub == 2 and sub[1].checked_func() and not sub[2].checked_func(), "Dropbox and WebDAV servers offered")
@@ -243,7 +253,7 @@ local time_before = stats.book_read_time
 stats.page_stat = {}
 local ann_success = P.deviceState().status.ann_last_success
 S.sleep(1.1)
-item("Sync statistics").callback()
+item("Statistics", "Sync now").callback()
 loop:run(60)
 check(shown[#shown] and shown[#shown].text:find("^Statistics synced") and not shown[#shown].text:find("Highlights"),
     "statistics sync reports statistics only: " .. tostring(shown[#shown] and shown[#shown].text))
@@ -254,7 +264,7 @@ check(stats.book_read_time > time_before, "open book's cached totals refreshed (
 check(P.deviceState().status.devices == 2, "two devices seen")
 
 -- Automatic statistics off: automatic syncs do highlights only.
-item("Sync statistics automatically").callback()
+item("Statistics", "Sync automatically").callback()
 check(fileData("omnisync/settings.lua").auto_stats == false, "automatic statistics off, saved")
 local stats_success = P.deviceState().status.stats_last_success
 S.sleep(1.1)
@@ -263,14 +273,14 @@ loop:run(60)
 st = P.deviceState().status
 check(st.stats_last_success == stats_success and st.ann_last_success > ann_success and not st.last_error,
     "automatic sync: highlights only")
-item("Sync highlights and bookmarks automatically").callback()
+item("Highlights and books", "Sync automatically").callback()
 before = st.last_attempt
 S.sleep(1.1)
 plugin:onNetworkConnected()
 loop:run(10)
 check(P.deviceState().status.last_attempt == before, "both automatic syncs off: nothing synced")
-item("Sync statistics automatically").callback()
-item("Sync highlights and bookmarks automatically").callback()
+item("Statistics", "Sync automatically").callback()
+item("Highlights and books", "Sync automatically").callback()
 check(P.autoStats() and P.autoAnnotations(), "both on again")
 
 -- Status, rebuild
@@ -278,7 +288,7 @@ item("Status").callback()
 check(shown[#shown].text:find("Devices seen: 2", 1, true), "status shows devices seen")
 check(shown[#shown].text:find("Statistics folder: " .. server.url .. "/KOReader/Statistics/", 1, true),
     "status shows the folder")
-item("Rebuild statistics and highlights from cloud").callback()
+item("Troubleshooting", "Rebuild from server").callback()
 shown[#shown].ok_callback()
 loop:run(60)
 check(P.deviceState().status.imported_events == 5, "rebuild re-imported both devices' segments (3 + 2 events, got "
@@ -298,7 +308,7 @@ dofile("omnisync.koplugin/main.lua") -- KOReader starting
 check(S.readFile(dev.dir .. "/omnisync/state.sqlite3") and P.deviceState().device_id == id
     and P.deviceState().ann_scanned ~= nil and P.settings().root == root_before
     and not io.open(dev.dir .. "/supersync.sqlite3"), "SuperSync's database, device ID and settings moved")
-item("Sync statistics").callback()
+item("Statistics", "Sync now").callback()
 loop:run(60)
 st = P.deviceState().status
 check(not st.last_error and st.uploaded_events == 0, "nothing sent again after the move: "
@@ -315,7 +325,7 @@ local own_files = count(server.dir .. "/Moved/Statistics/devices/" .. id, "%.zst
 -- the wrong folder): stopped before writing anything, and asked.
 P.settings().root = "/Empty"
 P.saveSettings()
-item("Sync statistics").callback()
+item("Statistics", "Sync now").callback()
 loop:run(60)
 local q0 = shown[#shown]
 check(q0 and q0.confirm and q0.text:find("files aren't in the folder"), "folder without this device's files: asked: "
@@ -324,13 +334,13 @@ check(not io.open(server.dir .. "/Empty/Statistics/devices/" .. id), "nothing wr
 -- Then the folder with the copied files.
 P.settings().root = "/Moved"
 P.saveSettings()
-item("Sync statistics").callback()
+item("Statistics", "Sync now").callback()
 loop:run(60)
 st = P.deviceState().status
 check(not st.last_error and st.uploaded_events == 0, "nothing sent again to the copied folder: "
     .. tostring(st.uploaded_events) .. ", " .. tostring(st.last_error))
 check(count(server.dir .. "/Moved/Statistics/devices/" .. id, "%.zst$") == own_files, "no new files")
-item("Sync highlights and bookmarks").callback()
+item("Highlights and books", "Sync now").callback()
 loop:run(60)
 st = P.deviceState().status
 check(not st.last_error and st.ann_uploaded == 0, "no highlights sent again either")
@@ -339,7 +349,7 @@ check(not st.last_error and st.ann_uploaded == 0, "no highlights sent again eith
 Store.new{ sq3 = S.SQ3, stats_path = dev.db, state_path = dev.dir .. "/omnisync/state.sqlite3" }:forgetLocation()
 P.settings().root = "/Fresh"
 P.saveSettings()
-item("Sync statistics").callback()
+item("Statistics", "Sync now").callback()
 loop:run(60)
 q0 = shown[#shown]
 check(q0 and q0.confirm and q0.ok_text == "Send everything", "asked again")
@@ -357,7 +367,7 @@ local dev_id = id
 local function annSegs() return count(server.dir .. "/" .. FRESH .. "/devices/" .. dev_id, "^ann%-%d+%.jsonl%.zst$") end
 local segs0 = annSegs()
 check(segs0 == 1, "highlights sent to the new folder (" .. segs0 .. ")")
-check(not item("Removed highlights waiting").enabled_func(), "no held removals: item disabled")
+check(not item("Removed highlights waiting"), "no held removals: no item")
 
 -- A book open in the reader: changes from another device applied on open,
 -- the user's own sent on close.
@@ -389,7 +399,7 @@ local fresh = WebDav.new{ http = S.Http.new(), address = server.url, username = 
 check(require("omnisync/zstd").compressFile(other_seg, other_seg .. ".zst"), "other device's annotations compressed")
 fresh:mkdir("devices/otherdev")
 check(fresh:put_new("devices/otherdev/ann-0000000001.jsonl.zst", other_seg .. ".zst"), "other device's annotations uploaded")
-item("Sync highlights and bookmarks").callback()
+item("Highlights and books", "Sync now").callback()
 loop:run(60)
 check(#reader.annotation.annotations == 2, "applied live to the open book (" .. #reader.annotation.annotations .. ")")
 local ev = events[#events]
@@ -424,7 +434,7 @@ reader_plugin:onReaderReady()
 loop:run(5, function() return shown[#shown].multi end)
 local q = shown[#shown]
 check(q.multi and q.text:find("6 of 6", 1, true) and q.text:find("Annotated", 1, true), "asked about the removed highlights: " .. tostring(q.text))
-check(item("Removed highlights waiting").enabled_func(), "held removals: menu item enabled")
+check(item("Removed highlights waiting"), "held removals: menu item shown")
 item("Status").callback()
 check(shown[#shown].text:find("Books with removals waiting for you: 1", 1, true), "status shows the held book")
 check(shown[#shown].text:find("Book status and details (synced with highlights): 1 books", 1, true),
@@ -432,12 +442,12 @@ check(shown[#shown].text:find("Book status and details (synced with highlights):
 package.loaded["apps/reader/readerui"].instance = reader
 q.choice1_callback() -- restore them here
 check(#reader.annotation.annotations == 6, "restored in the open book")
-check(not item("Removed highlights waiting").enabled_func(), "nothing held any more")
+check(not item("Removed highlights waiting"), "nothing held any more")
 package.loaded["apps/reader/readerui"].instance = { statistics = stats }
 
 server.stop()
 -- Reset device ID
-item("Reset device ID").callback()
+item("Troubleshooting", "Reset device ID").callback()
 shown[#shown].ok_callback()
 check(P.deviceState().device_id ~= id, "device ID reset")
 

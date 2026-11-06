@@ -6,7 +6,7 @@ server from Cloud storage. (This was SuperSync, and before that Settings sync.)
 See [README.md](README.md) for installing and the menu.
 
 List what to sync in `settings/omnisync/sync.txt` (below). Tools →
-OmniSync → "Sync settings" syncs; "Preview settings sync" shows what a
+OmniSync → Settings → "Sync now" syncs; "Preview changes" shows what a
 sync would change without changing it ("Sync now" there runs it). A sync
 runs in the background, and tapping the message cancels it; running it
 again finishes the job. It's also a gesture: General → "OmniSync: sync

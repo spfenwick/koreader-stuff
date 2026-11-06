@@ -335,7 +335,7 @@ function Store:recordBad(device_id, name, size, etag, reason, version)
     end)
 end
 
---- "Rebuild from cloud": forget which segments were imported (and which
+--- "Rebuild from server": forget which segments were imported (and which
 -- were bad), so the next sync imports everything again.
 function Store:forgetSeen()
     local conn = self:openState()

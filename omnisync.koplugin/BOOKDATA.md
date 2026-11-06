@@ -150,7 +150,7 @@ book_files(path, md5, sig)                 -- where the book is; sidecar size an
 ```
 
 Segments imported are recorded in `seen_segments`/`bad_segments`, so
-"Rebuild from cloud" and a change of server or folder cover this stream
+"Rebuild from server" and a change of server or folder cover this stream
 too (a change of server or folder also queues the whole merged state
 again).
 
