@@ -13,7 +13,7 @@ Settings (settings/cloudlibrary/settings.lua, see settings.lua):
   search     cloud books in file search results (default true)
   keep_zenos_listing  experimental: keep ZenOS's cached library listing when
              the Library tab is opened from another tab (default true)
-  zenos_groups  cloud books in ZenOS's Authors and Series tabs (default true)
+  zenos_groups  cloud books in ZenOS's Authors, Series and Tags tabs (default true)
 
 The password stays in KOReader's OPDS settings and is read from there.
 ]]
@@ -736,8 +736,8 @@ function Library.menuEntry(plugin)
                     end,
                 },
                 {
-                    text = _("Cloud books in ZenOS Authors and Series"),
-                    help_text = _("Lists cloud books in ZenOS's Authors and Series tabs, as well as downloaded ones."),
+                    text = _("Cloud books in ZenOS Authors, Series and Tags"),
+                    help_text = _("Lists cloud books in ZenOS's Authors, Series and Tags tabs, as well as downloaded ones."),
                     checked_func = function() return Library.settings().zenos_groups ~= false end,
                     callback = function()
                         Library.save("zenos_groups", Library.settings().zenos_groups == false)

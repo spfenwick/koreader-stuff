@@ -1076,17 +1076,21 @@ do
     check(Virtual.isVirtual("/lib/cloud-x2.epub"), "virtual path")
 end
 
--- ZenOS Authors and Series ------------------------------------------------------------
+-- ZenOS Authors, Series and Tags ------------------------------------------------------------
 
 do
     local ZenGroups = require("cloudlibrary/zenos_groups")
     local local_groups = { { author = "Ann", files = { "/lib/a.epub" } }, { author = "Zed", files = { "/lib/z.epub" } } }
     local local_series = { { series = "Saga", items = { { file = "/lib/s3.epub", series_index = 3, filename = "s3.epub" } } } }
+    -- ZenOS lists a book twice when a tag appears twice in its keywords.
+    local local_tags = { { tag = "x", files = { "/lib/a.epub", "/lib/a.epub", "/lib/z.epub" } },
+                         { tag = "z", files = { "/lib/z.epub" } } }
     local local_meta = { ["/lib/a.epub"] = { title = "A" } }
     local calls = 0
     local fake = {
         getGroupedByAuthor = function() calls = calls + 1 return local_groups end,
         getGroupedBySeries = function() return local_series end,
+        getGroupedByTags = function() return local_tags end,
         getLightMetadata = function(dir) return dir and { dir = dir } or local_meta end,
     }
     package.loaded["common/db_bookinfo"] = fake
@@ -1110,6 +1114,15 @@ do
     eq(series[2].series, "Saga", "series sorted")
     eq(series[2].items[1].file, "/lib/cloud-c1.epub", "series items by number")
     eq(#local_series[1].items, 1, "ZenOS's series list is left alone")
+
+    local tags = fake.getGroupedByTags()
+    local tag_names = {}
+    for i, g in ipairs(tags) do tag_names[i] = g.tag .. ":" .. table.concat(g.files, " ") end
+    eq(table.concat(tag_names, ","), "x:/lib/a.epub /lib/z.epub /lib/cloud-c2.epub,y:/lib/cloud-c2.epub,z:/lib/z.epub",
+        "cloud books in tag groups, each book once")
+    eq(#local_tags[1].files, 3, "ZenOS's tag list is left alone")
+    check(tags[3] == local_tags[2], "unchanged tag groups reused")
+    check(fake.getGroupedByTags() == tags, "tags merged once while nothing changes")
 
     local meta = fake.getLightMetadata()
     eq(meta["/lib/cloud-c2.epub"].authors, "Bob\nCy", "metadata for cloud books")

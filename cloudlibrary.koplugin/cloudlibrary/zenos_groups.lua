@@ -1,13 +1,14 @@
 --[[
-Cloud books in ZenOS's Authors and Series tabs (and what ZenOS builds from
-the same lists: its Home page author and series rows, end-of-book
+Cloud books in ZenOS's Authors, Series and Tags tabs (and what ZenOS builds
+from the same lists: its Home page author, series and tag rows, end-of-book
 suggestions).
 
 ZenOS builds those from CoverBrowser's database, keeping only books whose
 file exists (common/db_bookinfo.lua), so cloud books never appear. This
-changes three of its functions, adding the cloud books to what they return:
+changes four of its functions, adding the cloud books to what they return:
   getGroupedByAuthor   { { author, files }, ... }
   getGroupedBySeries   { { series, items = { { file, series_index, filename } } } }
+  getGroupedByTags     { { tag, files }, ... } (optional: older ZenOS has no Tags)
   getLightMetadata()   path -> { title, authors, series, series_index, keywords }
                        (sorting and series grouping in a group's book list)
 
@@ -82,6 +83,61 @@ function ZenGroups.mergeAuthors(groups, books)
     end
     if added then
         table.sort(out, function(a, b) return a.author < b.author end)
+    end
+    return out
+end
+
+--- Adds the cloud books to ZenOS's tag groups (a new list). Tags are split
+-- and trimmed as ZenOS does. Also lists each book once per tag: ZenOS adds
+-- a book again for each time a tag appears in its keywords.
+function ZenGroups.mergeTags(groups, books)
+    local out, index = {}, {}
+    for i, g in ipairs(groups or {}) do
+        if type(g) == "table" and g.tag and type(g.files) == "table" then
+            local files, seen = {}, {}
+            for _j, file in ipairs(g.files) do
+                if not seen[file] then
+                    seen[file] = true
+                    table.insert(files, file)
+                end
+            end
+            local copied = false
+            if #files ~= #g.files then
+                g = copy(g)
+                g.files = files
+                copied = true
+            end
+            index[g.tag] = { i = i, seen = seen, copied = copied }
+        end
+        out[i] = g
+    end
+    local added = false
+    for _i, book in ipairs(books) do
+        for _j, tags in ipairs(type(book.tags) == "table" and book.tags or {}) do
+            for tag in tostring(tags):gsub(",", "\n"):gmatch("[^\n]+") do
+                tag = tag:match("^%s*(.-)%s*$")
+                if tag ~= "" then
+                    local entry = index[tag]
+                    if not entry then
+                        table.insert(out, { tag = tag, files = {} })
+                        entry = { i = #out, seen = {}, copied = true }
+                        index[tag] = entry
+                    elseif not entry.copied then
+                        out[entry.i] = copy(out[entry.i])
+                        out[entry.i].files = copyList(out[entry.i].files)
+                        entry.copied = true
+                    end
+                    if not entry.seen[book.path] then
+                        entry.seen[book.path] = true
+                        table.insert(out[entry.i].files, book.path)
+                        added = true
+                    end
+                end
+            end
+        end
+    end
+    if added then
+        table.sort(out, function(a, b) return a.tag < b.tag end)
     end
     return out
 end
@@ -229,8 +285,8 @@ function ZenGroups.install(virtual)
     ZenGroups.installed = true
     fmu = require("apps/filemanager/filemanagerutil")
 
-    local authors, series, metadata =
-        memo(ZenGroups.mergeAuthors), memo(ZenGroups.mergeSeries), memo(ZenGroups.mergeMetadata)
+    local authors, series, tags, metadata = memo(ZenGroups.mergeAuthors), memo(ZenGroups.mergeSeries),
+        memo(ZenGroups.mergeTags), memo(ZenGroups.mergeMetadata)
 
     Guard.hook("zenos_groups", db, "getGroupedByAuthor", function(orig, ...)
         local groups = orig(...)
@@ -248,6 +304,16 @@ function ZenGroups.install(virtual)
         return series(groups)
     end, "ZenOS getGroupedBySeries")
 
+    if type(db.getGroupedByTags) == "function" then
+        Guard.hook("zenos_groups", db, "getGroupedByTags", function(orig, ...)
+            local groups = orig(...)
+            if not (active() and type(groups) == "table") then return groups end
+            ZenGroups.ensureOutermost()
+            Virtual.ensureOutermost()
+            return tags(groups)
+        end, "ZenOS getGroupedByTags")
+    end
+
     -- With a folder, ZenOS reads one folder's books (folder covers): left as is.
     Guard.hook("zenos_groups", db, "getLightMetadata", function(orig, directory, ...)
         local result = orig(directory, ...)
@@ -256,7 +322,7 @@ function ZenGroups.install(virtual)
     end, "ZenOS getLightMetadata")
 
     ZenGroups.ensureOutermost()
-    logger.info("CloudLibrary: cloud books added to ZenOS's Authors and Series")
+    logger.info("CloudLibrary: cloud books added to ZenOS's Authors, Series and Tags")
 end
 
 return ZenGroups

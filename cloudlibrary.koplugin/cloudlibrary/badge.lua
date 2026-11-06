@@ -6,7 +6,7 @@ Cover badges, in a white circle on the bottom-right corner of the cover:
 Drawn after the file browser (FileChooser) and book lists (BookList: search
 results, history, collections) paint, over whatever drew the items: stock
 CoverBrowser or ZenOS. Also after any other Menu listing books by path:
-ZenOS's Authors and Series pages are Menus. Only the items on the page
+ZenOS's Authors, Series and Tags pages are Menus. Only the items on the page
 shown are looked at. The cover's position comes from the ImageWidget that
 drew it. In KOReader's plain list (no CoverBrowser) the badge goes before
 the name: Badge.decorate gives those rows an indent to make room for it.
