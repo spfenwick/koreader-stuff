@@ -1057,5 +1057,73 @@ do
     check(Virtual.isVirtual("/lib/cloud-x2.epub"), "virtual path")
 end
 
+-- ZenOS Authors and Series ------------------------------------------------------------
+
+do
+    local ZenGroups = require("cloudlibrary/zenos_groups")
+    local local_groups = { { author = "Ann", files = { "/lib/a.epub" } }, { author = "Zed", files = { "/lib/z.epub" } } }
+    local local_series = { { series = "Saga", items = { { file = "/lib/s3.epub", series_index = 3, filename = "s3.epub" } } } }
+    local local_meta = { ["/lib/a.epub"] = { title = "A" } }
+    local calls = 0
+    local fake = {
+        getGroupedByAuthor = function() calls = calls + 1 return local_groups end,
+        getGroupedBySeries = function() return local_series end,
+        getLightMetadata = function(dir) return dir and { dir = dir } or local_meta end,
+    }
+    package.loaded["common/db_bookinfo"] = fake
+    Virtual.setCatalog("/lib", {
+        { id = "c1", title = "Cloud One", authors = { "Ann" }, series = "Saga", series_index = 1 },
+        { id = "c2", title = "Cloud Two", authors = { "Bob", "Cy" }, tags = { "x", "y" } },
+        { id = "c3", title = "Cloud Three", authors = { "Bob", "Cy" }, series = "New", series_index = 2 },
+    })
+    ZenGroups.install(Virtual)
+    check(ZenGroups.installed, "installs when ZenOS's module is loaded")
+
+    local groups = fake.getGroupedByAuthor()
+    local names = {}
+    for i, g in ipairs(groups) do names[i] = g.author .. ":" .. #g.files end
+    eq(table.concat(names, ","), "Ann:2,Bob\nCy:2,Zed:1", "cloud books in author groups, sorted")
+    eq(#local_groups[1].files, 1, "ZenOS's cached list is left alone")
+    check(fake.getGroupedByAuthor() == groups, "merged once while nothing changes")
+
+    local series = fake.getGroupedBySeries()
+    eq(#series, 2, "new series added")
+    eq(series[2].series, "Saga", "series sorted")
+    eq(series[2].items[1].file, "/lib/cloud-c1.epub", "series items by number")
+    eq(#local_series[1].items, 1, "ZenOS's series list is left alone")
+
+    local meta = fake.getLightMetadata()
+    eq(meta["/lib/cloud-c2.epub"].authors, "Bob\nCy", "metadata for cloud books")
+    eq(meta["/lib/cloud-c2.epub"].keywords, "x\ny", "tags as keywords")
+    check(meta["/lib/a.epub"] ~= nil and local_meta["/lib/cloud-c1.epub"] == nil, "metadata copied, not changed")
+    eq(fake.getLightMetadata("/lib").dir, "/lib", "one folder's metadata unchanged")
+
+    Virtual.setCatalog("/lib", { { id = "c9", title = "Other", authors = { "Ann" } } })
+    eq(#fake.getGroupedByAuthor()[1].files, 2, "merged again after a catalog change")
+
+    ZenGroups.enabled = false
+    check(fake.getGroupedByAuthor() == local_groups, "turned off: ZenOS's list as is")
+    ZenGroups.enabled = true
+
+    -- Opening a cloud book from these lists shows its details.
+    local fmu = require("apps/filemanager/filemanagerutil")
+    local shown, opened
+    local real_show = Virtual.showDetails
+    Virtual.showDetails = function(path) shown = path end
+    local zen_open = fmu.openFile
+    fmu.openFile = function(_ui, file) opened = file end -- as ZenOS wraps it after us
+    fake.getGroupedByAuthor()
+    fmu.openFile(nil, "/lib/cloud-c9.epub")
+    eq(shown, "/lib/cloud-c9.epub", "tap on a cloud book: details")
+    check(opened == nil, "ZenOS's openFile not reached")
+    fmu.openFile(nil, "/lib/a.epub")
+    eq(opened, "/lib/a.epub", "other books open as usual")
+    fmu.openFile = zen_open
+    Virtual.showDetails = real_show
+
+    package.loaded["common/db_bookinfo"] = nil
+    Virtual.setCatalog(nil, {})
+end
+
 io.stdout:write(string.format("cloudlibrary: %d checks, %d failures\n", checks, failures))
 os.exit(failures == 0 and 0 or 1)

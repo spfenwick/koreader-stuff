@@ -38,6 +38,7 @@ local Virtual = {
     by_path = {},
     installed = false,
     has_bookinfo = false,
+    generation = 0, -- changes with every setCatalog()
 }
 
 local PREFIX = "cloud-"
@@ -58,6 +59,7 @@ end
 function Virtual.setCatalog(folder, books)
     Virtual.folder = normalize(folder)
     Virtual.books, Virtual.by_path = {}, {}
+    Virtual.generation = Virtual.generation + 1
     -- Turned off (startup check or an error): no cloud books.
     if not Virtual.folder or not Guard.ok("library") then return end
     for _i, book in ipairs(books or {}) do
@@ -302,6 +304,7 @@ local function installListing()
                 and normalize(path) == Virtual.folder then
             Virtual.ensureOutermost()
             require("cloudlibrary/zenos_listing").install(function() return Virtual.folder end)
+            require("cloudlibrary/zenos_groups").install(Virtual)
             local t0 = Timing.start()
             for _i, book in ipairs(Virtual.books) do
                 if collate then

@@ -18,6 +18,7 @@ Features:
   search   cloud books in file search
   badge    the on-device badge
   zenos_listing  keeping ZenOS's library listing (zenos_listing.lua)
+  zenos_groups   cloud books in ZenOS's Authors and Series (zenos_groups.lua)
   jobs     background tasks, menu actions: an error is logged and reported,
            nothing is turned off
 ]]
@@ -49,7 +50,7 @@ function Guard.fail(feature, where, err)
     end
     if feature == "library" then
         -- Everything else depends on the library.
-        for other in pairs({ search = true, badge = true }) do
+        for other in pairs({ search = true, badge = true, zenos_groups = true }) do
             if not Guard.failed[other] then Guard.failed[other] = "library turned off" end
         end
     end
@@ -232,7 +233,7 @@ end
 --- Lines for the Status screen ("" when all is well).
 function Guard.statusText()
     local lines = {}
-    for _i, feature in ipairs({ "library", "search", "badge", "jobs" }) do
+    for _i, feature in ipairs({ "library", "search", "badge", "zenos_listing", "zenos_groups", "jobs" }) do
         if Guard.unavailable[feature] then
             table.insert(lines, string.format("%s not started: %s", feature,
                 table.concat(Guard.unavailable[feature], "; ")))

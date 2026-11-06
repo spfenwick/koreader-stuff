@@ -13,6 +13,7 @@ Settings (settings/cloudlibrary/settings.lua, see settings.lua):
   search     cloud books in file search results (default true)
   keep_zenos_listing  experimental: keep ZenOS's cached library listing when
              the Library tab is opened from another tab (default true)
+  zenos_groups  cloud books in ZenOS's Authors and Series tabs (default true)
 
 The password stays in KOReader's OPDS settings and is read from there.
 ]]
@@ -31,6 +32,7 @@ local Badge = require("cloudlibrary/badge")
 local Covers = require("cloudlibrary/covers")
 local Downloads = require("cloudlibrary/downloads")
 local ZenListing = require("cloudlibrary/zenos_listing")
+local ZenGroups = require("cloudlibrary/zenos_groups")
 local Guard = require("cloudlibrary/guard")
 local Matcher = require("cloudlibrary/matcher")
 local Search = require("cloudlibrary/search")
@@ -149,6 +151,8 @@ function Library.load()
     Badge.local_enabled = s.badge_local == true
     Search.enabled = s.search ~= false
     ZenListing.enabled = s.keep_zenos_listing ~= false
+    ZenGroups.enabled = s.zenos_groups ~= false
+    ZenGroups.install(Virtual)
     if not server or not folder or s.show == false then
         Library.stats = {}
         Library.matched, Library.on_device = {}, {}
@@ -729,6 +733,15 @@ function Library.menuEntry(plugin)
                     callback = function()
                         Library.save("search", Library.settings().search == false)
                         Search.enabled = Library.settings().search ~= false
+                    end,
+                },
+                {
+                    text = _("Cloud books in ZenOS Authors and Series"),
+                    help_text = _("Lists cloud books in ZenOS's Authors and Series tabs, as well as downloaded ones."),
+                    checked_func = function() return Library.settings().zenos_groups ~= false end,
+                    callback = function()
+                        Library.save("zenos_groups", Library.settings().zenos_groups == false)
+                        ZenGroups.enabled = Library.settings().zenos_groups ~= false
                     end,
                 },
                 {
