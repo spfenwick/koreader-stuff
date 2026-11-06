@@ -22,9 +22,14 @@ cd "$repo_dir"
     shared/updatecore.lua \
     omnisync.koplugin/_meta.lua \
     omnisync.koplugin/main.lua \
-    omnisync.koplugin/omnisync/*.lua
+    omnisync.koplugin/omnisync/*.lua \
+    cloudlibrary.koplugin/_meta.lua \
+    cloudlibrary.koplugin/main.lua \
+    cloudlibrary.koplugin/cloudlibrary/*.lua
 "$lua_bin" tests/test_updatecore.lua
 "$lua_bin" tests/test_plugin.lua
 "$lua_bin" tests/test_omnisync_settings.lua
 # The rest of omnisync.koplugin's tests need KOReader's sources and rclone:
 # scripts/test-omnisync.sh
+# cloudlibrary.koplugin's tests need a KOReader emulator build:
+# tests/cloudlibrary/run_tests.sh

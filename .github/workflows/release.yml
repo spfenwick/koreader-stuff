@@ -34,7 +34,7 @@ on:
       plugin:
         description: Plugin to release
         type: choice
-        options: [knuthplass, omnisync]
+        options: [knuthplass, omnisync, cloudlibrary]
 
 permissions:
   contents: write
@@ -45,7 +45,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PLUGINS: knuthplass omnisync
+  PLUGINS: knuthplass omnisync cloudlibrary
 
 jobs:
   # Which plugins to release: the tag's, the one chosen, or (on a push to
@@ -96,7 +96,10 @@ jobs:
           echo "Releasing: $json"
           echo "plugins=$json" >> "$GITHUB_OUTPUT"
 
-  # All plugins' tests, once: they share the updater.
+  # All plugins' tests, once: they share the updater. (cloudlibrary's own
+  # tests need a KOReader emulator build, so here its files are only
+  # syntax-checked, by scripts/test.sh; run tests/cloudlibrary/run_tests.sh
+  # before releasing it.)
   test:
     needs: plan
     if: needs.plan.outputs.plugins != '[]'

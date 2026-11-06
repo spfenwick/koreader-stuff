@@ -610,11 +610,11 @@ function Library.statusText()
     return table.concat(lines, "\n")
 end
 
-function Library.menuItems()
-    return Guard.wrapCallbacks({ Library.menuEntry() })[1]
+function Library.menuItems(plugin)
+    return Guard.wrapCallbacks({ Library.menuEntry(plugin) })[1]
 end
 
-function Library.menuEntry()
+function Library.menuEntry(plugin)
     return {
         text = _("Cloud library"),
         sorting_hint = "tools",
@@ -749,6 +749,11 @@ function Library.menuEntry()
                     end,
                 },
             }
+            if plugin then
+                items[#items].separator = true
+                local Updater = require("cloudlibrary/updater")
+                for _i, item in ipairs(Updater.menuItems(plugin)) do table.insert(items, item) end
+            end
             return items
         end,
     }

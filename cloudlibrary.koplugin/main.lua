@@ -16,16 +16,22 @@ local logger = require("logger")
 local _ = require("gettext")
 local Virtual = require("cloudlibrary/virtual")
 local Library = require("cloudlibrary/library")
+local Updater = require("cloudlibrary/updater")
 
 local CloudLibrary = WidgetContainer:extend{
     name = "cloudlibrary",
     is_doc_only = false,
 }
 
-local function loadFixture()
+local function fixturePath()
     local path = DataStorage:getSettingsDir() .. "/cloudlibrary/fixture.lua"
     local lfs = require("libs/libkoreader-lfs")
-    if lfs.attributes(path, "mode") ~= "file" then return end
+    return lfs.attributes(path, "mode") == "file" and path or nil
+end
+
+local function loadFixture()
+    local path = fixturePath()
+    if not path then return end
     local ok, data = pcall(dofile, path)
     if ok and type(data) == "table" then return data end
     logger.warn("CloudLibrary: can't load test catalog", path, data)
@@ -56,6 +62,8 @@ function CloudLibrary:init()
         require("cloudlibrary/search").install(Virtual)
         Library.installDeleteHooks()
     end
+    -- Not in tests: an update prompt would get in their way.
+    if not fixturePath() then Updater.scheduleCheck(self) end
     if self.ui.document then return end -- reader: menu only
     local fixture = loadFixture()
     if fixture then
@@ -69,7 +77,7 @@ function CloudLibrary:init()
 end
 
 function CloudLibrary:addToMainMenu(menu_items)
-    menu_items.cloudlibrary = Library.menuItems()
+    menu_items.cloudlibrary = Library.menuItems(self)
 end
 
 function CloudLibrary:onNetworkConnected()

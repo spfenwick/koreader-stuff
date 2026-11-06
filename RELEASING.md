@@ -1,6 +1,6 @@
 # Releasing the plugins
 
-Each plugin (`knuthplass`, `omnisync`) has its own version
+Each plugin (`knuthplass`, `omnisync`, `cloudlibrary`) has its own version
 (`version` in its `_meta.lua`) and its own releases, tagged
 `<plugin>-vX.Y.Z`. Installed copies update themselves from GitHub with the
 updater the plugins share (`shared/updatecore.lua`): once a day when online
@@ -43,7 +43,7 @@ SuperSync's data, see `omnisync.koplugin/README.md`).
 
 `shared/updatecore.lua` is the canonical copy. Each plugin carries an
 identical copy under its own module name (`knuthplass_updatecore.lua`,
-`omnisync/updatecore.lua`): plugins share
+`omnisync/updatecore.lua`, `cloudlibrary/updatecore.lua`): plugins share
 Lua's module cache, so with one name, whichever plugin loaded first would
 supply the updater for all of them, perhaps an older one. After changing it,
 run `scripts/sync-updatecore.sh`; `tests/test_updatecore.lua` fails while a
@@ -53,8 +53,8 @@ release.
 ## On devices
 
 - The first version of a plugin with the updater (Knuth–Plass already has
-  it; OmniSync has it from its first release) has to be copied to the
-  device by hand.
+  it; OmniSync has it from its first release; Cloud library from 0.1.0)
+  has to be copied to the device by hand.
 - OmniSync's settings sync never syncs these plugins' folders (even if
   `sync.txt` lists them): the sync and the updater would both write them.
   Settings sync is for settings, patches and plugins not published here.
