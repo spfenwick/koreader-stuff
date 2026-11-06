@@ -53,10 +53,11 @@ Downloads go to tmp_dir, each to a .part file renamed when complete.
 caller can save it: if the subprocess is killed for taking too long, what
 was done so far (complete downloads, a verified upload) is still used.
 
-There are three streams of segments in each device folder: statistics
-(seg-N), annotations (ann-N) and book data (book-N). Each has its own
-numbering; steps 3 to 5 run for each stream the sync is for (params.stats
-unless false, params.ann and params.book when given).
+There are four streams of segments in each device folder: statistics
+(seg-N), annotations (ann-N), book data (book-N) and book identity (id-N).
+Each has its own numbering; steps 3 to 5 run for each stream the sync is
+for (params.stats unless false, params.ann, params.book and params.id when
+given).
 
 params.expect_own: this device has files in the folder already (it has
 sent some). If its folder isn't there, the folder is a different one, for
@@ -66,7 +67,7 @@ stops with result.missing_own, before creating anything.
 
 Result: { ok, error, stage, full_listed, uploaded = { name, size, etag,
           verified }, upload_error, ann_uploaded, ann_upload_error, book_uploaded,
-          book_upload_error, missing_own,
+          book_upload_error, id_uploaded, id_upload_error, missing_own,
           devices = { id, … }, downloads = { {stream, device, name, size,
           etag, path}, … }, remote_more, segment_errors,
           packed = { {stream, name, first, last, size, etag}, … },
@@ -75,11 +76,12 @@ Result: { ok, error, stage, full_listed, uploaded = { name, size, etag,
           folders = { [id] = { modified, reliable, complete = { [stream] = true } } },
           own_modified, own_reliable, dates_confirmed, dates_unreliable,
           bytes_up, bytes_down, requests }
-(stream is "stats", "ann" or "book").
+(stream is "stats", "ann", "book" or "id").
 --]]
 
 local AnnFormat = require("omnisync/annformat")
 local BookFormat = require("omnisync/bookformat")
+local IdFormat = require("omnisync/idformat")
 local Codec = require("omnisync/codec")
 local Pack = require("omnisync/pack")
 
@@ -110,6 +112,8 @@ NetJob.STREAMS = {
             err = "ann_upload_error" },
     book = { name = BookFormat.segmentName, seq = BookFormat.segmentSeq, result = "book_uploaded",
              err = "book_upload_error" },
+    id = { name = IdFormat.segmentName, seq = IdFormat.segmentSeq, result = "id_uploaded",
+           err = "id_upload_error" },
 }
 
 --- The first segment number (from 1) for which used(name) is false.
@@ -161,14 +165,14 @@ end
 --  tmp_dir, max_download_bytes (optional), stats (false: annotations only),
 --  expect_own, and for annotations
 --  ann = { pending = { path, size } | nil, bad } (seen is shared: names differ),
---  and for book data, book (the same shape); rewrite_meta (this device's
+--  and for book data and book identity, book and id (the same shape); rewrite_meta (this device's
 --  meta.json on the server is out of date: written on a full listing);
 --  folders ({ [id] = { modified,
 --  streams = { [stream] = true } } }, nil when the server's dates can't be
 --  trusted) and own_check (see above); and pack = { after = { [stream] =
 --  last segment number packed }, delete = { { stream, name, first, last,
 --  holders = { name, … } }, … }, deadline (os.time() after which no more
---  segments are gathered for a pack), caps = { stats, ann, book } (records
+--  segments are gathered for a pack), caps = { stats, ann, book, id } (records
 --  at most), zstd (optional) }
 function NetJob.run(params, transport, report)
     report = report or function() end
@@ -200,6 +204,10 @@ function NetJob.run(params, transport, report)
     if params.book then
         table.insert(streams, { id = "book", def = NetJob.STREAMS.book, pending = params.book.pending,
                                 bad = params.book.bad or {} })
+    end
+    if params.id then
+        table.insert(streams, { id = "id", def = NetJob.STREAMS.id, pending = params.id.pending,
+                                bad = params.id.bad or {} })
     end
     local function known(id, stream)
         local s, b = seen[id] or {}, stream.bad[id] or {}
@@ -479,7 +487,8 @@ function NetJob.run(params, transport, report)
         local d = dates[id]
         -- This device's own folder changes with its own upload: its date
         -- from before it is no use for the next sync.
-        local changed_own = id == own_id and (result.uploaded or result.ann_uploaded or result.book_uploaded)
+        local changed_own = id == own_id and (result.uploaded or result.ann_uploaded or result.book_uploaded
+            or result.id_uploaded)
         if d and d.modified and not changed_own then
             result.folders[id] = { modified = d.modified, reliable = d.reliable, complete = complete[id] or {} }
         end

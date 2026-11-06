@@ -1,6 +1,9 @@
 # Book identity across file versions (plan)
 
-Status: plan, not built. Written 2026-11-06.
+Status: steps 1 and 2 built (2026-11-06): Cloud library's matcher fix,
+and the identity stream, which records and syncs facts but joins nothing
+yet. Steps 3 onwards are a plan. Sections below say where the build
+differs from the plan.
 
 ## The problem
 
@@ -63,8 +66,13 @@ those. This mirrors what crengine's XPointers depend on (spine position,
 element path, text offsets).
 
 Cost: one unzip and scan of the whole book, in the subprocess, cached by
-MD5 so never repeated. To be measured on the Forma before building on it
-(a 1 MB EPUB should be well under a second).
+MD5 so never repeated. Measured 2026-11-06 on the Kobo Forma with
+`tools/2-omnisync-signature-timing.lua` (30 of 132 EPUBs, 0–83 MB): median
+0.25 s, 90th percentile 0.82 s, max 1.0 s per book; it follows the amount
+of text, not the file size (the 83 MB book, mostly images, took 0.64 s;
+The Divine Comedy, 1.4 MB, 0.93 s). Nearly all of it is the chapter scan.
+A first scan of a 132-book device: about 45 s, once, in the background.
+For comparison, KOReader's partial MD5 takes about 0.01 s.
 
 Files that aren't EPUB: no book ID from the file in this version. Cloud
 library can supply one (below); PDFs then join at level 1 only (page
@@ -78,7 +86,7 @@ major version rejected):
 
 ```
 {"t":"h","format":"statsync-id","v":1,"minor":0,"device":"…","created":…}
-{"t":"i","md5":"…","uuids":["333d496c-…","dd15c660-…"],"sig":"…","src":"opf",
+{"t":"i","md5":"…","src":"file","uuids":["333d496c-…","dd15c660-…"],"sig":"…",
  "title":"…","authors":"…","ids":["calibre:4644","isbn:9780195056440"]}
 {"t":"end","records":n}
 ```
@@ -87,26 +95,64 @@ major version rejected):
   book ID and body signature". Facts don't change, so the merged state is
   a grow-only set: no timestamps, no deletions, order-independent and
   idempotent by construction.
-- `src`: `opf` (read from the file) or `link` (supplied by another plugin,
-  e.g. Cloud library matching a PDF by title). For one MD5, `opf` wins
-  over `link`; two different `opf` records for one MD5 can't happen
-  (same bytes); two `link`s naming different catalog books leave the MD5
+- `src`: `file` (read from the file with that MD5), `sidecar` (see below)
+  or `link` (supplied by another plugin, e.g. Cloud library matching a
+  PDF by title; reserved, not built). For one MD5, `file` wins over
+  `link`; two different `file` records for one MD5 can't happen (same
+  bytes); two `link`s naming different catalog books leave the MD5
   unjoined.
+- As built: implemented in `omnisync/idformat.lua` (format),
+  `omnisync/idscan.lua` (reading files) and `omnisync/idstore.lua`
+  (state). Packs keep each distinct record once.
 - Separate stream, not new fields in existing `b` records, for the
   reason given in BOOKDATA.md: older versions would mark those segments
   seen without reading the new part.
-- Each device sends a record for every book it has an MD5 for (sidecars in
-  the history, plus files Cloud library reports), the first time it sees
-  that MD5. A few hundred bytes per book, once.
+- Each device sends a record for every book it has an MD5 for, the first
+  time it sees that MD5. A few hundred bytes per book, once. As built:
+  the EPUBs book data knows about (books opened on this device, from
+  `book_files`); files Cloud library reports come with step 6.
+- As built, reading files: the main process lists them and picks those not
+  read before or changed since (path, size, time or sidecar MD5); the
+  sync's subprocess reads them after the network step, for up to 60 s (5 s
+  when the sync was asked for by hand) and never past ¾ of the network
+  time limit. What it found is recorded when the sync finishes and sent
+  with the next one. A 132-book device takes about 45 s in all, so the
+  first automatic sync or two finish the job. Files that can't be read or
+  have no UUID give no facts and aren't read again until they change.
+
+### Which MD5 a record names
+
+KOReader fixes a book's MD5 in its sidecar when the book is first opened
+and keeps it when the file is replaced in place (checked 2026-11-06 on the
+Forma: after replacing *Owned by the Alphas* with the rewritten download,
+the sidecar still held the old file's `5c3574ce…`; the new file's partial
+MD5 is `87f17347…`). Deleting the book in KOReader deletes the sidecar, so
+a re-download after that gets the new file's MD5 on first open.
+
+So a sidecar's MD5 may name a file that's no longer on disk. The other
+streams file everything under the sidecar's MD5, so that stays the key.
+But the UUIDs and signature are read from the file on disk, which may be
+a different version or edition. When the file's own partial MD5 differs
+from the sidecar's, send two facts: one under the file's own MD5 (its
+UUIDs and signature), and one under the sidecar's MD5 with the same UUIDs
+and **no signature** (`sig` left out: positions unknown). The sidecar's MD5
+then joins its group at level 1. At level 2 it only joins if another
+device recorded that MD5's signature from the original file.
 
 ## Local state
 
+As built:
+
 ```
-id_files(md5, sig, src, title, authors, ids)        -- merged facts
-id_uuids(md5, uuid)                                 -- UUIDs per file
-id_outbox(md5)                                       -- facts not yet sent
-id_scanned(path, size, mtime, md5)                   -- files read for IDs
+id_facts(md5, fact, src, uuids, sig, title, authors, ids, device)  -- merged facts
+id_uuids(uuid, md5)                                  -- UUIDs per file
+id_outbox(md5, fact)                                 -- facts not yet sent
+id_scanned(path, md5, size, mtime)                   -- files read, as they were
 ```
+
+`fact` is a fixed form of (md5, src, uuids, sig), so the same fact from
+two devices is stored once; a fact received from another device leaves
+this device's outbox.
 
 Groups are connected components over shared UUIDs (union-find over
 `id_uuids`, rebuilt in memory when facts change: a few thousand rows).
@@ -203,10 +249,13 @@ Cloud library then:
 
 ## Order of work
 
-1. Matcher prefix fix in Cloud library (independent, small).
+1. Matcher prefix fix in Cloud library (independent, small). **Done** (Cloud library 0.2.3).
 2. Identity stream: OPF reading, signature, `id-` segments, merged
    facts, a Status line ("Books known in more than one version: n").
    No joining yet; run it on the devices for a while and check the groups.
+   **Built.** The status screen shows files known and read, books in more
+   than one version, books with different editions under one ID, and
+   groups held back by the guards.
 3. Book data joining (level 1).
 4. Statistics joining, including the late-link move.
 5. Annotations, TOC and flows joining (level 2).
@@ -237,10 +286,8 @@ Each step is shippable on its own; 2 changes no behaviour.
 - Checked on one book: the OPDS entry ID is the Calibre library UUID,
   not the package unique identifier. Check a few books imported different
   ways (CWA ingest, Calibre desktop) to see whether both are always present.
-- Signature cost on the Forma, and whether CWA rewrites ever touch body
-  markup (e.g. its EPUB fixer on import): test a few more edits, including
-  a cover change.
-- Whether KOReader keeps the old `partial_md5_checksum` when a file at the
-  same path is replaced (ANNOTATIONS.md says the MD5 is fixed at first
-  open); if so a re-download in place keeps the old identity and only
-  fresh devices diverge.
+- Edits keep the body (checked 2026-11-06): a tag edit and a cover change
+  each rewrote the file (re-saved by Calibre 9.17), changing the MD5, but
+  left the body signature unchanged (cover change: 86 of 88 spine files
+  byte-identical, title page and jacket differ only in attributes).
+  Unchecked: CWA's EPUB fixer on import, and format conversions.

@@ -25,6 +25,7 @@ This runs in the network subprocess, without any database.
 
 local AnnFormat = require("omnisync/annformat")
 local BookFormat = require("omnisync/bookformat")
+local IdFormat = require("omnisync/idformat")
 local Codec = require("omnisync/codec")
 
 local Pack = {}
@@ -188,9 +189,51 @@ function LwwBuilder:write(path, device_id, now)
     return writeLines(path, lines)
 end
 
---- A builder for a stream ("stats", "ann" or "book").
+-- Book identity: a set of facts; each distinct record once.
+local IdBuilder = {}
+IdBuilder.__index = IdBuilder
+
+function IdBuilder.new()
+    return setmetatable({ lines = {}, n = 0 }, IdBuilder)
+end
+
+function IdBuilder:read(path)
+    local seg = { records = {} }
+    local header, err = IdFormat.readSegment(path, {
+        record = function(r) table.insert(seg.records, r) end,
+    })
+    if not header then return nil, err end
+    return seg
+end
+
+function IdBuilder:size(seg) return #seg.records end
+
+function IdBuilder:add(seg)
+    for _, r in ipairs(seg.records) do
+        local line = IdFormat.recordLine(r)
+        if not self.lines[line] then
+            self.lines[line] = true
+            self.n = self.n + 1
+        end
+    end
+end
+
+function IdBuilder:count() return self.n end
+
+function IdBuilder:write(path, device_id, now)
+    local sorted = {}
+    for line in pairs(self.lines) do sorted[#sorted + 1] = line end
+    table.sort(sorted)
+    local lines = { IdFormat.headerLine(device_id, now) }
+    for _, line in ipairs(sorted) do lines[#lines + 1] = line end
+    lines[#lines + 1] = IdFormat.trailerLine(#sorted)
+    return writeLines(path, lines)
+end
+
+--- A builder for a stream ("stats", "ann", "book" or "id").
 function Pack.builder(stream)
     if stream == "stats" then return StatsBuilder.new() end
+    if stream == "id" then return IdBuilder.new() end
     return LwwBuilder.new(stream)
 end
 

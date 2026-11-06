@@ -15,6 +15,8 @@ local BookStore = require("omnisync/bookstore")
 local Codec = require("omnisync/codec")
 local Zstd = require("omnisync/zstd")
 local Engine = require("omnisync/engine")
+local IdFormat = require("omnisync/idformat")
+local IdStore = require("omnisync/idstore")
 local Store = require("omnisync/store")
 local WebDav = require("omnisync/webdav")
 
@@ -58,6 +60,7 @@ function Sim:makeEngine()
     self.store = Store.new{ sq3 = S.SQ3, stats_path = self.db, state_path = self.state }
     self.ann_store = AnnStore.new{ sq3 = S.SQ3, state_path = self.state }
     self.book_store = BookStore.new{ sq3 = S.SQ3, state_path = self.state }
+    self.id_store = IdStore.new{ sq3 = S.SQ3, state_path = self.state }
     self.engine = Engine.new{
         store = self.store,
         ann = {
@@ -75,6 +78,16 @@ function Sim:makeEngine()
             afterSync = function(run)
                 sim.book_affected = sim.book_affected or {}
                 for md5 in pairs(run.book_affected) do sim.book_affected[md5] = true end
+            end,
+        },
+        id = {
+            store = self.id_store,
+            files = function() return sim.id_files or {} end,
+            -- Runs in the subprocess, as in KOReader.
+            scan = function(item)
+                local info = (sim.id_infos or {})[item.path]
+                if info then return info end
+                return nil, "not an EPUB"
             end,
         },
         logger = verbose or quiet,
@@ -463,6 +476,69 @@ check(not C.last_run.error, "and doesn't fail the sync")
 C.store:forgetSeen()
 sync({ C })
 check(bookMerged(C) == bm and C.last_run.book_segments_imported > 0, "rebuild re-imports book data, same result")
+
+-- 9b. Book identity -------------------------------------------------------------------------------
+-- Synced with annotations. A has the book as first downloaded; B has the
+-- copy rewritten after an edit on the server, put in place of the old one
+-- (its sidecar, and so its MD5, is the old file's).
+local function idFacts(d)
+    local c = S.SQ3.open(d.state)
+    local rows = {}
+    for r in c:prepare("SELECT md5, fact, src, uuids, sig FROM id_facts ORDER BY md5, fact"):rows() do
+        rows[#rows + 1] = table.concat({ r[1], r[2], r[3], r[4], r[5] or "-" }, "|")
+    end
+    c:close()
+    return table.concat(rows, "\n"), #rows
+end
+local function idRemote(id)
+    local out = {}
+    for name in io.popen("ls " .. S.q(REMOTE .. "/devices/" .. id) .. " 2>/dev/null"):lines() do
+        if IdFormat.segmentSeq(name) then out[#out + 1] = name end
+    end
+    return out
+end
+local UUIDS = { "333d496c-3946-448d-bb64-de3905aaaf83", "dd15c660-aec5-41ff-af25-8a01b8b592eb" }
+local OLD_MD5, NEW_MD5 = string.rep("1", 32), string.rep("2", 32)
+A.id_files = { { path = "/books/nowhere.epub", md5 = OLD_MD5, size = 555122, mtime = 1000 } }
+A.id_infos = { ["/books/nowhere.epub"] = { md5 = OLD_MD5, uuids = UUIDS, sig = "body1",
+               title = "The View From Nowhere", authors = "Thomas Nagel", ids = { "isbn:9780195056440" } } }
+B.id_files = { { path = "/books/nowhere.epub", md5 = OLD_MD5, size = 554756, mtime = 2000 },
+               { path = "/books/notes.epub", md5 = string.rep("3", 32), size = 10, mtime = 2000 } }
+B.id_infos = { ["/books/nowhere.epub"] = { md5 = NEW_MD5, uuids = UUIDS, sig = "body1",
+               title = "The View From Nowhere", authors = "Thomas Nagel", ids = { "calibre:4644" } } }
+-- B's first sync has no time to read files: they wait for the next.
+B.engine.deps.id_scan_seconds = 0
+sync({ A, B })
+check(A.last_run.id_scanned == 1 and A.last_run.id_new_facts == 1, "A read its book in the subprocess")
+check(B.last_run.id_scanned == 0 and B.last_run.id_scan_left == 2, "B ran out of time: nothing read yet")
+B.engine.deps.id_scan_seconds = 60
+sync({ B })
+check(B.last_run.id_scanned == 2 and B.last_run.id_new_facts == 2,
+    "B read both files next time (the non-EPUB gives nothing; the replaced file gives two facts)")
+sync({ A, B, C }); sync({ A, B, C })
+local idf, nid = idFacts(A)
+check(nid == 3 and idFacts(B) == idf and idFacts(C) == idf, "book identity: the same facts everywhere (" .. nid .. ")")
+check(#idRemote(A.id) >= 1 and #idRemote(B.id) >= 1, "identity segments next to the others")
+local cg = C.id_store:groups()
+check(#cg == 1 and #cg[1].md5s == 2 and cg[1].sigs == 1 and cg[1].ok,
+    "C sees one book in two versions, same body")
+for _, d in ipairs({ A, B, C }) do
+    check(d.last_run and not d.last_run.error and not d.last_run.id_upload_error,
+        "book identity: " .. d.name .. " synced without error")
+    check(#d.id_store:toScan(d.id_files or {}) == 0, "book identity: " .. d.name .. " has nothing left to read")
+end
+-- A corrupt identity segment: recorded as bad, the sync carries on
+check(dav:put("devices/" .. B.id .. "/" .. IdFormat.segmentName(#idRemote(B.id) + 1), TMP .. "/junk.jsonl"),
+    "corrupt identity segment uploaded")
+sync({ C })
+local cib = S.SQ3.open(C.state)
+check(tonumber(cib:rowexec("SELECT count(*) FROM bad_segments WHERE name LIKE 'id-%'")) == 1, "corrupt identity segment recorded as bad")
+cib:close()
+check(not C.last_run.error, "and doesn't fail the sync")
+-- Rebuild from cloud
+C.store:forgetSeen()
+sync({ C })
+check(idFacts(C) == idf and C.last_run.id_segments_imported > 0, "rebuild re-imports book identity, same result")
 
 -- 10. Packs ---------------------------------------------------------------------------------------
 -- Packing needs only a few segments here, and deleting waits for nothing,

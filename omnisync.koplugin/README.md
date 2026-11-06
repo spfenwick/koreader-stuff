@@ -11,6 +11,9 @@ KOReader's Cloud storage:
 - **Book status, rating, review, custom metadata and handmade table of
   contents**, with highlights (WebDAV). See
   [STATISTICS.md](STATISTICS.md#book-status-and-details).
+- **Book identity** (which files are the same book), with highlights
+  (WebDAV): collected for a later version, nothing merged yet. See
+  [STATISTICS.md](STATISTICS.md#book-identity).
 
 It was called SuperSync, and takes over SuperSync's data on each device
 (see [Moving from SuperSync](#moving-from-supersync)).
@@ -47,7 +50,7 @@ Tools → OmniSync, in both the file browser and the reader:
   in bulk on this device, waiting for you to say whether to remove them
   everywhere.
 - **Server** and **Folder on server**.
-- **Status**: server and folders, last syncs and errors, devices seen,
+- **Status**: server and folders, last syncs and errors, devices seen, books known in more than one version,
   what was sent and received, this device's ID.
 - **Show last settings sync log**.
 - **Rebuild statistics and highlights from cloud**: imports every device's

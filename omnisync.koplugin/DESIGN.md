@@ -22,9 +22,13 @@ description, and what couldn't be verified. Written against KOReader
 | `omnisync/bookformat.lua` | both | Book data properties, book data segment format |
 | `omnisync/bookstore.lua` | main | Book data's merged state, change detection, export/import |
 | `omnisync/booksync.lua` | main | Book data in KOReader: open book, sidecar refresh, writing closed books |
+| `omnisync/idformat.lua` | both | Book identity records, identity segment format |
+| `omnisync/idscan.lua` | subprocess | Reading an EPUB's UUIDs and body signature |
+| `omnisync/idstore.lua` | main | Book identity facts, files read, export/import, groups |
 
 Highlights and bookmarks are designed in ANNOTATIONS.md, book data (status,
-rating, review, custom metadata, handmade TOC) in BOOKDATA.md.
+rating, review, custom metadata, handmade TOC) in BOOKDATA.md, book
+identity in IDENTITY.md.
 
 ## Where the KOReader source differs from the task description
 

@@ -29,6 +29,8 @@ mixing them gives confusing results.
     …
     book-0000000001.jsonl.zst     book status and details, numbered apart
     …
+    id-0000000001.jsonl.zst       book identity, numbered apart
+    …
 ```
 
 **Packs:** most syncs upload a small file, so once a day each device packs
@@ -202,6 +204,26 @@ on its own, and the newest change wins.
 - **Reviews are sent as plain text** to your server.
 
 Details in [BOOKDATA.md](BOOKDATA.md).
+
+## Book identity
+
+Also synced with highlights and bookmarks: which book files carry which
+book IDs (the UUIDs Calibre writes into an EPUB). It's groundwork: when a
+server rewrites a book after an edit (a new cover, new tags), the new file
+is a "different" book to KOReader, and these records will let OmniSync
+treat the two files as one book. In this version they're only collected
+and synced; nothing is merged yet.
+
+- **What's read**: EPUBs opened on the device, once each (again if the file
+  changes), in the background after a sync's network step: a few tenths of
+  a second per book on a Kobo, for up to a minute per sync, so the first
+  sync or two after updating finish the job.
+- **What's sent**: per file, its fingerprint, its UUIDs, a fingerprint of
+  its text (to tell a rewritten copy from another edition), and its title,
+  authors and other identifiers such as the ISBN.
+- **Status** shows how many books are known in more than one version.
+
+Details in [IDENTITY.md](IDENTITY.md).
 
 ## Recovering
 

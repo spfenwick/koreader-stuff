@@ -20,6 +20,8 @@ local AnnSync = require("omnisync/annsync")
 local BookStore = require("omnisync/bookstore")
 local BookSync = require("omnisync/booksync")
 local Engine = require("omnisync/engine")
+local IdScan = require("omnisync/idscan")
+local IdStore = require("omnisync/idstore")
 local Store = require("omnisync/store")
 
 local Plugin = {}
@@ -291,6 +293,32 @@ function Plugin.bookSync()
     return book_sync
 end
 
+local id_store
+
+function Plugin.idStore()
+    if not id_store then
+        id_store = IdStore.new{ sq3 = require("lua-ljsqlite3/init"), state_path = paths().state }
+    end
+    return id_store
+end
+
+--- Book files to read for book identity: the EPUBs book data knows about
+-- (books opened on this device), with the sidecar's MD5.
+function Plugin.identityFiles()
+    local lfs = require("libs/libkoreader-lfs")
+    local out = {}
+    for path, f in pairs(Plugin.bookStore():files()) do
+        if IdScan.handles(path) then
+            local attr = lfs.attributes(path)
+            if attr and attr.mode == "file" then
+                out[#out + 1] = { path = path, md5 = f.md5, size = attr.size, mtime = attr.modification }
+            end
+        end
+    end
+    table.sort(out, function(a, b) return a.path < b.path end)
+    return out
+end
+
 local controller
 
 --- The process-wide engine.
@@ -324,6 +352,7 @@ function Plugin.engine()
                 local aok, aerr = pcall(function()
                     Plugin.annStore():requeueAll()
                     Plugin.bookStore():requeueAll()
+                    Plugin.idStore():requeueAll()
                 end)
                 if not aok then return false, "state database: " .. tostring(aerr) end
             end
@@ -393,6 +422,17 @@ function Plugin.engine()
             store = Plugin.bookStore(),
             collect = function() Plugin.bookSync():collect() end,
             afterSync = function(run) Plugin.bookSync():afterSync(run) end,
+        },
+        id = {
+            store = Plugin.idStore(),
+            files = Plugin.identityFiles,
+            scan = function(item)
+                -- In the subprocess.
+                return IdScan.scan(item.path, {
+                    md5 = require("ffi/sha2").md5,
+                    partialMD5 = require("util").partialMD5,
+                })
+            end,
         },
         saveStatus = function(status)
             Plugin.deviceState().status = status

@@ -36,6 +36,14 @@ Everything KOReader-specific is passed in (`deps`), so tests can drive it:
     book                  optional, book data sync, synced with annotations:
                           { store (omnisync/bookstore), collect(), afterSync(run),
                           max_records }
+    id                    optional, book identity, synced with annotations:
+                          { store (omnisync/idstore), files() -> { { path, md5,
+                          size, mtime }, … } (book files to read, main process),
+                          scan(item) -> info | nil, why (reads one, in the
+                          subprocess), max_records }
+    id_scan_seconds       seconds the subprocess may spend reading book files
+                          after the network step (id_scan_seconds_interactive
+                          when a user asked)
 
 Segments are written and read as plain .jsonl here; they're compressed
 just before upload and decompressed just before import.
@@ -43,6 +51,7 @@ just before upload and decompressed just before import.
 
 local AnnFormat = require("omnisync/annformat")
 local BookFormat = require("omnisync/bookformat")
+local IdFormat = require("omnisync/idformat")
 local Codec = require("omnisync/codec")
 local NetJob = require("omnisync/netjob")
 local Pack = require("omnisync/pack")
@@ -60,6 +69,9 @@ local DEFAULTS = {
     full_list_interval = 24 * 3600, -- seconds between full listings of every device folder
     pack_grace = Pack.GRACE,   -- seconds between a pack appearing and its segments being deleted
     pack = true,               -- pack this device's small segments (see pack.lua)
+    max_id_records = 5000,     -- identity records per uploaded segment
+    id_scan_seconds = 60,      -- reading book files after the network step
+    id_scan_seconds_interactive = 5,
 }
 
 function Engine.new(deps)
@@ -115,7 +127,9 @@ function Engine:request(reason, opts)
                   ann_uploaded_records = 0, ann_imported_records = 0, ann_applied = 0,
                   ann_segments_imported = 0, ann_affected = {},
                   book_uploaded_records = 0, book_imported_records = 0, book_applied = 0,
-                  book_segments_imported = 0, book_affected = {} }
+                  book_segments_imported = 0, book_affected = {},
+                  id_uploaded_records = 0, id_imported_records = 0, id_applied = 0,
+                  id_segments_imported = 0, id_scanned = 0, id_new_facts = 0 }
     self.current = run
     self.deps.schedule(0, function() self:_step(run, "export") end)
     return "started"
@@ -271,6 +285,45 @@ function Engine:_export(run)
         }
     end
 
+    -- Book identity goes with annotations too.
+    local id_params, scan_items, scan_seconds
+    if run.ann and d.id then
+        run.id = true
+        run.id_pending_path = d.work_dir .. "/id-pending.jsonl"
+        run.id_packed_path = run.id_pending_path .. ".zst"
+        os.remove(run.id_pending_path)
+        os.remove(run.id_packed_path)
+        local iexp = d.id.store:export{ device_id = run.device_id, out_path = run.id_pending_path, now = d.now(),
+                                        max_records = d.id.max_records or d.max_id_records }
+        run.id_export = iexp
+        if iexp then
+            local packed, perr = self:_zstd().compressFile(run.id_pending_path, run.id_packed_path)
+            if not packed then return self:_fail(run, "compressing book identity: " .. tostring(perr)) end
+            iexp.plain_size, iexp.size = iexp.size, packed
+        end
+        id_params = {
+            pending = iexp and { path = run.id_packed_path, size = iexp.size } or nil,
+            bad = d.store:badSegments(IdFormat.BAD_VERSION),
+        }
+        -- Book files to read in the subprocess, after the network step.
+        local fok, files = pcall(d.id.files)
+        if fok and files then
+            local present = {}
+            for _, f in ipairs(files) do present[f.path] = true end
+            pcall(d.id.store.keepScanned, d.id.store, present)
+            local tok, todo = pcall(d.id.store.toScan, d.id.store, files)
+            if tok and #todo > 0 then
+                scan_items = todo
+                scan_seconds = run.interactive and d.id_scan_seconds_interactive or d.id_scan_seconds
+            elseif not tok then
+                self.log.warn("StatSync: book identity: choosing files to read failed:", todo)
+            end
+        elseif not fok then
+            self.log.warn("StatSync: book identity: listing book files failed:", files)
+        end
+        run.scan_items = scan_items
+    end
+
     local meta_path = d.work_dir .. "/meta.json"
     -- meta.json says the highest number each stream's packs took, so a copy
     -- of this device restored from an old backup doesn't use numbers whose
@@ -292,7 +345,8 @@ function Engine:_export(run)
         pack_params = self:_packParams()
         pack_params.deadline = os.time() + math.floor(d.time_limit / 2)
         pack_params.caps = { stats = d.max_events, ann = d.ann and d.ann.max_records or d.max_ann_records,
-                             book = d.book and d.book.max_records or d.max_book_records }
+                             book = d.book and d.book.max_records or d.max_book_records,
+                             id = d.id and d.id.max_records or d.max_id_records }
     end
     -- Folders are skipped only once this server's folder dates are known
     -- to follow changes (see netjob.lua).
@@ -304,7 +358,7 @@ function Engine:_export(run)
     -- its state database deleted): list everything first, so it doesn't
     -- reuse a number.
     if not next(seen[run.device_id] or {}) and (exp or (ann_params and ann_params.pending)
-            or (book_params and book_params.pending)) then
+            or (book_params and book_params.pending) or (id_params and id_params.pending)) then
         run.full_list = true
     end
     local params = {
@@ -320,6 +374,7 @@ function Engine:_export(run)
         max_download_bytes = d.max_download_bytes,
         ann = ann_params,
         book = book_params,
+        id = id_params,
         pack = pack_params,
         rewrite_meta = run.meta_key ~= nil and self.status.meta_key ~= run.meta_key,
         folders = dates_known and self.status.folders or nil,
@@ -327,20 +382,37 @@ function Engine:_export(run)
     }
     local result_path = run.result_path
     local makeTransport = d.makeTransport
+    local scan = d.id and d.id.scan
+    -- Reading book files stops in time for the network step's time limit.
+    local scan_limit = math.floor(d.time_limit * 0.75)
     local handle, serr = d.spawn(function()
         -- In the subprocess. Our database connections are all closed by
         -- now, so nothing of ours is left for the garbage collector to close.
-        local function save(r) writeFileAtomic(result_path, Codec.encode(r)) end
+        local started = os.time()
+        local last
+        local function save(r) last = r; writeFileAtomic(result_path, Codec.encode(r)) end
         local tok, transport = pcall(makeTransport)
         if not tok or not transport then
             save({ ok = false, error = "no transport: " .. tostring(transport), downloads = {} })
-            return
+        else
+            local rok, rerr = pcall(NetJob.run, params, transport, save)
+            if not rok then
+                local r = Codec.decode(readFile(result_path) or "") or { downloads = {} }
+                r.ok, r.error = false, "network step crashed: " .. tostring(rerr)
+                save(r)
+            end
         end
-        local rok, rerr = pcall(NetJob.run, params, transport, save)
-        if not rok then
-            local r = Codec.decode(readFile(result_path) or "") or { downloads = {} }
-            r.ok, r.error = false, "network step crashed: " .. tostring(rerr)
-            save(r)
+        if scan_items and scan then
+            local r = last or Codec.decode(readFile(result_path) or "") or { ok = false, downloads = {} }
+            r.scans = {}
+            local deadline = math.min(os.time() + scan_seconds, started + scan_limit)
+            for i, item in ipairs(scan_items) do
+                if os.time() >= deadline then break end
+                local ok, info, why = pcall(scan, item)
+                if not ok then info, why = nil, tostring(info) end
+                table.insert(r.scans, { i = i, info = info or nil, why = why })
+                save(r)
+            end
         end
     end)
     if not handle then return self:_fail(run, "starting subprocess: " .. tostring(serr)) end
@@ -435,6 +507,40 @@ function Engine:_collect(run)
         os.remove(run.book_packed_path)
     end
 
+    if run.id then
+        local iup = result.id_uploaded
+        if iup and iup.verified then
+            local ok, n = pcall(d.id.store.markExported, d.id.store, run.id_pending_path, run.device_id,
+                iup.name, iup.size, iup.etag, d.now())
+            if ok then
+                run.id_uploaded_records = n
+                run.id_uploaded = iup.name
+            else
+                self.log.warn("StatSync: recording the book identity upload failed:", n)
+            end
+        elseif run.id_export and not run.error then
+            run.id_upload_error = result.id_upload_error or "upload didn't finish"
+            self.log.warn("StatSync: book identity upload failed:", run.id_upload_error)
+        end
+        os.remove(run.id_pending_path)
+        os.remove(run.id_packed_path)
+        -- What reading book files found (sent with the next sync).
+        for _, sc in ipairs(type(result.scans) == "table" and result.scans or {}) do
+            local item = run.scan_items and run.scan_items[sc.i]
+            if item then
+                local ok, n = pcall(d.id.store.recordScan, d.id.store, item, sc.info, run.device_id)
+                if ok then
+                    run.id_scanned = run.id_scanned + 1
+                    run.id_new_facts = run.id_new_facts + n
+                else
+                    self.log.warn("StatSync: book identity of", item.path, "not recorded:", n)
+                end
+                if sc.why then self.log.dbg("StatSync: book identity of", item.path, "not read:", sc.why) end
+            end
+        end
+        run.id_scan_left = run.scan_items and (#run.scan_items - run.id_scanned) or 0
+    end
+
     self:_packs(run, result)
 
     run.queue = result.downloads or {}
@@ -508,6 +614,7 @@ function Engine:_packs(run, result)
     if result.ok then
         local uploaded = (result.uploaded and result.uploaded.verified) or (result.ann_uploaded and result.ann_uploaded.verified)
             or (result.book_uploaded and result.book_uploaded.verified)
+            or (result.id_uploaded and result.id_uploaded.verified)
         self.status.own_check = uploaded and result.own_reliable and result.own_modified or nil
     end
     run.folders = result.folders
@@ -530,8 +637,15 @@ function Engine:_import(run)
     local summary, err, kind
     local is_ann = item.stream == "ann"
     local is_book = item.stream == "book"
+    local is_id = item.stream == "id"
     local uok, uerr = self:_zstd().decompressFile(item.path, plain)
-    if uok and is_book then
+    if uok and is_id then
+        if run.id then
+            summary, err, kind = d.id.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
+        else
+            err, kind = "book identity sync is off", "skip"
+        end
+    elseif uok and is_book then
         if run.book then
             summary, err, kind = d.book.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
         else
@@ -552,7 +666,11 @@ function Engine:_import(run)
     os.remove(item.path)
     os.remove(plain)
 
-    if summary and is_book then
+    if summary and is_id then
+        run.id_segments_imported = run.id_segments_imported + 1
+        run.id_imported_records = run.id_imported_records + summary.records
+        run.id_applied = run.id_applied + summary.applied
+    elseif summary and is_book then
         run.book_segments_imported = run.book_segments_imported + 1
         run.book_imported_records = run.book_imported_records + summary.records
         run.book_applied = run.book_applied + summary.applied
@@ -574,7 +692,8 @@ function Engine:_import(run)
         run.segments_bad = run.segments_bad + 1
         self.log.warn("StatSync: skipping bad segment", item.device .. "/" .. item.name .. ":", err)
         pcall(d.store.recordBad, d.store, item.device, item.name, item.size, item.etag, err,
-            is_book and BookFormat.BAD_VERSION or is_ann and AnnFormat.BAD_VERSION or nil)
+            is_id and IdFormat.BAD_VERSION or is_book and BookFormat.BAD_VERSION
+            or is_ann and AnnFormat.BAD_VERSION or nil)
     else
         -- Database trouble: stop; nothing is marked, the next sync retries.
         for i = run.qi, #run.queue do os.remove(run.queue[i].path) end
@@ -640,6 +759,7 @@ function Engine:_finish(run)
     end
     st.last_attempt = run.started
     st.last_error = run.error or run.upload_error or run.ann_upload_error or run.book_upload_error
+        or run.id_upload_error
     if run.full_listed then
         if run.stats then st.last_full_list = run.full_listed end
         if run.ann then st.ann_last_full_list = run.full_listed end
@@ -661,6 +781,10 @@ function Engine:_finish(run)
             st.book_uploaded = run.book_uploaded_records
             st.book_imported = run.book_imported_records
         end
+        if run.id then
+            st.id_uploaded = run.id_uploaded_records
+            st.id_imported = run.id_imported_records
+        end
     end
     st.bytes_up = run.result and run.result.bytes_up
     st.bytes_down = run.result and run.result.bytes_down
@@ -676,6 +800,11 @@ function Engine:_finish(run)
         self.log.info(string.format("StatSync: book data: sent %d changes, imported %d segments (%d changes, %d new here)",
             run.book_uploaded_records, run.book_segments_imported, run.book_imported_records, run.book_applied))
     end
+    if run.id then
+        self.log.info(string.format("StatSync: book identity: sent %d facts, imported %d segments (%d facts, %d new here), read %d book files (%d new facts, %d still to read)",
+            run.id_uploaded_records, run.id_segments_imported, run.id_imported_records, run.id_applied,
+            run.id_scanned, run.id_new_facts, run.id_scan_left or 0))
+    end
     self.running = false
     self.current = nil
     if d.onDone then pcall(d.onDone, st, run) end
@@ -686,9 +815,12 @@ function Engine:_finish(run)
     local again = self.rerun
     self.rerun = nil
     local progressed = run.uploaded or run.segments_imported > 0 or run.ann_uploaded or run.ann_segments_imported > 0
-        or run.book_uploaded or run.book_segments_imported > 0
+        or run.book_uploaded or run.book_segments_imported > 0 or run.id_uploaded or run.id_segments_imported > 0
+        or run.id_scanned > 0
+    -- Book files left to read are read by the next automatic sync, not
+    -- straight away: reading them keeps the device busy.
     local unfinished = (run.export and run.export.more) or (run.ann_export and run.ann_export.more)
-        or (run.book_export and run.book_export.more)
+        or (run.book_export and run.book_export.more) or (run.id_export and run.id_export.more)
         or (run.result and run.result.remote_more) or run.killed
     if again or (progressed and unfinished) then
         local reason = again and table.concat(again.reasons, ",") or "continue"

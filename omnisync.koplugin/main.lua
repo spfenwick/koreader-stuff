@@ -450,6 +450,8 @@ function OmniSync:showStatus()
     a = aok and a or {}
     local bok, b = pcall(function() return Plugin.bookStore():counts() end)
     b = bok and b or {}
+    local iok, id = pcall(function() return Plugin.idStore():counts() end)
+    id = iok and id or {}
     local function onOff(v) return v and _("on") or _("off") end
     local lines = {
         T(_("Server: %1"), self:serverText()),
@@ -481,6 +483,15 @@ function OmniSync:showStatus()
         T(_("Books to update on this device: %1"), b.write or "?"),
         T(_("Changes sent last time: %1, received: %2"), st.book_uploaded or 0, st.book_imported or 0),
         T(_("Files imported: %1, unreadable: %2"), counts.book_seen or "?", counts.book_bad or "?"),
+        "",
+        T(_("Book identity (synced with highlights): %1 book files known, %2 read on this device"),
+            id.files or "?", id.scanned or "?"),
+        T(_("Books known in more than one version: %1"), id.versions or "?"),
+        T(_("Books with different editions under one ID: %1"), id.editions or "?"),
+        T(_("Book IDs shared by unrelated books (not joined): %1"), id.held or "?"),
+        T(_("Facts waiting to be sent: %1"), id.outbox or "?"),
+        T(_("Facts sent last time: %1, received: %2"), st.id_uploaded or 0, st.id_imported or 0),
+        T(_("Files imported: %1, unreadable: %2"), counts.id_seen or "?", counts.id_bad or "?"),
     }
     UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
 end
