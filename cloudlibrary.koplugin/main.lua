@@ -54,11 +54,13 @@ function CloudLibrary:init()
             end
         end
         require("cloudlibrary/search").install(Virtual)
+        Library.installDeleteHooks()
     end
     if self.ui.document then return end -- reader: menu only
     local fixture = loadFixture()
     if fixture then
         Virtual.details = nil
+        Library.fixture = true -- the catalog never changes
         Virtual.setCatalog(fixture.library_dir or G_reader_settings:readSetting("home_dir"),
             fixture.books)
         return

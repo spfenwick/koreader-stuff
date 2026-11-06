@@ -947,6 +947,68 @@ do
     reset()
 end
 
+-- Deleting a downloaded book makes it a cloud book again -------------------------------
+
+do
+    local Library = require("cloudlibrary/library")
+    local Search = require("cloudlibrary/search")
+    local UIManager = require("ui/uimanager")
+    local FileManager = require("apps/filemanager/filemanager")
+    local folder = TMP .. "/deleted"
+    lfs.mkdir(folder)
+    local server = { url = "http://test.invalid/opds", username = "u" }
+    local real_server, real_tick = Library.server, UIManager.nextTick
+    Library.server = function() return server end
+    UIManager.nextTick = function(_self, fn) fn() end
+    Library.save("folder", folder)
+    Library.save("auto_sync", false)
+    local store = Store.open(Library.dbPath(server), false)
+    store:upsertBooks({
+        { uuid = "del-1", title = "Kept Book", authors = { "Ann Author" } },
+        { uuid = "del-2", title = "Other Book", authors = { "Bo Writer" } },
+    }, 1)
+    store:close()
+    local path = folder .. "/Ann Author - Kept Book.epub"
+    local f = io.open(path, "w"); f:write("x"); f:close()
+    local cloud_path = folder .. "/cloud-del-1.epub"
+
+    Search.install(Virtual)
+    Library.installDeleteHooks()
+    Library.load()
+    check(not Virtual.isVirtual(cloud_path), "downloaded book isn't a cloud book")
+    eq(#Virtual.books, 1, "one cloud book before deleting")
+
+    -- Results shown before the delete, as KOReader caches them.
+    local FileSearcher = require("apps/filemanager/filemanagerfilesearcher")
+    FileSearcher.search_path, FileSearcher.search_string = folder, "book"
+    local fc = {
+        getCollate = function() return nil end,
+        getListItem = function(_self, _dir, _name, item_path) return { path = item_path } end,
+        genItemTable = function(_self, _dirs, files) return files end,
+    }
+    local searcher = { include_subfolders = true, ui = { file_chooser = fc } }
+    local results = Search.augment(searcher, {})
+    eq(#results, 1, "search before deleting: the other cloud book")
+
+    check(FileManager.deleteFile(FileManager, path, true), "file deleted")
+    check(Virtual.isVirtual(cloud_path), "deleted book is a cloud book again")
+    eq(#Virtual.books, 2, "two cloud books after deleting")
+    eq(#Search.augment(searcher, results), 2, "cached search results get it too")
+    eq(#Search.augment(searcher, {}), 2, "new search finds it")
+
+    -- Deleting a cloud entry or a file elsewhere doesn't reload.
+    local loads, real_load = 0, Library.load
+    Library.load = function() loads = loads + 1 end
+    local other = TMP .. "/elsewhere.epub"
+    f = io.open(other, "w"); f:write("x"); f:close()
+    FileManager.deleteFile(FileManager, other, true)
+    eq(loads, 0, "file outside the library: no reload")
+    Library.load = real_load
+
+    Library.server, UIManager.nextTick = real_server, real_tick
+    Virtual.setCatalog(nil, {})
+end
+
 -- Virtual entries ---------------------------------------------------------------------
 
 do

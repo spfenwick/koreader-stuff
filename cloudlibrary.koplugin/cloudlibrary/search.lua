@@ -86,18 +86,17 @@ function Search.install(Virtual)
     end
 
     -- Files first (as KOReader sorted them), then cloud books. Results
-    -- shown again from KOReader's cache drop cloud books downloaded since.
+    -- shown again from KOReader's cache get the current cloud books: books
+    -- downloaded since are dropped, books deleted since are added. (A
+    -- deleted file itself is dropped by KOReader.)
     local function augment(searcher, results)
         if results._cloudlibrary then
             local kept = {}
             for _i, item in ipairs(results) do
-                if not item._cloudlibrary or Virtual.by_path[item.path] then table.insert(kept, item) end
+                if not item._cloudlibrary then table.insert(kept, item) end
             end
-            if #kept ~= #results then
-                for i = #results, 1, -1 do results[i] = nil end
-                for i, item in ipairs(kept) do results[i] = item end
-            end
-            return results
+            for i = #results, 1, -1 do results[i] = nil end
+            for i, item in ipairs(kept) do results[i] = item end
         end
         for _i, item in ipairs(cloudItems(searcher)) do
             item._cloudlibrary = true
@@ -106,6 +105,7 @@ function Search.install(Virtual)
         results._cloudlibrary = true
         return results
     end
+    Search.augment = augment -- for tests
 
     local Guard = require("cloudlibrary/guard")
     Guard.hook("search", FileSearcher, "onShowSearchResults", function(orig, self, not_cached, ...)

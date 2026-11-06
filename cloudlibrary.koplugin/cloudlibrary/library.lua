@@ -11,6 +11,8 @@ Settings (G_reader_settings "cloudlibrary"):
   badge_cloud  cloud badge on cloud-only books (default true)
   badge_local  on-device badge on local catalog books (default false)
   search     cloud books in file search results (default true)
+  keep_zenos_listing  experimental: keep ZenOS's cached library listing when
+             the Library tab is opened from another tab (default true)
 
 The password stays in KOReader's OPDS settings and is read from there.
 ]]
@@ -28,6 +30,7 @@ local T = ffiutil.template
 local Badge = require("cloudlibrary/badge")
 local Covers = require("cloudlibrary/covers")
 local Downloads = require("cloudlibrary/downloads")
+local ZenListing = require("cloudlibrary/zenos_listing")
 local Guard = require("cloudlibrary/guard")
 local Matcher = require("cloudlibrary/matcher")
 local Search = require("cloudlibrary/search")
@@ -145,6 +148,7 @@ function Library.load()
     Badge.cloud_enabled = s.badge_cloud ~= false
     Badge.local_enabled = s.badge_local == true
     Search.enabled = s.search ~= false
+    ZenListing.enabled = s.keep_zenos_listing ~= false
     if not server or not folder or s.show == false then
         Library.stats = {}
         Library.matched, Library.on_device = {}, {}
@@ -187,6 +191,44 @@ function Library.load()
     Timing.record("catalog: show in folder", Timing.since(t0))
     Timing.record("catalog: load", Timing.since(t_load),
         string.format("%d cloud books, %d on this device", #cloud, #books - #cloud))
+end
+
+-- Deleting a downloaded book makes it a cloud book again. KOReader sends no
+-- event for deletions, so its two delete functions are wrapped; the catalog
+-- is reloaded (matching looks at the files actually in the folder) after
+-- KOReader's own refresh.
+local function inLibrary(path)
+    local folder = Library.folder()
+    return type(path) == "string" and folder ~= nil
+        and (path == folder or path:sub(1, #folder + 1) == folder .. "/")
+end
+
+local reload_scheduled = false
+local function reloadSoon()
+    if reload_scheduled or Library.fixture then return end
+    reload_scheduled = true
+    UIManager:nextTick(function()
+        reload_scheduled = false
+        Guard.call("jobs", Library.load)
+    end)
+end
+
+function Library.installDeleteHooks()
+    local FileManager = require("apps/filemanager/filemanager")
+    Guard.hook("library", FileManager, "deleteFile", function(orig, self, file, ...)
+        local ok = orig(self, file, ...)
+        if ok and inLibrary(file) and not Virtual.isVirtual(file) then reloadSoon() end
+        return ok
+    end, "FileManager:deleteFile")
+    Guard.hook("library", FileManager, "deleteSelectedFiles", function(orig, self, ...)
+        local any = false
+        for path in pairs(self.selected_files or {}) do
+            if inLibrary(path) then any = true break end
+        end
+        local r = orig(self, ...)
+        if any then reloadSoon() end
+        return r
+    end, "FileManager:deleteSelectedFiles")
 end
 
 --- Full details for the details sheet (summary, formats...).
@@ -687,6 +729,15 @@ function Library.menuEntry()
                     callback = function()
                         Library.save("search", Library.settings().search == false)
                         Search.enabled = Library.settings().search ~= false
+                    end,
+                },
+                {
+                    text = _("Keep ZenOS library listing (experimental)"),
+                    help_text = _("Opening the Library tab from another tab (Authors, Series…) reuses ZenOS's saved listing instead of listing the whole folder again."),
+                    checked_func = function() return Library.settings().keep_zenos_listing ~= false end,
+                    callback = function()
+                        Library.save("keep_zenos_listing", Library.settings().keep_zenos_listing == false)
+                        ZenListing.enabled = Library.settings().keep_zenos_listing ~= false
                     end,
                 },
                 {

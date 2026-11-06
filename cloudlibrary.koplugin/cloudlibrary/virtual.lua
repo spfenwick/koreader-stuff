@@ -301,6 +301,7 @@ local function installListing()
         if self.name == "filemanager" and Virtual.folder
                 and normalize(path) == Virtual.folder then
             Virtual.ensureOutermost()
+            require("cloudlibrary/zenos_listing").install(function() return Virtual.folder end)
             local t0 = Timing.start()
             for _i, book in ipairs(Virtual.books) do
                 if collate then

@@ -17,6 +17,7 @@ Features:
            covers); turning it off removes the cloud books
   search   cloud books in file search
   badge    the on-device badge
+  zenos_listing  keeping ZenOS's library listing (zenos_listing.lua)
   jobs     background tasks, menu actions: an error is logged and reported,
            nothing is turned off
 ]]
