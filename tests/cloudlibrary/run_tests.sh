@@ -16,9 +16,10 @@ if [ -z "$dir" ] || [ ! -x "$dir/luajit" ]; then
 fi
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/cloudlibrary-test.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/home"
 cd "$dir"
 # KOReader's libraries log to stdout; keep only the test's own lines.
-SDL_VIDEODRIVER=dummy ./luajit "$repo/tests/cloudlibrary/test_cloudlibrary.lua" "$repo" "$tmp" \
+KO_HOME="$tmp/home" SDL_VIDEODRIVER=dummy ./luajit "$repo/tests/cloudlibrary/test_cloudlibrary.lua" "$repo" "$tmp" \
     > "$tmp/out.log" 2> "$tmp/err.log" && status=0 || status=$?
 grep -h "^cloudlibrary:\|^FAIL\|rror" "$tmp/out.log" "$tmp/err.log" || true
 if [ "$status" -ne 0 ] && ! grep -q "^cloudlibrary:" "$tmp/out.log"; then

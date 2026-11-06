@@ -3,7 +3,7 @@ Ties the pieces together: settings, the catalog store, syncing in a
 subprocess, matching local files, and the virtual entries shown in the file
 browser.
 
-Settings (G_reader_settings "cloudlibrary"):
+Settings (settings/cloudlibrary/settings.lua, see settings.lua):
   server     { url, username } of one of KOReader's OPDS catalogs
   folder     library folder (default: KOReader's download folder, else home)
   show       show cloud books (default true)
@@ -34,6 +34,7 @@ local ZenListing = require("cloudlibrary/zenos_listing")
 local Guard = require("cloudlibrary/guard")
 local Matcher = require("cloudlibrary/matcher")
 local Search = require("cloudlibrary/search")
+local Settings = require("cloudlibrary/settings")
 local Store = require("cloudlibrary/store")
 local Timing = require("cloudlibrary/timing")
 local Virtual = require("cloudlibrary/virtual")
@@ -59,14 +60,13 @@ local PREFETCH_SECONDS = 180
 
 -- Settings ----------------------------------------------------------------------
 
+-- In settings/cloudlibrary/settings.lua (see settings.lua).
 function Library.settings()
-    return G_reader_settings:readSetting("cloudlibrary", {})
+    return Settings.all()
 end
 
 function Library.save(key, value)
-    local s = Library.settings()
-    s[key] = value
-    G_reader_settings:saveSetting("cloudlibrary", s)
+    Settings.save(key, value)
 end
 
 --- Redraws the file browser after a badge setting changed (the listing is

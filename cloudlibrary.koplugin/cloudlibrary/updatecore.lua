@@ -22,6 +22,8 @@ installed plugin as it was. It takes effect after a restart.
         name = "statsync",                     -- folder <name>.koplugin, rolling release <name>
         title = _("Statistics sync"),          -- shown to the user
         settings_key = "statsync_updates",     -- in settings.reader.lua
+        settings = nil,                        -- optional: function() -> a LuaSettings
+                                               -- to keep it in instead
         log_prefix = "StatSync:",
         after_check = nil,                     -- optional, see check()
     }
@@ -291,12 +293,16 @@ function UpdateCore.new(cfg)
     }
     local user_agent = "KOReader " .. U.folder
 
+    local function store() return cfg.settings and cfg.settings() or G_reader_settings end
+
     function U.getSettings()
-        return G_reader_settings:readSetting(U.settings_key) or {}
+        return store():readSetting(U.settings_key) or {}
     end
 
     function U.saveSettings(settings)
-        G_reader_settings:saveSetting(U.settings_key, settings)
+        local s = store()
+        s:saveSetting(U.settings_key, settings)
+        if s ~= G_reader_settings then s:flush() end
     end
 
     function U.getMode()

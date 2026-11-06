@@ -9,6 +9,8 @@ local _ = require("gettext")
 return require("cloudlibrary/updatecore").new{
     name = "cloudlibrary",
     title = _("Cloud library"),
-    settings_key = "cloudlibrary_updates",
+    -- In settings/cloudlibrary/settings.lua, with the plugin's settings.
+    settings_key = require("cloudlibrary/settings").UPDATES_KEY,
+    settings = function() return require("cloudlibrary/settings").store() end,
     log_prefix = "CloudLibrary:",
 }
