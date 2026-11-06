@@ -54,6 +54,7 @@ stub("logger", { info = function() end, warn = function(...) if os.getenv("STATS
 stub("ui/network/manager", {
     isConnected = function() return connected end,
     runWhenConnected = function(_, cb) connected = true; cb() end,
+    runWhenOnline = function(_, cb) cb() end,
 })
 stub("ui/uimanager", {
     scheduleIn = function(_, delay, fn) loop:schedule(delay, fn) end,
@@ -180,6 +181,17 @@ local function item(...)
     end
 end
 check(item("Check for updates") and item("Automatic updates"), "update items in the menu")
+
+-- Check for updates also runs Cloud library's own updater, when it's loaded.
+local cloud_checks = {}
+item("Check for updates").callback()
+check(#cloud_checks == 0, "no Cloud library: only OmniSync checked")
+package.loaded["cloudlibrary/updater"] = { check = function(p, interactive) table.insert(cloud_checks, { p, interactive }) end }
+ui.cloudlibrary = { path = TMP .. "/plugins/cloudlibrary.koplugin", version = "0.3.0" }
+item("Check for updates").callback()
+check(#cloud_checks == 1 and cloud_checks[1][1] == ui.cloudlibrary and cloud_checks[1][2] == true,
+    "Cloud library checked with its own updater, interactively")
+ui.cloudlibrary, package.loaded["cloudlibrary/updater"] = nil, nil
 check(menu.sub_item_table_func()[1].text == "Sync now" and item("Statistics", "Sync now")
     and item("Highlights and books", "Sync now"), "a top-level Sync now and one per kind")
 

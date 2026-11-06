@@ -161,7 +161,9 @@ with `OmniSync:`, in KOReader's `crash.log`. Passwords are never logged.
 
 ## Updates
 
-"Check for updates" looks for a newer release of the plugin on GitHub.
+"Check for updates" looks for a newer release of the plugin on GitHub,
+and then of Cloud library, if it's installed and enabled (with Cloud
+library's own updater, so it asks and reports as in its own menu).
 "Automatic updates" sets what happens once a day when KOReader is already
 online: off, notify (the default: asks first), or install. An update is
 checked (checksum, complete plugin) before it replaces the installed one,

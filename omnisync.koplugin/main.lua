@@ -746,8 +746,31 @@ Turn off KOReader's "Export annotations on book closing" (in the reader's Bookma
         },
     }
     for _i, item in ipairs(more) do table.insert(items, item) end
-    for _i, item in ipairs(Updater.menuItems(self)) do table.insert(items, item) end
+    local updates = Updater.menuItems(self)
+    updates[1].help_text = _("Also checks Cloud library, if it's installed.")
+    updates[1].callback = function() self:checkForUpdates() end
+    for _i, item in ipairs(updates) do table.insert(items, item) end
     return items
+end
+
+--- Cloud library's running instance and its own updater, when it's
+-- installed and enabled (it loaded its updater at start).
+function OmniSync:cloudLibrary()
+    local plugin = self.ui and self.ui.cloudlibrary
+    local updater = package.loaded["cloudlibrary/updater"]
+    if plugin and plugin.path and plugin.version and type(updater) == "table" and updater.check then
+        return plugin, updater
+    end
+end
+
+--- Checks OmniSync, then Cloud library with its own updater (its settings,
+-- and its record of an update installed this session). Connects once.
+function OmniSync:checkForUpdates()
+    NetworkMgr:runWhenOnline(function()
+        Updater.check(self, true)
+        local plugin, updater = self:cloudLibrary()
+        if plugin then updater.check(plugin, true) end
+    end)
 end
 
 function OmniSync:addToMainMenu(menu_items)
