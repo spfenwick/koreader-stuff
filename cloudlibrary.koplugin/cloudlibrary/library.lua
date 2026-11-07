@@ -145,6 +145,19 @@ local function showCatalog(folder, cloud)
     end
 end
 
+--- Library.load() with a message up, for when it's slow (many cloud books
+-- to list): closes the menu first, so the screen doesn't look stuck.
+function Library.loadShowingProgress(touchmenu_instance)
+    if touchmenu_instance then touchmenu_instance:closeMenu() end
+    local InfoMessage = require("ui/widget/infomessage")
+    local msg = InfoMessage:new{ text = _("Loading cloud books…"), dismissable = false }
+    UIManager:show(msg)
+    UIManager:forceRePaint()
+    local ok, err = pcall(Library.load)
+    UIManager:close(msg)
+    if not ok then error(err, 0) end
+end
+
 --- Reads the catalog, matches local files, and updates the cloud books shown.
 function Library.load()
     local server, folder = Library.server(), Library.folder()
@@ -705,9 +718,16 @@ function Library.menuEntry(plugin)
                     text = _("Show cloud books"),
                     help_text = _("Turn this off before removing the plugin, so the file browser forgets the cloud books."),
                     checked_func = function() return Library.settings().show ~= false end,
-                    callback = function()
-                        Library.save("show", Library.settings().show == false)
-                        Library.load()
+                    check_callback_updates_menu = true,
+                    callback = function(touchmenu_instance)
+                        local show = Library.settings().show == false
+                        Library.save("show", show)
+                        if show then
+                            Library.loadShowingProgress(touchmenu_instance)
+                        else
+                            Library.load()
+                            if touchmenu_instance then touchmenu_instance:updateItems() end
+                        end
                     end,
                 },
                 {
@@ -785,10 +805,11 @@ function Library.serverMenu()
                 return type(chosen) == "table" and chosen.url == s.url
                     and (chosen.username or "") == (s.username or "")
             end,
-            callback = function()
+            check_callback_closes_menu = true,
+            callback = function(touchmenu_instance)
                 Library.save("server", { url = s.url, username = s.username })
                 chosen = Library.settings().server
-                Library.load()
+                Library.loadShowingProgress(touchmenu_instance)
                 Library.sync("quick")
             end,
         })
