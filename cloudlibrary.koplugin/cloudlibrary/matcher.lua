@@ -130,9 +130,10 @@ function Matcher.match(folder, files, books)
     local by_uuid, by_title_author, by_title = {}, {}, {}
     for _i, b in ipairs(books) do
         by_uuid[b.id:lower()] = b.id
-        local t = normalize(b.title)
+        -- Normalised when stored, if read from the store.
+        local t = b.match_title or normalize(b.title)
         if t ~= "" then
-            local a = normalize(b.authors and b.authors[1])
+            local a = b.match_author or normalize(b.authors and b.authors[1])
             by_title_author[t .. "\0" .. a] = by_title_author[t .. "\0" .. a] or b.id
             if by_title[t] == nil then by_title[t] = b.id else by_title[t] = false end
         end

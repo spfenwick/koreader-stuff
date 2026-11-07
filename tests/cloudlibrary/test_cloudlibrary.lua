@@ -503,7 +503,9 @@ do
     -- Changed and removed files.
     os.remove(folder .. "/Stranger.pdf")
     lfs.touch(folder .. "/u.epub", os.time() + 10, os.time() + 10)
-    eq(Matcher.scan(folder, store), 1, "changed file read again")
+    local read, removed = Matcher.scan(folder, store)
+    eq(read, 1, "changed file read again")
+    eq(removed, 1, "removed file counted")
     local files = store:localFiles()
     check(files[folder .. "/Stranger.pdf"] == nil, "removed file forgotten")
     store:close()
@@ -553,6 +555,27 @@ do
     eq(next(store4:localFiles()), nil, "scanned files forgotten")
     eq(store4:count(), 1, "books kept")
     store4:close()
+
+    -- 4 -> 5 adds match keys, filled by fillMatchKeys().
+    local conn4 = SQ3.open(path)
+    conn4:exec([[CREATE TABLE b2 AS SELECT uuid, calibre_id, title, authors, tags, language, publisher,
+            published, added, pages, summary, formats, cover, size, series, series_index, seen,
+            series_seen, cover_file, cover_w, cover_h, cover_failed FROM books;
+        DROP TABLE books; ALTER TABLE b2 RENAME TO books;
+        UPDATE books SET title = 'The  Kept!', authors = 'Ann  Author' || char(10) || 'Bob';
+        PRAGMA user_version=4;]])
+    conn4:close()
+    local store5 = Store.open(path, false)
+    eq(store5:listing()[1].match_title, nil, "match key empty before filling")
+    eq(store5:fillMatchKeys(), 1, "match keys filled")
+    eq(store5:fillMatchKeys(), 0, "match keys filled once")
+    local row = store5:listing()[1]
+    eq(row.match_title, "the kept", "match title normalised")
+    eq(row.match_author, "ann author", "match author normalised")
+    eq(#row.authors, 2, "authors split when used")
+    eq(row.authors[2], "Bob", "second author")
+    eq(#row.tags, 0, "no tags: empty list")
+    store5:close()
 end
 
 -- Covers ------------------------------------------------------------------------------

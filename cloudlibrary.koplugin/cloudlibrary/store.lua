@@ -6,13 +6,15 @@ meta         key/value: server key, sync times and results
 local_files  what's known about files in the library folder (see matcher)
 
 Lists are stored as text joined with "\n" (authors, tags), as CoverBrowser
-does. formats is "type\tsize\thref" lines.
+does. formats is "type\tsize\thref" lines. match_title and match_author
+are the title and first author normalised for matching (see matcher.lua),
+so loading doesn't redo it for every book.
 ]]
 
 local SQ3 = require("lua-ljsqlite3/init")
 local logger = require("logger")
 
-local SCHEMA_VERSION = 4
+local SCHEMA_VERSION = 5
 
 local SCHEMA = [[
 CREATE TABLE IF NOT EXISTS books (
@@ -37,7 +39,9 @@ CREATE TABLE IF NOT EXISTS books (
     cover_file TEXT,
     cover_w INTEGER,
     cover_h INTEGER,
-    cover_failed INTEGER
+    cover_failed INTEGER,
+    match_title TEXT,
+    match_author TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -96,6 +100,16 @@ function Store.open(path, wal)
         -- 3 -> 4: the matcher missed UUIDs written "uuid:..." (newer
         -- Calibre); read every file again.
         conn:exec("DELETE FROM local_files;")
+    end
+    if version >= 1 and version <= 4 then
+        -- 4 -> 5: normalised title and author (filled by fillMatchKeys()).
+        local have = {}
+        local stmt = conn:prepare("PRAGMA table_info(books);")
+        for row in stmt:rows() do have[row[2]] = true end
+        stmt:close()
+        for _i, col in ipairs({ "match_title", "match_author" }) do
+            if not have[col] then conn:exec("ALTER TABLE books ADD COLUMN " .. col .. " TEXT;") end
+        end
     elseif version ~= 0 and version ~= SCHEMA_VERSION then
         -- A cache: start again rather than migrate.
         logger.info("CloudLibrary: catalog schema", version, "-> rebuilding")
@@ -136,15 +150,15 @@ end
 
 local UPSERT = [[
 INSERT INTO books (uuid, calibre_id, title, authors, tags, language, publisher,
-    published, added, pages, summary, formats, cover, size, seen)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    published, added, pages, summary, formats, cover, size, seen, match_title, match_author)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(uuid) DO UPDATE SET
     calibre_id = excluded.calibre_id, title = excluded.title,
     authors = excluded.authors, tags = excluded.tags, language = excluded.language,
     publisher = excluded.publisher, published = excluded.published,
     added = excluded.added, pages = excluded.pages, summary = excluded.summary,
     formats = excluded.formats, cover = excluded.cover, size = excluded.size,
-    seen = excluded.seen,
+    seen = excluded.seen, match_title = excluded.match_title, match_author = excluded.match_author,
     -- A new cover link means a new cover: forget the downloaded one.
     cover_file = CASE WHEN cover IS excluded.cover THEN cover_file END,
     cover_w = CASE WHEN cover IS excluded.cover THEN cover_w END,
@@ -163,6 +177,7 @@ end
 --- Inserts or updates parsed feed books (see feed.lua). Returns how many
 -- weren't in the store before.
 function Store:upsertBooks(books, seen)
+    local normalize = require("cloudlibrary/matcher").normalize
     local exists = self.conn:prepare("SELECT 1 FROM books WHERE uuid = ?;")
     local stmt = self.conn:prepare(UPSERT)
     local added = 0
@@ -175,7 +190,8 @@ function Store:upsertBooks(books, seen)
             local pages = b.custom and tonumber(b.custom.Pages or b.custom.pages)
             stmt:reset():bind(b.uuid, b.calibre_id, b.title, join(b.authors), join(b.tags),
                 b.languages and b.languages[1], b.publisher, b.published, b.added, pages,
-                b.summary, formatsText(b.formats), b.cover, size, seen):step()
+                b.summary, formatsText(b.formats), b.cover, size, seen,
+                normalize(b.title), normalize(b.authors and b.authors[1])):step()
             stmt:clearbind()
         end
     end
@@ -218,23 +234,68 @@ function Store:has(uuid)
     return found
 end
 
---- What the file browser needs for every book (no summaries).
+-- Listing rows split their authors and tags only when they're used.
+local LIST_FIELDS = { authors = 3, tags = 4 }
+local ListingRow = {
+    __index = function(book, key)
+        local raw = LIST_FIELDS[key] and rawget(book, "_" .. key)
+        if raw == nil then return nil end
+        local list = split(raw ~= false and raw or nil)
+        rawset(book, key, list)
+        return list
+    end,
+}
+
+--- What the file browser needs for every book (no summaries), and the
+-- cover counts: { with a cover on the server, downloaded, failed }.
+-- Numbers are read as REAL: integers would come back as boxed 64-bit
+-- values, slow to make and convert for thousands of rows.
 function Store:listing()
     local out = {}
+    local with_cover, downloaded, failed = 0, 0, 0
     local stmt = self.conn:prepare([[SELECT uuid, title, authors, tags, language,
-        added, size, series, series_index, pages, cover, cover_file, cover_w, cover_h,
-        cover_failed FROM books;]])
-    for row in stmt:rows() do
-        table.insert(out, {
-            id = row[1], title = row[2], authors = split(row[3]), tags = split(row[4]),
-            language = row[5], added = num(row[6]), size = num(row[7]),
-            series = row[8], series_index = num(row[9]), pages = num(row[10]),
-            cover_href = row[11], cover_file = row[12], cover_w = num(row[13]),
-            cover_h = num(row[14]), cover_failed = num(row[15]),
-        })
+        CAST(added AS REAL), CAST(size AS REAL), series, series_index, CAST(pages AS REAL),
+        cover, cover_file, CAST(cover_w AS REAL), CAST(cover_h AS REAL), CAST(cover_failed AS REAL),
+        match_title, match_author FROM books;]])
+    local row = {}
+    while stmt:step(row) do
+        local book = setmetatable({
+            id = row[1], title = row[2], _authors = row[3] or false, _tags = row[4] or false,
+            language = row[5], added = row[6], size = row[7],
+            series = row[8], series_index = row[9], pages = row[10],
+            cover_href = row[11], cover_file = row[12], cover_w = row[13],
+            cover_h = row[14], cover_failed = row[15],
+            match_title = row[16], match_author = row[17],
+        }, ListingRow)
+        out[#out + 1] = book
+        if row[11] ~= nil then with_cover = with_cover + 1 end
+        if row[12] ~= nil then downloaded = downloaded + 1
+        elseif row[15] ~= nil then failed = failed + 1 end
     end
     stmt:close()
-    return out
+    return out, { with_cover = with_cover, downloaded = downloaded, failed = failed }
+end
+
+--- Fills match_title and match_author where missing (rows from before
+-- schema 5). Returns how many were filled.
+function Store:fillMatchKeys()
+    local normalize = require("cloudlibrary/matcher").normalize
+    local rows = {}
+    local stmt = self.conn:prepare("SELECT uuid, title, authors FROM books WHERE match_title IS NULL;")
+    for row in stmt:rows() do
+        table.insert(rows, { row[1], normalize(row[2]), normalize(split(row[3])[1]) })
+    end
+    stmt:close()
+    if #rows == 0 then return 0 end
+    local upd = self.conn:prepare("UPDATE books SET match_title = ?, match_author = ? WHERE uuid = ?;")
+    self:begin()
+    for _i, r in ipairs(rows) do
+        upd:reset():bind(r[2], r[3], r[1]):step()
+        upd:clearbind()
+    end
+    self:commit()
+    upd:close()
+    return #rows
 end
 
 --- One book with everything, for the details sheet.

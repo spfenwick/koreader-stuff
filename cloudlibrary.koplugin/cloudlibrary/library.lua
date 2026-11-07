@@ -136,9 +136,10 @@ local function showCatalog(folder, cloud)
     Virtual.setCatalog(folder, cloud)
     -- A refetched cover keeps its file name: don't show the old image.
     Virtual.forgetDecodedCovers()
+    -- In the database's order (not sorted: a different order only costs a
+    -- refresh, and only happens when the catalog changed anyway).
     local ids = {}
-    for _i, b in ipairs(cloud) do table.insert(ids, b.id .. "\t" .. (b.title or "")) end
-    table.sort(ids)
+    for i, b in ipairs(cloud) do ids[i] = b.id .. "\t" .. (b.title or "") end
     local sig = require("ffi/sha2").md5((folder or "") .. "\n" .. table.concat(ids, "\n"))
     if Library.settings().listing_sig ~= sig then
         Library.save("listing_sig", sig)
@@ -197,8 +198,7 @@ function Library.load()
         wal = Device:canUseWAL() }
     local t0 = Timing.start()
     local store = openStore(server)
-    local books = store:listing()
-    local with_cover, downloaded, failed = store:coverCounts()
+    local books, counts = store:listing()
     for _i, b in ipairs(books) do
         if b.cover_file then b.cover = covers_dir .. "/" .. b.cover_file end
     end
@@ -218,7 +218,7 @@ function Library.load()
     Library.stats = {
         catalog = #books, cloud = #cloud, on_device = #books - #cloud,
         unmatched_files = #unmatched,
-        covers = downloaded, covers_available = with_cover, covers_failed = failed,
+        covers = counts.downloaded, covers_available = counts.with_cover, covers_failed = counts.failed,
     }
     logger.info("CloudLibrary: loaded", Library.stats)
     t0 = Timing.start()
@@ -285,6 +285,7 @@ local function runJob(server, folder, mode, db_path, wal, covers_dir)
     local result = { mode = mode }
     local store = Store.open(db_path, wal)
     local ok, err = pcall(function()
+        store:fillMatchKeys() -- once, after the upgrade to schema 5
         if mode == "covers" or mode == "prefetch" then
             util.makePath(covers_dir)
             local opts = mode == "prefetch"
