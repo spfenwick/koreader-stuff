@@ -611,7 +611,7 @@ do
     eq(l[books[5].uuid].cover_w, 30, "listing has the cover size")
     eq(l[books[1].uuid].cover_failed, 5000, "listing has the failure time")
 
-    -- "Download all covers" retries covers that failed recently.
+    -- "Download missing covers" retries covers that failed recently.
     local retry = Covers.downloadMissing(fetch, ORIGIN .. "/", store, dir,
         { now = function() return 5001 end, retry_all = true })
     eq(retry.fetched + retry.failed, 2, "retry_all includes recent failures")
@@ -1171,6 +1171,36 @@ do
 
     package.loaded["common/db_bookinfo"] = nil
     Virtual.setCatalog(nil, {})
+end
+
+-- The menu: groups in order, every entry explained, ZenOS items only with ZenOS.
+
+do
+    local Library = require("cloudlibrary/library")
+    local function labels(items)
+        local out = {}
+        for _i, item in ipairs(items) do
+            local text = item.text or (item.text_func and item.text_func()) or "?"
+            table.insert(out, (text:gsub(":.*$", "")))
+            check(item.help_text ~= nil or text:find("^Check for updates") or text:find("^Automatic updates"),
+                "menu entry explained: " .. text)
+        end
+        return table.concat(out, " | ")
+    end
+    local real = Library.hasZenOS
+    Library.hasZenOS = function() return false end
+    eq(labels(Library.menuEntry(nil).sub_item_table_func()),
+        "Sync now | Full sync | Download missing covers | Sync automatically | Catalog | Folder"
+        .. " | Show cloud books | Mark cloud books | Mark books on this device"
+        .. " | Include cloud books in file search | Status | Timings",
+        "menu without ZenOS")
+    Library.hasZenOS = function() return true end
+    local items = Library.menuEntry(nil).sub_item_table_func()
+    local zen
+    for _i, item in ipairs(items) do if item.text == "ZenOS" then zen = item end end
+    check(zen ~= nil and #zen.sub_item_table == 2, "ZenOS submenu with ZenOS")
+    check(zen and zen.separator, "ZenOS submenu ends the display group")
+    Library.hasZenOS = real
 end
 
 io.stdout:write(string.format("cloudlibrary: %d checks, %d failures\n", checks, failures))

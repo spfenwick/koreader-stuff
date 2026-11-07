@@ -145,6 +145,13 @@ local function showCatalog(folder, cloud)
     end
 end
 
+--- True when ZenOS is installed (its menu items only apply then).
+function Library.hasZenOS()
+    local module = "common/db_bookinfo"
+    return package.loaded[module] ~= nil
+        or (package.searchpath ~= nil and package.searchpath(module, package.path) ~= nil)
+end
+
 --- Library.load() with a message up, for when it's slow (many cloud books
 -- to list): closes the menu first, so the screen doesn't look stuck.
 function Library.loadShowingProgress(touchmenu_instance)
@@ -272,7 +279,7 @@ local function runJob(server, folder, mode, db_path, wal, covers_dir)
             util.makePath(covers_dir)
             local opts = mode == "prefetch"
                 and { limit = PREFETCH_COVERS, deadline = os.time() + PREFETCH_SECONDS }
-                or { retry_all = true } -- "Download all covers": retry failed ones too
+                or { retry_all = true } -- "Download missing covers": retry failed ones too
             result.covers = Covers.downloadMissing(Http.fetcher(server), server.url, store, covers_dir, opts)
             result.covers.results = nil
             return
@@ -639,63 +646,48 @@ function Library.menuEntry(plugin)
         text = _("Cloud library"),
         sorting_hint = "tools",
         sub_item_table_func = function()
+            local has_server = function() return Library.server() ~= nil end
             local items = {
+                -- Syncing
                 {
                     text = _("Sync now"),
-                    enabled_func = function() return Library.server() ~= nil end,
+                    help_text = _("Adds books new to the catalog since the last sync. If the last full sync was over a day ago, does a full sync instead."),
+                    enabled_func = has_server,
                     callback = function() Library.sync("quick") end,
                 },
                 {
                     text = _("Full sync"),
-                    help_text = _("Reads the whole catalog again: picks up edited and removed books, and series."),
-                    enabled_func = function() return Library.server() ~= nil end,
+                    help_text = _("Reads the whole catalog again: picks up edited and removed books, series, and changed covers."),
+                    enabled_func = has_server,
                     callback = function() Library.sync("full") end,
                 },
                 {
-                    text = _("Download all covers"),
-                    help_text = _("Covers are otherwise downloaded as you browse, and some with each sync."),
-                    enabled_func = function() return Library.server() ~= nil end,
+                    text = _("Download missing covers"),
+                    help_text = _("Downloads every cover not on this device yet, in the background, including covers a full sync found changed on the server. Covers are otherwise downloaded as you browse, and some after each sync."),
+                    enabled_func = has_server,
                     callback = function() Library.sync("covers") end,
                 },
                 {
-                    text = _("Timings"),
-                    sub_item_table = {
-                        {
-                            text = _("Show timings"),
-                            keep_menu_open = true,
-                            callback = function()
-                                local TextViewer = require("ui/widget/textviewer")
-                                UIManager:show(TextViewer:new{
-                                    title = _("Cloud library timings"),
-                                    text = Timing.text(),
-                                    monospace_font = false,
-                                })
-                            end,
-                        },
-                        {
-                            text = _("Reset timings"),
-                            keep_menu_open = true,
-                            callback = function() Timing.reset() end,
-                        },
-                    },
-                },
-                {
-                    text = _("Status"),
-                    keep_menu_open = true,
+                    text = _("Sync automatically"),
+                    help_text = _("When the file browser opens and Wi-Fi is on: new books at most hourly, everything daily."),
+                    checked_func = function() return Library.settings().auto_sync ~= false end,
                     callback = function()
-                        UIManager:show(require("ui/widget/infomessage"):new{ text = Library.statusText() })
+                        Library.save("auto_sync", Library.settings().auto_sync == false)
                     end,
                     separator = true,
                 },
+                -- Setup
                 {
                     text_func = function()
                         local s = Library.server()
                         return T(_("Catalog: %1"), s and (s.title or s.url) or _("none"))
                     end,
+                    help_text = _("Your library's catalog, from those added in KOReader's OPDS catalog plugin. Choosing one syncs it."),
                     sub_item_table_func = Library.serverMenu,
                 },
                 {
                     text_func = function() return T(_("Folder: %1"), Library.folder() or "?") end,
+                    help_text = _("Where cloud books are listed and downloaded to. Books already in this folder (not its subfolders) are recognised as catalog books, so they aren't listed twice."),
                     keep_menu_open = true,
                     callback = function(touchmenu_instance)
                         local PathChooser = require("ui/widget/pathchooser")
@@ -713,10 +705,12 @@ function Library.menuEntry(plugin)
                             end,
                         })
                     end,
+                    separator = true,
                 },
+                -- Display
                 {
                     text = _("Show cloud books"),
-                    help_text = _("Turn this off before removing the plugin, so the file browser forgets the cloud books."),
+                    help_text = _("Lists catalog books that aren't on this device in the folder, ready to download. Turn this off before removing the plugin, so the file browser forgets the cloud books."),
                     checked_func = function() return Library.settings().show ~= false end,
                     check_callback_updates_menu = true,
                     callback = function(touchmenu_instance)
@@ -752,39 +746,72 @@ function Library.menuEntry(plugin)
                 },
                 {
                     text = _("Include cloud books in file search"),
+                    help_text = _("KOReader's file search also finds cloud books, by title, author or series."),
                     checked_func = function() return Library.settings().search ~= false end,
                     callback = function()
                         Library.save("search", Library.settings().search == false)
                         Search.enabled = Library.settings().search ~= false
                     end,
                 },
-                {
-                    text = _("Cloud books in ZenOS Authors, Series and Tags"),
-                    help_text = _("Lists cloud books in ZenOS's Authors, Series and Tags tabs, as well as downloaded ones."),
-                    checked_func = function() return Library.settings().zenos_groups ~= false end,
-                    callback = function()
-                        Library.save("zenos_groups", Library.settings().zenos_groups == false)
-                        ZenGroups.enabled = Library.settings().zenos_groups ~= false
-                    end,
-                },
-                {
-                    text = _("Keep ZenOS library listing (experimental)"),
-                    help_text = _("Opening the Library tab from another tab (Authors, Series…) reuses ZenOS's saved listing instead of listing the whole folder again."),
-                    checked_func = function() return Library.settings().keep_zenos_listing ~= false end,
-                    callback = function()
-                        Library.save("keep_zenos_listing", Library.settings().keep_zenos_listing == false)
-                        ZenListing.enabled = Library.settings().keep_zenos_listing ~= false
-                    end,
-                },
-                {
-                    text = _("Sync automatically"),
-                    help_text = _("When the file browser opens and Wi-Fi is on: new books at most hourly, everything daily."),
-                    checked_func = function() return Library.settings().auto_sync ~= false end,
-                    callback = function()
-                        Library.save("auto_sync", Library.settings().auto_sync == false)
-                    end,
-                },
             }
+            if Library.hasZenOS() then
+                table.insert(items, {
+                    text = _("ZenOS"),
+                    sub_item_table = {
+                        {
+                            text = _("Cloud books in Authors, Series and Tags"),
+                            help_text = _("Lists cloud books in ZenOS's Authors, Series and Tags tabs, as well as downloaded ones."),
+                            checked_func = function() return Library.settings().zenos_groups ~= false end,
+                            callback = function()
+                                Library.save("zenos_groups", Library.settings().zenos_groups == false)
+                                ZenGroups.enabled = Library.settings().zenos_groups ~= false
+                            end,
+                        },
+                        {
+                            text = _("Faster Library tab (experimental)"),
+                            help_text = _("Opening the Library tab from another tab (Authors, Series…) reuses ZenOS's saved listing instead of listing the whole folder again."),
+                            checked_func = function() return Library.settings().keep_zenos_listing ~= false end,
+                            callback = function()
+                                Library.save("keep_zenos_listing", Library.settings().keep_zenos_listing == false)
+                                ZenListing.enabled = Library.settings().keep_zenos_listing ~= false
+                            end,
+                        },
+                    },
+                })
+            end
+            items[#items].separator = true
+            -- Diagnostics
+            table.insert(items, {
+                text = _("Status"),
+                help_text = _("Catalog, folder, book and cover counts, last syncs, and any problems."),
+                keep_menu_open = true,
+                callback = function()
+                    UIManager:show(require("ui/widget/infomessage"):new{ text = Library.statusText() })
+                end,
+            })
+            table.insert(items, {
+                text = _("Timings"),
+                help_text = _("How long each step took on this device, for tracking down slowness."),
+                sub_item_table = {
+                    {
+                        text = _("Show timings"),
+                        keep_menu_open = true,
+                        callback = function()
+                            local TextViewer = require("ui/widget/textviewer")
+                            UIManager:show(TextViewer:new{
+                                title = _("Cloud library timings"),
+                                text = Timing.text(),
+                                monospace_font = false,
+                            })
+                        end,
+                    },
+                    {
+                        text = _("Reset timings"),
+                        keep_menu_open = true,
+                        callback = function() Timing.reset() end,
+                    },
+                },
+            })
             if plugin then
                 items[#items].separator = true
                 local Updater = require("cloudlibrary/updater")
