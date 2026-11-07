@@ -104,8 +104,9 @@ local function bookEntry(b)
         table.insert(parts, '<category scheme="custom_column:Pages" term="Pages" label="' .. b.pages .. '"/>')
     end
     if b.summary then table.insert(parts, "<summary>" .. esc(b.summary) .. "</summary>") end
-    table.insert(parts, '<link type="image/jpeg" href="/opds/cover/' .. b.id .. '" rel="http://opds-spec.org/image"/>')
-    table.insert(parts, '<link type="image/jpeg" href="/opds/cover/' .. b.id .. '" rel="http://opds-spec.org/image/thumbnail"/>')
+    local cover = b.cover_href or ("/opds/cover/" .. b.id)
+    table.insert(parts, '<link type="image/jpeg" href="' .. cover .. '" rel="http://opds-spec.org/image"/>')
+    table.insert(parts, '<link type="image/jpeg" href="' .. cover .. '" rel="http://opds-spec.org/image/thumbnail"/>')
     table.insert(parts, '<link rel="http://opds-spec.org/acquisition" href="/opds/download/' .. b.id
         .. '/' .. (b.format or "epub") .. '/" length="' .. (b.size or 1000) .. '" type="application/'
         .. ((b.format or "epub") == "pdf" and "pdf" or "epub+zip") .. '"/>')
@@ -633,6 +634,21 @@ do
     local r2 = Covers.download(fetch, ORIGIN .. "/", store, dir, store:missingCovers(nil, 6000),
         { now = function() t = t + 1; return t end, deadline = 2 })
     eq(r2.fetched + r2.failed, 1, "deadline respected")
+
+    -- A new cover link makes the cover missing again; unchanged ones are kept.
+    books[5].cover_href = "/opds/cover/1005?v=2"
+    newSync(store, server, 150):full()
+    local l2 = {}
+    for _i, b in ipairs(store:listing()) do l2[b.id] = b end
+    eq(l2[books[5].uuid].cover_file, nil, "changed cover link forgets the file")
+    eq(l2[books[5].uuid].cover_w, nil, "changed cover link forgets the size")
+    eq(l2[books[4].uuid].cover_file ~= nil, true, "unchanged cover kept")
+    local again = store:missingCovers(nil, 0)
+    local wanted = false
+    for _i, m in ipairs(again) do
+        if m.id == books[5].uuid then wanted = m.href == "/opds/cover/1005?v=2" end
+    end
+    check(wanted, "changed cover downloaded again, from the new link")
 
     -- Books gone from the catalog lose their cover file.
     local f2 = io.open(dir .. "/stray.webp", "w"); f2:write("x"); f2:close()

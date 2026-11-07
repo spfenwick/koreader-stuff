@@ -133,6 +133,8 @@ end
 -- their saved listing, so only do it when the cloud books shown changed.
 local function showCatalog(folder, cloud)
     Virtual.setCatalog(folder, cloud)
+    -- A refetched cover keeps its file name: don't show the old image.
+    Virtual.forgetDecodedCovers()
     local ids = {}
     for _i, b in ipairs(cloud) do table.insert(ids, b.id .. "\t" .. (b.title or "")) end
     table.sort(ids)
@@ -276,7 +278,8 @@ local function runJob(server, folder, mode, db_path, wal, covers_dir)
                 end
             end
             result.sync, result.error = r, serr
-            if r and r.deleted then Covers.cleanup(store, covers_dir) end
+            -- Removed books, and covers replaced by a new link.
+            if r then Covers.cleanup(store, covers_dir) end
         end
         if folder then
             local t0 = Timing.start()

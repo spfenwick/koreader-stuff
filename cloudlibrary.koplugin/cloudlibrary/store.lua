@@ -141,7 +141,12 @@ ON CONFLICT(uuid) DO UPDATE SET
     publisher = excluded.publisher, published = excluded.published,
     added = excluded.added, pages = excluded.pages, summary = excluded.summary,
     formats = excluded.formats, cover = excluded.cover, size = excluded.size,
-    seen = excluded.seen;
+    seen = excluded.seen,
+    -- A new cover link means a new cover: forget the downloaded one.
+    cover_file = CASE WHEN cover IS excluded.cover THEN cover_file END,
+    cover_w = CASE WHEN cover IS excluded.cover THEN cover_w END,
+    cover_h = CASE WHEN cover IS excluded.cover THEN cover_h END,
+    cover_failed = CASE WHEN cover IS excluded.cover THEN cover_failed END;
 ]]
 
 local function formatsText(formats)
