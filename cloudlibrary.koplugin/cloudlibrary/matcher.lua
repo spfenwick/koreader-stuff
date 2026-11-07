@@ -97,7 +97,7 @@ local function eachBookFile(folder, fn)
 end
 
 --- Updates the store's local_files for the folder. Returns how many files
--- were read.
+-- were read, and how many were gone.
 function Matcher.scan(folder, store)
     local known = store:localFiles()
     local present, read = {}, 0
@@ -115,10 +115,14 @@ function Matcher.scan(folder, store)
         store:setLocalFile(path, info)
         read = read + 1
     end)
+    local removed = 0
     for path in pairs(known) do
-        if not present[path] then store:removeLocalFile(path) end
+        if not present[path] then
+            store:removeLocalFile(path)
+            removed = removed + 1
+        end
     end
-    return read
+    return read, removed
 end
 
 --- Returns { [uuid] = path }, { unmatched local paths }.

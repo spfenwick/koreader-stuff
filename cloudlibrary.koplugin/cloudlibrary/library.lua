@@ -59,6 +59,7 @@ local QUICK_INTERVAL = 60 * 60       -- auto sync at most hourly
 local FULL_INTERVAL = 24 * 60 * 60   -- and a full sync daily
 local PREFETCH_COVERS = 300          -- covers downloaded by each sync, newest first
 local PREFETCH_SECONDS = 180
+local CHECK_DELAY = 3                -- s after the file browser opens: let it draw first
 
 -- Settings ----------------------------------------------------------------------
 
@@ -165,10 +166,17 @@ function Library.loadShowingProgress(touchmenu_instance)
     if not ok then error(err, 0) end
 end
 
+-- What a load depends on, besides the catalog and the folder's files.
+local function loadKey(server, folder, s)
+    return table.concat({ server and server.url or "", server and server.username or "",
+        folder or "", tostring(s.show ~= false) }, "\0")
+end
+
 --- Reads the catalog, matches local files, and updates the cloud books shown.
 function Library.load()
     local server, folder = Library.server(), Library.folder()
     local s = Library.settings()
+    Library.loaded_key = nil -- set once loaded
     Badge.cloud_enabled = s.badge_cloud ~= false
     Badge.local_enabled = s.badge_local == true
     Search.enabled = s.search ~= false
@@ -180,6 +188,7 @@ function Library.load()
         Library.matched, Library.on_device = {}, {}
         Covers.configure(nil)
         showCatalog(folder, {})
+        Library.loaded_key = loadKey(server, folder, s)
         return
     end
     local t_load = Timing.start()
@@ -217,6 +226,7 @@ function Library.load()
     Timing.record("catalog: show in folder", Timing.since(t0))
     Timing.record("catalog: load", Timing.since(t_load),
         string.format("%d cloud books, %d on this device", #cloud, #books - #cloud))
+    Library.loaded_key = loadKey(server, folder, s)
 end
 
 -- Deleting a downloaded book makes it a cloud book again. KOReader sends no
@@ -303,7 +313,7 @@ local function runJob(server, folder, mode, db_path, wal, covers_dir)
         end
         if folder then
             local t0 = Timing.start()
-            result.scanned = Matcher.scan(folder, store)
+            result.scanned, result.removed = Matcher.scan(folder, store)
             result.scan_ms = Timing.since(t0)
         end
     end)
@@ -374,6 +384,17 @@ function Library.sync(mode, quiet)
     return true
 end
 
+-- A folder check that found no new, changed or deleted files, or a cover
+-- download that got nothing, leaves the listing as it is: skip reloading.
+local function listingMayHaveChanged(mode, r)
+    if r.error then return true end
+    if mode == "scan" then return (r.scanned or 0) > 0 or (r.removed or 0) > 0 end
+    if mode == "prefetch" or mode == "covers" then
+        return not r.covers or (r.covers.fetched or 0) > 0 or (r.covers.failed or 0) > 0
+    end
+    return true
+end
+
 local function pollJob()
     local job = Library.job
     if not job then return end
@@ -404,7 +425,7 @@ local function pollJob()
         Timing.record("folder check: scan files", result.scan_ms,
             string.format("%d files read", result.scanned or 0))
     end
-    Library.load()
+    if listingMayHaveChanged(job.mode, result) then Library.load() end
     local changed = result.sync and ((result.sync.added or 0) > 0 or (result.sync.deleted or 0) > 0)
     if not job.quiet or result.error or changed then
         if (job.mode ~= "scan" and job.mode ~= "prefetch") or result.error then
@@ -435,14 +456,28 @@ function Library.syncIfDue()
     return Library.sync("quick", true)
 end
 
+-- Even without syncing, check the folder for new or changed files.
+local function backgroundCheck()
+    if Library.job or not Library.server() then return end
+    Library.sync(syncDue() and "quick" or "scan", true)
+end
+local scheduledCheck = Guard.task("jobs", backgroundCheck)
+
+--- The file browser opened: at startup, and again each time a book is closed.
 function Library.onFileManagerReady()
     local t_start = Timing.start()
-    Library.load()
-    local server = Library.server()
-    if not server or Library.job then return end
-    -- Even without syncing, check the folder for new or changed files.
-    Library.sync(syncDue() and "quick" or "scan", true)
-    Timing.record("startup: plugin", Timing.since(t_start), "catalog load and starting the background check")
+    local server, folder = Library.server(), Library.folder()
+    -- Reopened (after reading): the cloud books are still loaded. The
+    -- background check below reloads them if files changed.
+    local reopened = Library.loaded_key ~= nil
+        and Library.loaded_key == loadKey(server, folder, Library.settings())
+    if not reopened then Library.load() end
+    if server then
+        UIManager:unschedule(scheduledCheck)
+        UIManager:scheduleIn(CHECK_DELAY, scheduledCheck)
+    end
+    Timing.record(reopened and "startup: plugin (reopened)" or "startup: plugin", Timing.since(t_start),
+        reopened and "catalog already loaded" or "catalog load")
 end
 
 function Library.poll()

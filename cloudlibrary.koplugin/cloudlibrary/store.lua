@@ -101,8 +101,11 @@ function Store.open(path, wal)
         logger.info("CloudLibrary: catalog schema", version, "-> rebuilding")
         conn:exec("DROP TABLE IF EXISTS books; DROP TABLE IF EXISTS meta; DROP TABLE IF EXISTS local_files;")
     end
-    conn:exec(SCHEMA)
-    conn:exec("PRAGMA user_version=" .. SCHEMA_VERSION .. ";")
+    -- Up to date: nothing to write (a write here is a disk sync on e-readers).
+    if version ~= SCHEMA_VERSION then
+        conn:exec(SCHEMA)
+        conn:exec("PRAGMA user_version=" .. SCHEMA_VERSION .. ";")
+    end
     return setmetatable({ conn = conn, path = path }, Store)
 end
 
