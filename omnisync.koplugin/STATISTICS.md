@@ -183,7 +183,9 @@ setting):
   **review**;
 - **custom metadata** set in Book information (title, authors, series,
   series index, keywords, language, description), not custom covers;
-- the **handmade table of contents** and **hidden flows**.
+- the **handmade table of contents** and **hidden flows**;
+- **collections and favorites**: which books are in which collection, and
+  the collections' names (see below).
 
 As for highlights, they go to devices with the same file. Each item syncs
 on its own, and the newest change wins.
@@ -202,6 +204,21 @@ on its own, and the newest change wins.
 - **Resetting a book's settings** (or deleting its `.sdr` folder) doesn't
   clear anything on other devices: the synced values come back instead.
 - **Reviews are sent as plain text** to your server.
+
+**Collections and favorites** go by book, not by where the file is, so
+each device can keep its books in different folders:
+
+- Putting a book in a collection or taking it out, making, renaming and
+  removing collections: right after a sync (or when you next leave a menu
+  or dialog that's open), and for a book when it's opened.
+- The first sync puts together what each device had.
+- A book that's never been opened on a device is added to its collections
+  there when it's first opened.
+- Deleting a book's file on one device doesn't take it out of its
+  collections on the others.
+- Each device keeps its own order of books and collections, sorting,
+  filters and connected folders.
+- Don't sync `settings/collection.lua` with settings sync as well.
 
 Details in [BOOKDATA.md](BOOKDATA.md).
 

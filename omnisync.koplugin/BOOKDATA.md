@@ -1,8 +1,9 @@
 # Book data sync design
 
 Syncing what you set by hand about a book, apart from highlights and
-reading progress: its status, rating and review, custom metadata, and
-handmade table of contents and hidden flows. A third stream next to the
+reading progress: its status, rating and review, custom metadata,
+handmade table of contents and hidden flows, and the collections it's in
+(favorites included). A third stream next to the
 statistics and annotations, synced with annotations (same menu item, same
 automatic setting). Written against the same KOReader revision as
 ANNOTATIONS.md.
@@ -13,9 +14,8 @@ import) and `omnisync/booksync.lua` (in KOReader: reading and writing
 sidecars, the open book).
 
 Not covered: reading progress (KOReader's progress sync does that), custom
-covers (image files), collections and favorites (one global file keyed by
-path), display settings (font, margins, zoom: they belong to each device's
-screen).
+covers (image files), display settings (font, margins, zoom: they belong
+to each device's screen).
 
 ## What's synced
 
@@ -30,6 +30,11 @@ other streams):
 | `meta.<key>` | `custom_metadata.lua`, `custom_props` | title, authors, series, series_index, keywords, language, description |
 | `toc.<kind>` | sidecar `handmade_toc`, `handmade_toc_enabled` | `{ enabled, items }` |
 | `flows.<kind>` | sidecar `handmade_flow_points`, `handmade_flows_enabled` | `{ enabled, items }` |
+| `coll.<id>` | `settings/collection.lua` | `true`: the book is in collection `<id>` |
+
+Collections themselves are on a record that isn't a book, MD5
+`collections`: `coll.<id>` → `{ "name": … }`. See
+[Collections and favorites](#collections-and-favorites).
 
 `<kind>` is `rolling` (EPUB and other reflowable books: positions are
 XPointers) or `paging` (PDF, DjVu: page numbers), as for annotations; a
@@ -153,6 +158,70 @@ fills in "reading" and removes the reset marker.
   (Annotations are written into closed books the same way: see
   ANNOTATIONS.md.)
 
+## Collections and favorites
+
+Implemented in `omnisync/collsync.lua`, with its queries in
+`bookstore.lua`. KOReader keeps every collection in one file,
+`settings/collection.lua`, by name and by file path. Neither works across
+devices (paths differ, names change), so:
+
+- **Membership is a book property**, `coll.<id>` under the book's MD5,
+  set (`true`) or cleared, last writer wins as for the rest. Versions of a
+  book share it (`BookFormat.isGroupProp`): a book favourited as one
+  edition is a favourite as the other.
+- **Collections are properties of the `collections` record**: `coll.<id>`
+  → `{ name }`, cleared when the collection is removed. MD5 `collections`
+  isn't hex, so it can't be a book; older versions keep it as an unknown
+  book with unknown properties and pass it on.
+- **IDs**: KOReader keys collections by name, so the ID goes into the
+  collection's settings in `collection.lua` (`omnisync_id`), which
+  KOReader keeps and carries over when the collection is renamed.
+  Favorites is always `favorites`. A collection without an ID gets the
+  first 16 hex digits of its name's MD5, so collections of the same name
+  made on two devices before they synced are one; if that ID belongs to a
+  collection of another name, it gets a random one.
+- **Only membership and names** are synced. The order of books and of
+  collections, sorting, filters and connected folders stay each device's
+  own (connected folders are paths). A book a connected folder adds is an
+  ordinary membership.
+
+Dates, as for the other properties:
+
+- The first time a device looks at its collections, what's in them is as
+  old as can be (time 0), so it only adds where the merged state has
+  nothing (a union) and never undoes a removal made elsewhere.
+- After that, a collection not looked at before, and a book not seen
+  before in a collection that was, are changes made now. So a collection
+  made again with the name of one removed earlier stays.
+
+When things are looked at and applied:
+
+- **Before each sync** with book data: the books in collections get their
+  MD5s (from the book data's known files, a cache by file size and time
+  `coll_files`, the sidecar's `partial_md5_checksum`, or computed from the
+  file as KOReader does), a chunk per UI tick; then the collections are
+  compared with what was seen last time (`book_local`).
+- **After the sync**, unless a menu or dialog is open (KOReader's
+  collection views keep their own copy and write it when closed; retried
+  every 2 seconds for 3 minutes): removals, then renames, then new
+  collections, so names freed are free for the others; then books are put
+  in and taken out. KOReader allows one collection per name: a collection
+  arriving with a name taken here by another is given a free one
+  ("Name (2)"), which is then a rename like any other, so every device
+  ends up with the same names.
+- **When a book is opened**, it's put in the collections it belongs to.
+- Books are found where book data knows them (books opened on this device)
+  and among books already in collections. A book on this device that's
+  never been opened and isn't in a collection is put in its collections
+  when it's first opened.
+- **A book file gone from this device** isn't a removal from its
+  collections (KOReader drops missing files from them): what this device
+  saw of that book's collections is forgotten, and when the file comes
+  back it's put back in.
+
+Settings sync shouldn't also sync `settings/collection.lua`: the two would
+fight over it.
+
 ## Local state (in `omnisync/state.sqlite3`)
 
 ```
@@ -161,6 +230,7 @@ book_local(md5, prop, hash)                -- this device's copy, as last seen
 book_outbox(md5, prop, updated)            -- changes waiting to be sent
 book_books(md5, title, authors, write)     -- write: closed-book values to write here
 book_files(path, md5, sig)                 -- where the book is; sidecar size and time
+coll_files(path, md5, sig)                 -- books in collections; file size and time
 id_groups(md5, grp)                        -- versions of a book (kept by idstore.lua)
 ```
 
@@ -171,7 +241,10 @@ again).
 
 ## Tests
 
-`tests/test_omnisync_book.lua`: the format, merge order independence and
+`tests/test_omnisync_coll.lua`: collections (KOReader's ReadCollection
+stood in for): first sync as a union, IDs from names, rename, removal,
+a collection made again, files gone and back, busy and retried, name
+clashes, versions of a book. `tests/test_omnisync_book.lua`: the format, merge order independence and
 idempotence, first-look and "reading" rules, clears, reset sidecars,
 closed-book writes (summary and custom metadata files, real files with
 `DocSettings` stood in for), refresh by signature, and applying to an open

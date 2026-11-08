@@ -25,6 +25,8 @@ Tables:
     book_books  md5 -> title, authors, write (closed-book properties to write here)
     book_files  path -> md5, sig: where this device has each book, and its
                 sidecar's size and time when last read
+    coll_files  path -> md5, sig: books in collections, with the file's size
+                and time when its MD5 was found (see collsync.lua)
 
 Segments imported are recorded in seen_segments and bad_segments, like the
 other streams' (names book-…).
@@ -81,6 +83,12 @@ local SCHEMA = [[
         sig  TEXT
     );
     CREATE INDEX IF NOT EXISTS book_files_md5 ON book_files (md5);
+    CREATE TABLE IF NOT EXISTS coll_files (
+        path TEXT PRIMARY KEY,
+        md5  TEXT NOT NULL,
+        sig  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS coll_files_md5 ON coll_files (md5);
     CREATE TABLE IF NOT EXISTS id_groups (
         md5 TEXT PRIMARY KEY,
         grp TEXT NOT NULL
@@ -187,7 +195,7 @@ local function loadEffective(conn, md5)
     local group = groupOf(conn, md5)
     for i = 2, #group do
         for prop, m in pairs(loadMerged(conn, group[i])) do
-            if BookFormat.GROUP_PROPS[prop] and BookStore.wins(m, eff[prop]) then eff[prop] = m end
+            if BookFormat.isGroupProp(prop) and BookStore.wins(m, eff[prop]) then eff[prop] = m end
         end
     end
     return eff
@@ -306,61 +314,73 @@ end
 --
 -- Returns { changed, skipped, write }.
 function BookStore:observe(opts)
+    return self:_tx(function(conn) return self:_observeIn(conn, opts) end)
+end
+
+--- observe() for several books in one transaction. Returns the summaries.
+function BookStore:observeMany(list)
+    if #list == 0 then return {} end
+    return self:_tx(function(conn)
+        local out = {}
+        for i, opts in ipairs(list) do out[i] = self:_observeIn(conn, opts) end
+        return out
+    end)
+end
+
+function BookStore:_observeIn(conn, opts)
     local md5, now, device = opts.md5, opts.now, opts.device
     local snap, skipped = self:snapshot(opts.values)
     local times = opts.times or {}
-    return self:_tx(function(conn)
-        ensureBook(conn, md5, opts)
-        if opts.title or opts.authors then
-            local up = conn:prepare("UPDATE book_books SET title = coalesce(?, title), authors = coalesce(?, authors) WHERE md5 = ?;")
-            up:bind(opts.title, opts.authors, md5):step()
-            up:close()
-        end
-        if opts.path then
-            local f = conn:prepare("INSERT OR REPLACE INTO book_files (path, md5, sig) VALUES (?, ?, ?);")
-            f:bind(opts.path, md5, opts.sig):step()
-            f:close()
-        end
-        local merged = loadMerged(conn, md5)
-        local eff = loadEffective(conn, md5)
-        local loc = loadLocal(conn, md5)
-        local res = { changed = 0, skipped = skipped }
+    ensureBook(conn, md5, opts)
+    if opts.title or opts.authors then
+        local up = conn:prepare("UPDATE book_books SET title = coalesce(?, title), authors = coalesce(?, authors) WHERE md5 = ?;")
+        up:bind(opts.title, opts.authors, md5):step()
+        up:close()
+    end
+    if opts.path then
+        local f = conn:prepare("INSERT OR REPLACE INTO book_files (path, md5, sig) VALUES (?, ?, ?);")
+        f:bind(opts.path, md5, opts.sig):step()
+        f:close()
+    end
+    local merged = loadMerged(conn, md5)
+    local eff = loadEffective(conn, md5)
+    local loc = loadLocal(conn, md5)
+    local res = { changed = 0, skipped = skipped }
 
-        -- Recorded under this book's own MD5; compared with what applies
-        -- to it (its versions' records too) to tell whether it changed.
-        local function record(prop, rec)
-            if BookStore.wins(rec, merged[prop]) then
-                putMerged(conn, md5, prop, rec)
-                putOutbox(conn, md5, prop, rec.updated)
-                merged[prop] = rec
-                if BookStore.wins(rec, eff[prop]) then eff[prop] = rec end
-                res.changed = res.changed + 1
-            end
+    -- Recorded under this book's own MD5; compared with what applies
+    -- to it (its versions' records too) to tell whether it changed.
+    local function record(prop, rec)
+        if BookStore.wins(rec, merged[prop]) then
+            putMerged(conn, md5, prop, rec)
+            putOutbox(conn, md5, prop, rec.updated)
+            merged[prop] = rec
+            if BookStore.wins(rec, eff[prop]) then eff[prop] = rec end
+            res.changed = res.changed + 1
         end
+    end
 
-        for prop, s in pairs(snap) do
-            local prev = loc[prop]
-            local first = opts.fresh or prev == nil
-            local m = eff[prop]
-            local same = m and not m.deleted and m.hash == s.hash
-            if s.hash == "" then
-                if not first and prev ~= "" and prop ~= "status" and not (m and m.deleted) then
-                    record(prop, { updated = now, device = device, deleted = true, hash = "" })
-                end
-            elseif not same and (first or prev ~= s.hash) then
-                local upd = now
-                if first then upd = times[prop] or 0 end
-                if prop == "status" and (first or prev == "") and AnnFormat.decodeValue(s.json) == "reading" then
-                    upd = 0
-                end
-                record(prop, { updated = upd, device = device, deleted = false, hash = s.hash, value = s.json })
+    for prop, s in pairs(snap) do
+        local prev = loc[prop]
+        local first = opts.fresh or prev == nil
+        local m = eff[prop]
+        local same = m and not m.deleted and m.hash == s.hash
+        if s.hash == "" then
+            if not first and prev ~= "" and prop ~= "status" and not (m and m.deleted) then
+                record(prop, { updated = now, device = device, deleted = true, hash = "" })
             end
-            putLocal(conn, md5, prop, s.hash)
-            loc[prop] = s.hash
+        elseif not same and (first or prev ~= s.hash) then
+            local upd = now
+            if first then upd = times[prop] or 0 end
+            if prop == "status" and (first or prev == "") and AnnFormat.decodeValue(s.json) == "reading" then
+                upd = 0
+            end
+            record(prop, { updated = upd, device = device, deleted = false, hash = s.hash, value = s.json })
         end
-        res.write = updateWrite(conn, md5, eff, loc)
-        return res
-    end)
+        putLocal(conn, md5, prop, s.hash)
+        loc[prop] = s.hash
+    end
+    res.write = updateWrite(conn, md5, eff, loc)
+    return res
 end
 
 -- Applying the merged state ----------------------------------------------------------
@@ -403,6 +423,115 @@ function BookStore:applied(md5, values, path, sig)
             f:close()
         end
         return updateWrite(conn, md5, loadEffective(conn, md5), loadLocal(conn, md5))
+    end)
+end
+
+--- applied() for several books in one transaction: list = { { md5, values }, … }.
+function BookStore:appliedMany(list)
+    if #list == 0 then return end
+    return self:_tx(function(conn)
+        for _, a in ipairs(list) do
+            ensureBook(conn, a.md5)
+            for prop, s in pairs(self:snapshot(a.values)) do putLocal(conn, a.md5, prop, s.hash) end
+        end
+    end)
+end
+
+-- Collections ---------------------------------------------------------------------------
+
+local IS_COLL = "substr(prop, 1, 5) = 'coll.'"
+
+--- This device's copy of collection properties, as last seen:
+-- { [md5] = { [prop] = hash } } (the collections record included).
+function BookStore:localColl()
+    return self:_read(function(conn)
+        local out = {}
+        for _, r in ipairs(rows(conn:prepare("SELECT md5, prop, hash FROM book_local WHERE " .. IS_COLL .. ";"))) do
+            out[r[1]] = out[r[1]] or {}
+            out[r[1]][r[2]] = r[3]
+        end
+        return out
+    end)
+end
+
+--- Forgets this device's copy of a book's collection properties (the book
+-- is gone from this device: that's not a removal from its collections).
+function BookStore:forgetLocalColl(md5)
+    return self:_tx(function(conn)
+        local stmt = conn:prepare("DELETE FROM book_local WHERE md5 = ? AND " .. IS_COLL .. ";")
+        stmt:bind(md5):step()
+        stmt:close()
+    end)
+end
+
+--- The merged collections: { [id] = { name, deleted, updated } }.
+function BookStore:collections()
+    return self:_read(function(conn)
+        local out = {}
+        for prop, m in pairs(loadMerged(conn, BookFormat.COLLECTIONS)) do
+            local id = BookFormat.collId(prop)
+            local v = id and not m.deleted and AnnFormat.decodeValue(m.value)
+            if id then
+                out[id] = { deleted = m.deleted or type(v) ~= "table", updated = m.updated,
+                            name = type(v) == "table" and v.name or nil }
+            end
+        end
+        return out
+    end)
+end
+
+--- The merged memberships that apply to these books (their versions'
+-- records included): { [md5] = { [id] = in_it } }, only for books with any.
+-- md5s = { [md5] = true }.
+function BookStore:memberships(md5s)
+    return self:_read(function(conn)
+        local with = {}
+        local stmt = conn:prepare("SELECT DISTINCT md5 FROM book_merged WHERE " .. IS_COLL .. " AND md5 <> ?;")
+        stmt:bind(BookFormat.COLLECTIONS)
+        for _, r in ipairs(rows(stmt)) do
+            for _, m in ipairs(groupOf(conn, r[1])) do with[m] = true end
+        end
+        local out = {}
+        for md5 in pairs(md5s) do
+            if with[md5] then
+                local map
+                for prop, m in pairs(loadEffective(conn, md5)) do
+                    local id = BookFormat.collId(prop)
+                    if id then
+                        map = map or {}
+                        map[id] = not m.deleted
+                    end
+                end
+                out[md5] = map
+            end
+        end
+        return out
+    end)
+end
+
+--- path -> { md5, sig } for books whose MD5 was found for collections.
+function BookStore:collFiles()
+    return self:_read(function(conn)
+        local out = {}
+        for _, r in ipairs(rows(conn:prepare("SELECT path, md5, sig FROM coll_files;"))) do
+            out[r[1]] = { md5 = r[2], sig = r[3] }
+        end
+        return out
+    end)
+end
+
+--- Records (md5 given) or forgets (md5 nil) books' MD5s: list = { { path, md5, sig }, … }.
+function BookStore:setCollFiles(list)
+    if #list == 0 then return end
+    return self:_tx(function(conn)
+        local put = conn:prepare("INSERT OR REPLACE INTO coll_files (path, md5, sig) VALUES (?, ?, ?);")
+        local del = conn:prepare("DELETE FROM coll_files WHERE path = ?;")
+        for _, f in ipairs(list) do
+            if f.md5 then put:reset():bind(f.path, f.md5, f.sig):step()
+            else del:reset():bind(f.path):step() end
+        end
+        put:close()
+        del:close()
     end)
 end
 
@@ -582,7 +711,8 @@ end
 function BookStore:counts()
     return self:_read(function(conn)
         return {
-            books = num(conn:rowexec("SELECT count(DISTINCT md5) FROM book_merged WHERE deleted = 0;")),
+            books = num(conn:rowexec("SELECT count(DISTINCT md5) FROM book_merged WHERE deleted = 0 AND md5 <> '"
+                .. BookFormat.COLLECTIONS .. "';")),
             outbox = num(conn:rowexec("SELECT count(*) FROM book_outbox;")),
             write = num(conn:rowexec([[SELECT count(DISTINCT b.md5) FROM book_books b
                                        JOIN book_files f ON f.md5 = b.md5 WHERE b.write = 1;]])),

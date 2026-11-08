@@ -186,7 +186,10 @@ function OmniSync.trigger(reason, what, interactive, scanned, refreshed)
     if what.ann and not refreshed then
         -- Book data changed in the file browser (status, rating, metadata):
         -- read the sidecars that changed since last time.
-        if Plugin.bookSync():refresh(function() OmniSync.trigger(reason, what, interactive, true, true) end) then
+        -- And find the books in collections (their MD5s), the first time many.
+        if Plugin.bookSync():refresh(function()
+            Plugin.collSync():refresh(function() OmniSync.trigger(reason, what, interactive, true, true) end)
+        end) then
             return
         end
     end
@@ -247,7 +250,7 @@ Or send everything this device has to this folder?]]), Plugin.serverLocation() o
             table.insert(lines, T(_("Upload of statistics failed: %1"), run.upload_error))
         end
         if run.book then
-            table.insert(lines, T(_("Book status and details: sent %1 changes, received %2."),
+            table.insert(lines, T(_("Book status, details and collections: sent %1 changes, received %2."),
                 run.book_uploaded_records or 0, run.book_imported_records or 0))
         end
         if run.ann_upload_error then
@@ -270,6 +273,8 @@ function OmniSync:onReaderReady()
     local ui = self.ui
     local function ready()
         Plugin.bookSync():onReaderReady(ui)
+        local md5 = ui.doc_settings and ui.doc_settings:readSetting("partial_md5_checksum")
+        Plugin.collSync():onBookOpened(md5)
         if Plugin.annSync():onReaderReady(ui) > 0 then
             UIManager:scheduleIn(1, function() Plugin.annSync():askHeld() end)
         end
@@ -660,7 +665,7 @@ function OmniSync:menuItems()
         },
         {
             text = _("Highlights and books"),
-            help_text = _([[Highlights, notes and page bookmarks, with book status (reading, on hold, finished), rating, review, custom metadata (title, authors, series…), the handmade table of contents and hidden flows.]]),
+            help_text = _([[Highlights, notes and page bookmarks, with book status (reading, on hold, finished), rating, review, custom metadata (title, authors, series…), the handmade table of contents, hidden flows, and collections and favorites.]]),
             sub_item_table = {
                 {
                     text = _("Sync now"),
@@ -671,7 +676,7 @@ function OmniSync:menuItems()
                     text = _("Sync automatically"),
                     help_text = _([[Sync highlights, notes and page bookmarks at the same times as statistics, for books with the same file on each device. Changes from other devices are written into books right after a sync, including books that aren't open (if they've been opened on this device before).
 
-Book status (reading, on hold, finished), rating, review, custom metadata (title, authors, series…) and the handmade table of contents and hidden flows are synced with them. Status, rating, review and metadata are written into books that aren't open too; the table of contents waits until the book is opened.
+Book status (reading, on hold, finished), rating, review, custom metadata (title, authors, series…) and the handmade table of contents and hidden flows are synced with them, and so are collections and favorites (which books are in which, and the collections' names). Status, rating, review, metadata and collections are written into books that aren't open too; the table of contents waits until the book is opened.
 
 Notes and reviews are stored on the server as plain text.
 

@@ -8,8 +8,8 @@ KOReader's Cloud storage:
 - **Reading statistics** (WebDAV). See [STATISTICS.md](STATISTICS.md).
 - **Highlights, notes and page bookmarks** (WebDAV). See
   [STATISTICS.md](STATISTICS.md#highlights-and-bookmarks).
-- **Book status, rating, review, custom metadata and handmade table of
-  contents**, with highlights (WebDAV). See
+- **Book status, rating, review, custom metadata, handmade table of
+  contents, and collections and favorites**, with highlights (WebDAV). See
   [STATISTICS.md](STATISTICS.md#book-status-and-details).
 - **Book identity** (which files are the same book), with highlights
   (WebDAV): a book's status, rating, review and custom metadata are shared
@@ -51,7 +51,8 @@ Tools → OmniSync, in both the file browser and the reader:
   it off).
 - **Highlights and books** → **Sync now**, **Sync automatically** (on unless
   you turn it off). Highlights, notes and bookmarks, with book status,
-  rating, review, metadata and the handmade table of contents.
+  rating, review, metadata, the handmade table of contents, and
+  collections and favorites.
 - **Server** and **Folder on server**.
 - **Turn on Wi-Fi for automatic syncs** (off by default).
 - **Status**: server and folders, last syncs and errors, devices seen, books known in more than one version,

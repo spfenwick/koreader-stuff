@@ -19,6 +19,7 @@ local AnnStore = require("omnisync/annstore")
 local AnnSync = require("omnisync/annsync")
 local BookStore = require("omnisync/bookstore")
 local BookSync = require("omnisync/booksync")
+local CollSync = require("omnisync/collsync")
 local Engine = require("omnisync/engine")
 local IdScan = require("omnisync/idscan")
 local IdStore = require("omnisync/idstore")
@@ -293,6 +294,24 @@ function Plugin.bookSync()
     return book_sync
 end
 
+local coll_sync
+
+--- The process-wide collections and favorites sync (synced with book data).
+function Plugin.collSync()
+    if coll_sync then return coll_sync end
+    coll_sync = CollSync.new{
+        store = Plugin.bookStore(),
+        getDeviceId = Plugin.deviceId,
+        now = os.time,
+        logger = logger,
+        enabled = function() return true end,
+        schedule = function(delay, fn)
+            if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
+        end,
+    }
+    return coll_sync
+end
+
 local id_store
 
 function Plugin.idStore()
@@ -420,8 +439,15 @@ function Plugin.engine()
         },
         book = {
             store = Plugin.bookStore(),
-            collect = function() Plugin.bookSync():collect() end,
-            afterSync = function(run) Plugin.bookSync():afterSync(run) end,
+            collect = function()
+                Plugin.bookSync():collect()
+                local ok, err = pcall(function() Plugin.collSync():observe() end)
+                if not ok then logger.warn("OmniSync: recording collection changes failed:", err) end
+            end,
+            afterSync = function(run)
+                Plugin.bookSync():afterSync(run)
+                Plugin.collSync():afterSync()
+            end,
         },
         id = {
             store = Plugin.idStore(),

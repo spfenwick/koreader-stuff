@@ -10,6 +10,11 @@ device. Each is a property of a book, identified by (md5, prop):
                         series_index, keywords, language, description)
     toc.<kind>          handmade table of contents, { enabled, items }
     flows.<kind>        hidden flows, { enabled, items }
+    coll.<id>           in collection <id> (favorites, or one of the user's): true
+
+Collections themselves are properties of a record that isn't a book, its
+MD5 "collections" (BookFormat.COLLECTIONS): coll.<id> -> { name }. The ID
+stays the same when a collection is renamed (see collsync.lua).
 
 <kind> is "rolling" (CREngine, positions are XPointers) or "paging"
 (PDF/DjVu, page numbers), as for annotations.
@@ -35,7 +40,7 @@ local BookFormat = {}
 
 BookFormat.FORMAT = "statsync-book"
 BookFormat.VERSION = 1
-BookFormat.MINOR = 0
+BookFormat.MINOR = 1
 --- Version number recorded with bad segments (apart from the other streams').
 BookFormat.BAD_VERSION = 200000 + BookFormat.VERSION * 1000 + BookFormat.MINOR
 
@@ -55,8 +60,26 @@ for _, k in ipairs(BookFormat.META_KEYS) do BookFormat.CLOSED_PROPS["meta." .. k
 --- Properties about the book rather than places in it: every version of a
 -- book (files sharing a UUID, see IDENTITY.md) shares them. The handmade
 -- TOC and flows hold positions, so they stay with their own file.
+-- Collection memberships are shared too (see isGroupProp).
 BookFormat.GROUP_PROPS = {}
 for prop in pairs(BookFormat.CLOSED_PROPS) do BookFormat.GROUP_PROPS[prop] = true end
+
+--- The record holding the collections (not a book; not hex, so no MD5 clashes).
+BookFormat.COLLECTIONS = "collections"
+
+--- KOReader's own collection, which can't be renamed or removed.
+BookFormat.FAVORITES = "favorites"
+
+--- The collection ID of a property, or nil.
+function BookFormat.collId(prop)
+    local id = type(prop) == "string" and prop:match("^coll%.([%w_%-]+)$")
+    if id and #id <= 40 then return id end
+end
+
+--- Is this property shared by every version of a book?
+function BookFormat.isGroupProp(prop)
+    return BookFormat.GROUP_PROPS[prop] or BookFormat.collId(prop) ~= nil
+end
 
 local META = {}
 for _, k in ipairs(BookFormat.META_KEYS) do META["meta." .. k] = k end
@@ -101,6 +124,11 @@ function BookFormat.validValue(prop, v)
         if type(v) ~= "string" then return nil, "bad note" end
     elseif META[prop] then
         if type(v) ~= "string" and type(v) ~= "number" then return nil, "bad " .. prop end
+    elseif BookFormat.collId(prop) then
+        -- A book's membership, or a collection (on the collections record).
+        if v ~= true and not (type(v) == "table" and type(v.name) == "string" and v.name ~= "") then
+            return nil, "bad " .. prop
+        end
     else
         local what, kind = prop:match("^(%a+)%.(%a+)$")
         if (what == "toc" or what == "flows") and AnnFormat.KINDS[kind] then
@@ -115,6 +143,7 @@ end
 --- Is this a property this version applies?
 function BookFormat.known(prop)
     if prop == "status" or prop == "rating" or prop == "note" or META[prop] then return true end
+    if BookFormat.collId(prop) then return true end
     local what, kind = prop:match("^(%a+)%.(%a+)$")
     return (what == "toc" or what == "flows") and AnnFormat.KINDS[kind] or false
 end
@@ -152,7 +181,11 @@ local function validRecord(rec)
     if rec.dev ~= nil and not isToken(rec.dev) then return nil, "bad dev" end
     if rec.t == "p" then
         if rec.v == nil then return nil, "set without a value" end
-        return BookFormat.validValue(rec.prop, AnnFormat.fromJson(rec.v))
+        local v = AnnFormat.fromJson(rec.v)
+        if BookFormat.collId(rec.prop) and (rec.md5 == BookFormat.COLLECTIONS) ~= (type(v) == "table") then
+            return nil, "bad " .. rec.prop
+        end
+        return BookFormat.validValue(rec.prop, v)
     end
     return true
 end
