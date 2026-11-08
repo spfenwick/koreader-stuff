@@ -1,8 +1,7 @@
 # Builds KOReader's CREngine library (libkoreader-cre.so) from the
 # knuth-plass-history branch of spfenwick/crengine, for each device type
-# below, against the koreader-base of the latest KOReader nightly, and
-# publishes it on the rolling "engine" release with a manifest.json the
-# plugin's updater reads:
+# below, and publishes it on the rolling "engine" release with a
+# manifest.json the plugin's updater reads:
 #
 #   https://github.com/<repo>/releases/download/engine/manifest.json
 #
@@ -58,9 +57,6 @@ on:
   # Sent by spfenwick/crengine on a push to knuth-plass-history.
   repository_dispatch:
     types: [crengine-updated]
-  # Picks up nightlies with a new koreader-base (otherwise it stops early).
-  schedule:
-    - cron: "17 4 * * *"
 
 permissions:
   contents: write
