@@ -681,6 +681,33 @@ do
     check(lfs.attributes(dir .. "/" .. res.file) == nil, "removed book's cover deleted")
     store:close()
 
+    -- A first sync backfills every cover, a batch at a time.
+    local bstore = Store.open(TMP .. "/db/backfill.sqlite3", false)
+    newSync(bstore, Server.new(makeBooks(7), 10), 100):full()
+    local bdir = TMP .. "/covers-backfill"
+    rmrf(bdir); mkdir(bdir)
+    local good = function() return png end
+    local clock = function() return 9000 end
+    local b1 = Covers.prefetch(good, ORIGIN .. "/", bstore, bdir, { limit = 3, now = clock })
+    check(b1.backfill and b1.more, "first prefetch backfills and asks for more")
+    eq(b1.fetched, 3, "first batch")
+    local lost = Covers.prefetch(function() return nil, "timeout", "network" end,
+        ORIGIN .. "/", bstore, bdir, { limit = 3, now = clock })
+    check(lost.backfill and not lost.more, "lost network stops the chain")
+    eq(bstore:getMeta("covers_backfill"), "1", "backfilling resumes after the next sync")
+    local b2 = Covers.prefetch(good, ORIGIN .. "/", bstore, bdir, { limit = 3, now = clock })
+    check(b2.backfill and b2.more, "resumed with most covers already downloaded")
+    local b3 = Covers.prefetch(good, ORIGIN .. "/", bstore, bdir, { limit = 3, now = clock })
+    eq(b3.fetched, 1, "last batch")
+    check(b3.backfill_done and not b3.more, "backfill finished")
+    eq(bstore:getMeta("covers_backfill"), nil, "backfill flag cleared")
+    -- Later syncs: a few new books get one batch, no backfill.
+    newSync(bstore, Server.new(makeBooks(9), 10), 200):full()
+    local later = Covers.prefetch(good, ORIGIN .. "/", bstore, bdir, { limit = 3, now = clock })
+    check(not later.backfill and not later.more, "no backfill when most covers are here")
+    eq(later.fetched, 2, "new books' covers fetched")
+    bstore:close()
+
     -- Cover states.
     local can = true
     Virtual.canFetchCovers = function() return can end

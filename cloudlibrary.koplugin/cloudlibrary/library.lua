@@ -57,7 +57,7 @@ Badge.isCloud = function(path) return Virtual.by_path[path] ~= nil end
 
 local QUICK_INTERVAL = 60 * 60       -- auto sync at most hourly
 local FULL_INTERVAL = 24 * 60 * 60   -- and a full sync daily
-local PREFETCH_COVERS = 300          -- covers downloaded by each sync, newest first
+local PREFETCH_COVERS = 300          -- covers a batch after each sync, newest first (all, in batches, on a first sync)
 local PREFETCH_SECONDS = 180
 local CHECK_DELAY = 3                -- s after the file browser opens: let it draw first
 
@@ -288,10 +288,14 @@ local function runJob(server, folder, mode, db_path, wal, covers_dir)
         store:fillMatchKeys() -- once, after the upgrade to schema 5
         if mode == "covers" or mode == "prefetch" then
             util.makePath(covers_dir)
-            local opts = mode == "prefetch"
-                and { limit = PREFETCH_COVERS, deadline = os.time() + PREFETCH_SECONDS }
-                or { retry_all = true } -- "Download missing covers": retry failed ones too
-            result.covers = Covers.downloadMissing(Http.fetcher(server), server.url, store, covers_dir, opts)
+            if mode == "prefetch" then
+                result.covers = Covers.prefetch(Http.fetcher(server), server.url, store, covers_dir,
+                    { limit = PREFETCH_COVERS, deadline = os.time() + PREFETCH_SECONDS })
+            else
+                -- "Download missing covers": retry failed ones too.
+                result.covers = Covers.downloadMissing(Http.fetcher(server), server.url, store, covers_dir,
+                    { retry_all = true })
+            end
             result.covers.results = nil
             return
         end
@@ -433,8 +437,13 @@ local function pollJob()
             notify(describeResult(result))
         end
     end
-    -- After a sync, download some missing covers (newest books first).
-    if result.sync and not result.error and Covers.canFetch() then
+    -- After a sync, download some missing covers (newest books first), and
+    -- keep going while backfilling (most covers were missing).
+    local covers = job.mode == "prefetch" and result.covers
+    if covers and covers.backfill_done then
+        notify(T(_("Cloud library: all %1 covers downloaded."), Library.stats.covers or 0))
+    end
+    if not result.error and Covers.canFetch() and (result.sync or (covers and covers.more)) then
         Library.sync("prefetch", true)
     end
 end

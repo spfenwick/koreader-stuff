@@ -125,6 +125,36 @@ function Covers.downloadMissing(fetch, root, store, dir, opts)
     return Covers.download(fetch, root, store, dir, books, opts)
 end
 
+--- The download after each sync: a batch of missing covers (opts as for
+-- downloadMissing, with limit). When most covers are missing (a first sync),
+-- it switches to backfilling, kept in the store until every cover is done:
+-- result.more says to start the next batch at once, result.backfill_done
+-- that the last one was fetched. A lost network leaves backfilling on, so
+-- the next sync carries on.
+function Covers.prefetch(fetch, root, store, dir, opts)
+    opts = opts or {}
+    local clock = opts.now or os.time
+    local backfill = store:getMeta("covers_backfill") == "1"
+    if not backfill then
+        local with_cover, downloaded, failed = store:coverCounts()
+        if with_cover - downloaded - failed > with_cover / 2 then
+            backfill = true
+            store:setMeta("covers_backfill", "1")
+        end
+    end
+    local result = Covers.downloadMissing(fetch, root, store, dir, opts)
+    result.backfill = backfill
+    if backfill and not result.network_error then
+        if #store:missingCovers(1, clock() - RETRY_AFTER) > 0 then
+            result.more = result.fetched + result.failed > 0
+        else
+            store:setMeta("covers_backfill", nil)
+            result.backfill_done = true
+        end
+    end
+    return result
+end
+
 --- Removes cover files no book uses (books gone from the catalog).
 function Covers.cleanup(store, dir)
     local used = store:coverFiles()
