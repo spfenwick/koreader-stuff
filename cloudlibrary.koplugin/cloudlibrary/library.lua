@@ -56,7 +56,7 @@ Badge.isOnDevice = function(path) return Library.on_device[path] == true end
 Badge.isCloud = function(path) return Virtual.by_path[path] ~= nil end
 
 local QUICK_INTERVAL = 60 * 60       -- auto sync at most hourly
-local FULL_INTERVAL = 24 * 60 * 60   -- and a full sync daily
+local FULL_INTERVAL = 7 * 24 * 60 * 60 -- and a full sync weekly (or when the book count changes)
 local PREFETCH_COVERS = 300          -- covers a batch after each sync, newest first (all, in batches, on a first sync)
 local PREFETCH_SECONDS = 180        -- (a batch, also for "Download missing covers")
 local MAX_CRASHES = 3               -- cover jobs dying in a row before giving up
@@ -362,7 +362,11 @@ end
 -- opts: carried from one cover batch to the next (see pollJob).
 function Library.sync(mode, quiet, opts)
     if Library.job then
-        if not quiet then notify(_("Cloud library: already syncing.")) end
+        if not quiet then
+            local covers = Library.job.mode == "covers" or Library.job.mode == "prefetch"
+            notify(covers and _("Cloud library: already downloading covers.")
+                or _("Cloud library: already syncing."))
+        end
         return false
     end
     local server, folder = Library.server(), Library.folder()
@@ -711,7 +715,10 @@ function Library.statusText()
         table.insert(lines, _("Compatibility:"))
         table.insert(lines, problems)
     end
-    if Library.job then table.insert(lines, _("Syncing now…")) end
+    if Library.job then
+        local covers = Library.job.mode == "covers" or Library.job.mode == "prefetch"
+        table.insert(lines, covers and _("Downloading covers…") or _("Syncing now…"))
+    end
     return table.concat(lines, "\n")
 end
 
@@ -729,7 +736,7 @@ function Library.menuEntry(plugin)
                 -- Syncing
                 {
                     text = _("Sync now"),
-                    help_text = _("Adds books new to the catalog since the last sync. If the last full sync was over a day ago, does a full sync instead."),
+                    help_text = _("Adds books new to the catalog since the last sync. If the number of books changed, or the last full sync was over a week ago, does a full sync instead."),
                     enabled_func = has_server,
                     callback = function() Library.sync("quick") end,
                 },
@@ -747,7 +754,7 @@ function Library.menuEntry(plugin)
                 },
                 {
                     text = _("Sync automatically"),
-                    help_text = _("When the file browser opens and Wi-Fi is on: new books at most hourly, everything daily."),
+                    help_text = _("When the file browser opens and Wi-Fi is on: new books at most hourly; everything weekly, or when the number of books changed."),
                     checked_func = function() return Library.settings().auto_sync ~= false end,
                     callback = function()
                         Library.save("auto_sync", Library.settings().auto_sync == false)
