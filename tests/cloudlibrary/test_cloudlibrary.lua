@@ -625,6 +625,8 @@ do
     local res = r.results[books[5].uuid]
     check(res and res.w == 30 and res.h == 45, "image size recorded")
     check(lfs.attributes(dir .. "/" .. res.file, "mode") == "file", "cover file written")
+    eq(res.file, books[5].uuid:sub(1, 2):lower() .. "/" .. books[5].uuid .. ".png",
+        "cover in a subfolder named after the start of the UUID")
     check(lfs.attributes(dir .. "/" .. res.file .. ".part") == nil, "no partial file left")
     eq(r.results[books[1].uuid], false, "html response failed")
     local _w, have = store:coverCounts()
@@ -681,6 +683,19 @@ do
     newSync(store, server, 200):full()
     eq(Covers.cleanup(store, dir), 2, "unused cover files removed")
     check(lfs.attributes(dir .. "/" .. res.file) == nil, "removed book's cover deleted")
+
+    -- Covers saved before subfolders are moved into them.
+    local flat = books[4].uuid .. ".png"
+    local nested = Covers.fileFor(books[4].uuid, "png")
+    os.rename(dir .. "/" .. nested, dir .. "/" .. flat)
+    store:moveCoverFile(nested, flat)
+    local removed, moved = Covers.cleanup(store, dir)
+    eq(removed, 0, "nothing removed when moving")
+    eq(moved, 1, "flat cover moved")
+    check(lfs.attributes(dir .. "/" .. nested, "mode") == "file", "cover now in its subfolder")
+    check(lfs.attributes(dir .. "/" .. flat) == nil, "flat file gone")
+    eq(store:coverFiles()[nested], true, "store points at the moved file")
+    eq(Covers.fileFor("..x", "png"), "_/..x.png", "odd ids go in a catch-all subfolder")
     store:close()
 
     -- A first sync backfills every cover, a batch at a time.

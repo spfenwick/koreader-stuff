@@ -1,7 +1,9 @@
 --[[
 Cover images for cloud books, downloaded from the catalog and kept in a
 folder next to the catalog database (the server's own files, mostly small
-WebP thumbnails).
+WebP thumbnails). Files go in subfolders named after the first two
+characters of the book's UUID ("0f/0f3c….webp"): on FAT32 (Kobo and Kindle
+user storage) one folder holds only about 13,000 files with names this long.
 
 Covers.download(fetch, root, store, dir, books, opts)
     blocking: downloads covers for books ({ id, href }), records them in the
@@ -50,6 +52,14 @@ local function imageSize(data)
     return w, h
 end
 
+--- Cover file name for a book, relative to the covers folder: in a
+-- subfolder named after the first two characters of its id.
+function Covers.fileFor(id, ext)
+    local bucket = tostring(id):sub(1, 2):lower()
+    if not bucket:match("^%w%w$") then bucket = "_" end
+    return bucket .. "/" .. id .. "." .. ext
+end
+
 --- Downloads covers, writing each file atomically and recording it in the
 -- store. opts: { now = os.time, deadline = unix time to stop at,
 -- image_size = function(data) -> w, h, track = true to record the cover
@@ -86,7 +96,8 @@ function Covers.download(fetch, root, store, dir, books, opts)
         end
         if w and h then
             t0 = clock()
-            local file = book.id .. "." .. ext
+            local file = Covers.fileFor(book.id, ext)
+            lfs.mkdir(dir .. "/" .. file:match("^[^/]+")) -- fails harmlessly if it exists
             local tmp = dir .. "/" .. file .. ".part"
             local f = io.open(tmp, "wb")
             local written = f and f:write(data)
@@ -179,19 +190,44 @@ function Covers.prefetch(fetch, root, store, dir, opts)
     return result
 end
 
---- Removes cover files no book uses (books gone from the catalog).
+--- Removes cover files no book uses (books gone from the catalog), and moves
+-- covers saved before subfolders were used into their subfolder. Returns the
+-- number of files removed and the number moved.
 function Covers.cleanup(store, dir)
     local used = store:coverFiles()
-    local removed = 0
+    local removed, moved = 0, 0
     local ok, iter, d = pcall(lfs.dir, dir)
-    if not ok then return 0 end
+    if not ok then return 0, 0 end
+    local names = {}
     for name in iter, d do
-        if name ~= "." and name ~= ".." and not used[name] then
-            os.remove(dir .. "/" .. name)
+        if name ~= "." and name ~= ".." then table.insert(names, name) end
+    end
+    for _i, name in ipairs(names) do
+        local path = dir .. "/" .. name
+        if lfs.attributes(path, "mode") == "directory" then
+            for sub in lfs.dir(path) do
+                if sub ~= "." and sub ~= ".." and not used[name .. "/" .. sub] then
+                    os.remove(path .. "/" .. sub)
+                    removed = removed + 1
+                end
+            end
+        elseif used[name] then
+            local id, ext = name:match("^(.+)%.(%w+)$")
+            local file = id and Covers.fileFor(id, ext)
+            if file then
+                lfs.mkdir(dir .. "/" .. file:match("^[^/]+"))
+                if os.rename(path, dir .. "/" .. file) then
+                    store:moveCoverFile(name, file)
+                    used[file] = true -- its subfolder may not be cleaned yet
+                    moved = moved + 1
+                end
+            end
+        else
+            os.remove(path)
             removed = removed + 1
         end
     end
-    return removed
+    return removed, moved
 end
 
 -- In the UI process -----------------------------------------------------------------

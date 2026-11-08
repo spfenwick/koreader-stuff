@@ -324,11 +324,19 @@ end
 
 -- Covers ------------------------------------------------------------------------
 
---- Records a downloaded cover (file name in the covers folder, image size).
+--- Records a downloaded cover (file path relative to the covers folder,
+-- image size).
 function Store:setCover(uuid, file, w, h)
     local stmt = self.conn:prepare(
         "UPDATE books SET cover_file = ?, cover_w = ?, cover_h = ?, cover_failed = NULL WHERE uuid = ?;")
     stmt:bind(file, w, h, uuid):step()
+    stmt:close()
+end
+
+--- Renames a cover file (moved to another place in the covers folder).
+function Store:moveCoverFile(old, new)
+    local stmt = self.conn:prepare("UPDATE books SET cover_file = ? WHERE cover_file = ?;")
+    stmt:bind(new, old):step()
     stmt:close()
 end
 
