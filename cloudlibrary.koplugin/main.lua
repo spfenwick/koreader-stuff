@@ -39,7 +39,7 @@ end
 
 function CloudLibrary:onDispatcherRegisterActions()
     Dispatcher:registerAction("cloudlibrary_sync", {
-        category = "none", event = "CloudLibrarySync", title = _("Cloud library: sync"),
+        category = "none", event = "CloudLibrarySync", title = _("Cloud library: quick sync"),
         general = true,
     })
 end

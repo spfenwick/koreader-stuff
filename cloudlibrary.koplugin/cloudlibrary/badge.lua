@@ -1,7 +1,9 @@
 --[[
 Cover badges, in a white circle on the bottom-right corner of the cover:
 - cloud: a cloud on books that are only in the cloud library (default on);
-- local: a check mark on local books that are in the catalog (default off).
+- local: a check mark on local books that are in the catalog (default off);
+- noncloud: a crossed-out cloud on books in the library folder that aren't
+  in the catalog (default off).
 
 Drawn after the file browser (FileChooser) and book lists (BookList: search
 results, history, collections) paint, over whatever drew the items: stock
@@ -19,14 +21,17 @@ local Screen = Device.screen
 local Badge = {
     local_enabled = false,
     cloud_enabled = true,
+    noncloud_enabled = false,
     isOnDevice = nil, -- function(path) -> true for local books in the catalog
     isCloud = nil,    -- function(path) -> true for cloud-only books
+    isNonCloud = nil, -- function(path) -> true for local books not in the catalog
     installed = false,
 }
 
--- The plugin's own cloud icon (KOReader has none).
-local CLOUD_ICON = (debug.getinfo(1, "S").source:match("^@(.*)/cloudlibrary/[^/]*$") or ".")
-    .. "/icons/cloud.svg"
+-- The plugin's own cloud icons (KOReader has none).
+local ICONS = (debug.getinfo(1, "S").source:match("^@(.*)/cloudlibrary/[^/]*$") or ".") .. "/icons/"
+local CLOUD_ICON = ICONS .. "cloud.svg"
+local CLOUD_OFF_ICON = ICONS .. "cloud-off.svg"
 
 local widgets = {} -- kind .. size -> widget
 
@@ -49,9 +54,10 @@ local function badgeWidget(size, kind)
         color = Blitbuffer.COLOR_BLACK,
         CenterContainer:new{
             dimen = Geom:new{ w = inner, h = inner },
-            kind == "cloud"
-                and IconWidget:new{ file = CLOUD_ICON, alpha = true, width = icon, height = icon }
-                or IconWidget:new{ icon = "check", width = icon, height = icon },
+            kind == "local"
+                and IconWidget:new{ icon = "check", width = icon, height = icon }
+                or IconWidget:new{ file = kind == "cloud" and CLOUD_ICON or CLOUD_OFF_ICON,
+                    alpha = true, width = icon, height = icon },
         },
     }
     widgets[key] = w
@@ -114,14 +120,16 @@ function Badge.place(rect)
     return rect.x + rect.w - size - margin, rect.y + rect.h - size - margin, size
 end
 
---- Which badge a path gets: "cloud", "local" or nil.
+--- Which badge a path gets: "cloud", "local", "noncloud" or nil.
 function Badge.kind(path)
     if Badge.cloud_enabled and Badge.isCloud and Badge.isCloud(path) then return "cloud" end
     if Badge.local_enabled and Badge.isOnDevice and Badge.isOnDevice(path) then return "local" end
+    if Badge.noncloud_enabled and Badge.isNonCloud and Badge.isNonCloud(path) then return "noncloud" end
 end
 
 function Badge.paintOn(menu, bb)
-    if not ((Badge.cloud_enabled or Badge.local_enabled) and menu.item_group) then return end
+    if not ((Badge.cloud_enabled or Badge.local_enabled or Badge.noncloud_enabled)
+            and menu.item_group) then return end
     eachItem(menu.item_group, function(item, path)
         local kind = Badge.kind(path)
         if not kind then return end

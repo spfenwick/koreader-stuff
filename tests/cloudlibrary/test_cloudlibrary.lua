@@ -955,6 +955,25 @@ do
     item.indent = nil
     Badge.paintOn({ item_group = { row } }, bb)
     check(not changed(0, 220, 400, 60), "plain row without room: no badge")
+
+    -- Not-in-catalog badge: off by default, its own icon.
+    check(not Badge.noncloud_enabled, "default: not-in-catalog badge off")
+    Badge.isNonCloud = function(path) return path == "/lib/mine.epub" end
+    check(Badge.kind("/lib/mine.epub") == nil, "no not-in-catalog badge while off")
+    Badge.noncloud_enabled = true
+    check(Badge.kind("/lib/mine.epub") == "noncloud", "not-in-catalog badge kind")
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    menu.item_group[2].entry.path = "/lib/mine.epub"
+    Badge.paintOn(menu, bb)
+    local dark = 0
+    for yy = cy + math.floor(csize / 4), cy + math.floor(csize * 3 / 4) do
+        for xx = cx + math.floor(csize / 4), cx + math.floor(csize * 3 / 4) do
+            if bb:getPixel(xx, yy):getColor8().a < 128 then dark = dark + 1 end
+        end
+    end
+    check(dark > 10, "crossed-out cloud icon drawn")
+    Badge.noncloud_enabled, Badge.isNonCloud = false, nil
+
     Badge.cloud_enabled, Badge.local_enabled = true, false
     Badge.isOnDevice, Badge.isCloud = nil, nil
     bb:free()
@@ -1109,6 +1128,14 @@ do
     UIManager.nextTick = function(_self, fn) fn() end
     Library.save("folder", folder)
     Library.save("auto_sync", false)
+    eq(Library.quickSyncMode(), "never", "old automatic sync off: no quick syncs")
+    eq(Library.fullSyncMode(), "never", "old automatic sync off: no full syncs")
+    Library.save("quick_sync", "3h")
+    Library.save("full_sync", "bogus")
+    eq(Library.quickSyncMode(), "3h", "quick sync schedule")
+    eq(Library.fullSyncMode(), "never", "unknown full sync schedule ignored")
+    Library.save("quick_sync", "never")
+    Library.save("full_sync", nil)
     local store = Store.open(Library.dbPath(server), false)
     store:upsertBooks({
         { uuid = "del-1", title = "Kept Book", authors = { "Ann Author" } },
@@ -1266,8 +1293,8 @@ do
     local real = Library.hasZenOS
     Library.hasZenOS = function() return false end
     eq(labels(Library.menuEntry(nil).sub_item_table_func()),
-        "Sync now | Full sync | Download missing covers | Sync automatically | Scheduled full sync | Catalog | Folder"
-        .. " | Show cloud books | Mark cloud books | Mark books on this device"
+        "Quick sync now | Full sync now | Download missing covers | Quick sync | Full sync | Catalog | Folder"
+        .. " | Show cloud books | Mark cloud books | Mark books on this device | Mark books not in the cloud library"
         .. " | Include cloud books in file search | Status | Timings",
         "menu without ZenOS")
     Library.hasZenOS = function() return true end

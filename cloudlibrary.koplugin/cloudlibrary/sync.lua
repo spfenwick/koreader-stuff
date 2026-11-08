@@ -254,7 +254,10 @@ function Sync:quick()
     if not e.new then
         local remote = self:remoteCount()
         local same = remote ~= nil and remote == store:count()
-        if same then store:setMeta("last_sync", started) end
+        if same then
+            store:setMeta("last_sync", started)
+            store:setMeta("last_quick_sync", started)
+        end
         return { added = 0, needs_full = not same, remote_count = remote, total = store:count(),
             requests = self.requests, seconds = self.now() - started,
             timing = self:timings(self.clock() - t_start) }
@@ -282,6 +285,7 @@ function Sync:quick()
     local remote = self:remoteCount()
     local total = store:count()
     store:setMeta("last_sync", started)
+    store:setMeta("last_quick_sync", started)
     return { added = added, remote_count = remote, total = total,
         needs_full = remote ~= nil and remote ~= total,
         requests = self.requests, seconds = self.now() - started,
