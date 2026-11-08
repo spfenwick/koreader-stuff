@@ -58,7 +58,8 @@ Badge.isCloud = function(path) return Virtual.by_path[path] ~= nil end
 local QUICK_INTERVAL = 60 * 60       -- auto sync at most hourly
 local FULL_INTERVAL = 24 * 60 * 60   -- and a full sync daily
 local PREFETCH_COVERS = 300          -- covers a batch after each sync, newest first (all, in batches, on a first sync)
-local PREFETCH_SECONDS = 180
+local PREFETCH_SECONDS = 180        -- (a batch, also for "Download missing covers")
+local MAX_CRASHES = 3               -- cover jobs dying in a row before giving up
 local CHECK_DELAY = 3                -- s after the file browser opens: let it draw first
 
 -- Settings ----------------------------------------------------------------------
@@ -279,7 +280,7 @@ end
 
 -- Syncing ----------------------------------------------------------------------
 
-local function runJob(server, folder, mode, db_path, wal, covers_dir)
+local function runJob(server, folder, mode, db_path, wal, covers_dir, opts)
     local Sync = require("cloudlibrary/sync")
     local Http = require("cloudlibrary/http")
     local result = { mode = mode }
@@ -288,13 +289,15 @@ local function runJob(server, folder, mode, db_path, wal, covers_dir)
         store:fillMatchKeys() -- once, after the upgrade to schema 5
         if mode == "covers" or mode == "prefetch" then
             util.makePath(covers_dir)
+            -- In batches: if a job dies, only its batch is cut short.
+            local batch = { limit = PREFETCH_COVERS, deadline = os.time() + PREFETCH_SECONDS, track = true }
             if mode == "prefetch" then
-                result.covers = Covers.prefetch(Http.fetcher(server), server.url, store, covers_dir,
-                    { limit = PREFETCH_COVERS, deadline = os.time() + PREFETCH_SECONDS })
+                result.covers = Covers.prefetch(Http.fetcher(server), server.url, store, covers_dir, batch)
             else
-                -- "Download missing covers": retry failed ones too.
-                result.covers = Covers.downloadMissing(Http.fetcher(server), server.url, store, covers_dir,
-                    { retry_all = true })
+                -- "Download missing covers": also retry covers that failed
+                -- before it started.
+                batch.retry_before = opts.retry_before
+                result.covers = Covers.downloadMissing(Http.fetcher(server), server.url, store, covers_dir, batch)
             end
             result.covers.results = nil
             return
@@ -339,10 +342,11 @@ end
 local function describeResult(r)
     if r.error then return T(_("Cloud library sync failed: %1"), r.error) end
     if r.mode == "covers" and r.covers then
+        local n = r.covers.fetched_total or r.covers.fetched
         if r.covers.network_error then
-            return T(_("Cloud library: %1 covers downloaded, then the network was lost."), r.covers.fetched)
+            return T(_("Cloud library: %1 covers downloaded, then the network was lost."), n)
         end
-        return T(_("Cloud library: %1 covers downloaded."), r.covers.fetched)
+        return T(_("Cloud library: %1 covers downloaded."), n)
     end
     local s = r.sync
     if not s then return _("Cloud library: device books checked.") end
@@ -355,7 +359,8 @@ end
 
 --- Starts a sync in a subprocess. mode: "quick", "full", "scan" (local
 -- files only), "covers" (all missing covers) or "prefetch" (some). quiet: no notifications unless something changed or failed.
-function Library.sync(mode, quiet)
+-- opts: carried from one cover batch to the next (see pollJob).
+function Library.sync(mode, quiet, opts)
     if Library.job then
         if not quiet then notify(_("Cloud library: already syncing.")) end
         return false
@@ -369,17 +374,21 @@ function Library.sync(mode, quiet)
         end
         return false
     end
+    opts = opts or {}
+    if mode == "covers" and not opts.retry_before then
+        opts.retry_before, opts.manual = os.time(), not quiet
+    end
     local db_path, wal, covers_dir = Library.dbPath(server), Device:canUseWAL(), Library.coversDir(server)
     local pid, fd = ffiutil.runInSubProcess(function(_pid, child_fd)
-        local result = runJob(server, folder, mode, db_path, wal, covers_dir)
+        local result = runJob(server, folder, mode, db_path, wal, covers_dir, opts)
         ffiutil.writeToFD(child_fd, require("dump")(result), true)
     end, true)
     if not pid then
         if not quiet then notify(T(_("Cloud library sync failed: %1"), tostring(fd))) end
         return false
     end
-    Library.job = { pid = pid, fd = fd, mode = mode, quiet = quiet, started = os.time(),
-        t0 = Timing.start() }
+    Library.job = { pid = pid, fd = fd, mode = mode, quiet = quiet, opts = opts, db_path = db_path,
+        started = os.time(), t0 = Timing.start() }
     if not quiet and mode == "covers" then
         notify(_("Cloud library: downloading covers…"))
     elseif not quiet and mode ~= "scan" then
@@ -416,6 +425,23 @@ local function pollJob()
         local ok, res = pcall(chunk)
         result = ok and type(res) == "table" and res or nil
     end
+    local is_covers = job.mode == "covers" or job.mode == "prefetch"
+    local crashes = 0
+    if not result and is_covers then
+        -- The job died (an image that crashes the decoder, or killed):
+        -- skip the cover it was on and carry on, unless that keeps happening.
+        local store = Store.open(job.db_path, Device:canUseWAL())
+        local id = Covers.recoverCrash(store)
+        local book = id and store:getBook(id)
+        store:close()
+        crashes = (job.opts.crashes or 0) + 1
+        logger.warn("CloudLibrary: cover download stopped unexpectedly, on book", id, book and book.title)
+        if id and crashes <= MAX_CRASHES then
+            result = { mode = job.mode, covers = { fetched = 0, failed = 1, more = true } }
+        else
+            result = { error = _("the cover download stopped unexpectedly") }
+        end
+    end
     result = result or { error = _("the sync stopped unexpectedly") }
     result.finished = os.time()
     Library.last_result = result
@@ -432,18 +458,25 @@ local function pollJob()
     end
     if listingMayHaveChanged(job.mode, result) then Library.load() end
     local changed = result.sync and ((result.sync.added or 0) > 0 or (result.sync.deleted or 0) > 0)
-    if not job.quiet or result.error or changed then
+    -- Cover downloads go in batches: "Download missing covers" until done,
+    -- and after a sync while backfilling (most covers were missing).
+    local covers = is_covers and result.covers
+    if covers then covers.fetched_total = (job.opts.fetched or 0) + (covers.fetched or 0) end
+    local more = covers and covers.more and not result.error and Covers.canFetch()
+    local quiet = job.quiet and not job.opts.manual
+    if not more and (not quiet or result.error or changed) then
         if (job.mode ~= "scan" and job.mode ~= "prefetch") or result.error then
             notify(describeResult(result))
         end
     end
-    -- After a sync, download some missing covers (newest books first), and
-    -- keep going while backfilling (most covers were missing).
-    local covers = job.mode == "prefetch" and result.covers
     if covers and covers.backfill_done then
         notify(T(_("Cloud library: all %1 covers downloaded."), Library.stats.covers or 0))
     end
-    if not result.error and Covers.canFetch() and (result.sync or (covers and covers.more)) then
+    if more then
+        Library.sync(job.mode, true, { manual = job.opts.manual, retry_before = job.opts.retry_before,
+            fetched = covers.fetched_total, crashes = crashes })
+    elseif result.sync and not result.error and Covers.canFetch() then
+        -- After a sync, download some missing covers (newest books first).
         Library.sync("prefetch", true)
     end
 end

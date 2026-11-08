@@ -27,6 +27,9 @@ local Covers = {
 
 local RETRY_AFTER = 24 * 60 * 60 -- covers the server couldn't provide
 local RETRY_SOON = 2 * 60        -- covers not attempted (network lost)
+-- Store key naming the cover a background job is on: if the job dies (a
+-- crash decoding an image, or killed), that cover is skipped afterwards.
+Covers.PROGRESS_KEY = "cover_in_progress"
 
 --- File extension from an image's first bytes.
 function Covers.imageType(data)
@@ -49,7 +52,8 @@ end
 
 --- Downloads covers, writing each file atomically and recording it in the
 -- store. opts: { now = os.time, deadline = unix time to stop at,
--- image_size = function(data) -> w, h }. Returns { fetched, failed,
+-- image_size = function(data) -> w, h, track = true to record the cover
+-- being worked on under PROGRESS_KEY }. Returns { fetched, failed,
 -- results = { [id] = { file, w, h } or false } }.
 function Covers.download(fetch, root, store, dir, books, opts)
     opts = opts or {}
@@ -62,6 +66,7 @@ function Covers.download(fetch, root, store, dir, books, opts)
     local spent = { network = 0, reading = 0, saving = 0, bytes = 0 }
     for _i, book in ipairs(books) do
         if opts.deadline and now() >= opts.deadline then break end
+        if opts.track then store:setMeta(Covers.PROGRESS_KEY, book.id) end
         local t0 = clock()
         local data, err, kind = fetch(resolve(root, book.href))
         spent.network = spent.network + (clock() - t0)
@@ -103,6 +108,7 @@ function Covers.download(fetch, root, store, dir, books, opts)
             result.results[book.id] = false
         end
     end
+    if opts.track then store:setMeta(Covers.PROGRESS_KEY, nil) end
     local n = result.fetched + result.failed
     if n > 0 then
         result.timing = {
@@ -116,13 +122,34 @@ function Covers.download(fetch, root, store, dir, books, opts)
     return result
 end
 
---- Downloads missing covers, newest books first. opts as above, plus limit,
--- and retry_all (also covers that failed less than a day ago).
+--- Downloads missing covers, newest books first. opts as above, plus
+-- limit (a batch: result.more then says whether to start another) and
+-- retry_before (also retry covers that failed before this time; by default
+-- those that failed more than a day ago; retry_all: all of them).
 function Covers.downloadMissing(fetch, root, store, dir, opts)
     opts = opts or {}
-    local now = (opts.now or os.time)()
-    local books = store:missingCovers(opts.limit, opts.retry_all and now + 1 or now - RETRY_AFTER)
-    return Covers.download(fetch, root, store, dir, books, opts)
+    local clock = opts.now or os.time
+    local function retryBefore()
+        if opts.retry_before then return opts.retry_before end
+        return opts.retry_all and clock() + 1 or clock() - RETRY_AFTER
+    end
+    local books = store:missingCovers(opts.limit, retryBefore())
+    local result = Covers.download(fetch, root, store, dir, books, opts)
+    if opts.limit and not result.network_error then
+        result.left = #store:missingCovers(1, retryBefore()) > 0
+        result.more = result.left and result.fetched + result.failed > 0
+    end
+    return result
+end
+
+--- After a job died: marks the cover it was on as failed (retried like any
+-- failed cover). Returns that book's id, or nil.
+function Covers.recoverCrash(store, now)
+    local id = store:getMeta(Covers.PROGRESS_KEY)
+    if not id then return nil end
+    store:setCoverFailed(id, now or os.time())
+    store:setMeta(Covers.PROGRESS_KEY, nil)
+    return id
 end
 
 --- The download after each sync: a batch of missing covers (opts as for
@@ -133,7 +160,6 @@ end
 -- the next sync carries on.
 function Covers.prefetch(fetch, root, store, dir, opts)
     opts = opts or {}
-    local clock = opts.now or os.time
     local backfill = store:getMeta("covers_backfill") == "1"
     if not backfill then
         local with_cover, downloaded, failed = store:coverCounts()
@@ -144,13 +170,11 @@ function Covers.prefetch(fetch, root, store, dir, opts)
     end
     local result = Covers.downloadMissing(fetch, root, store, dir, opts)
     result.backfill = backfill
-    if backfill and not result.network_error then
-        if #store:missingCovers(1, clock() - RETRY_AFTER) > 0 then
-            result.more = result.fetched + result.failed > 0
-        else
-            store:setMeta("covers_backfill", nil)
-            result.backfill_done = true
-        end
+    if not backfill then
+        result.more = nil
+    elseif result.left == false then
+        store:setMeta("covers_backfill", nil)
+        result.backfill_done = true
     end
     return result
 end

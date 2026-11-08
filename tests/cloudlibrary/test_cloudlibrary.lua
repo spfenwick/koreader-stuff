@@ -195,6 +195,8 @@ function Server:handle(url)
     return nil, "404 " .. path
 end
 
+local function books_uuid(i) return string.format("00000000-0000-4000-8000-%012d", i) end
+
 local function makeBooks(n)
     local books = {}
     for i = 1, n do
@@ -706,6 +708,30 @@ do
     local later = Covers.prefetch(good, ORIGIN .. "/", bstore, bdir, { limit = 3, now = clock })
     check(not later.backfill and not later.more, "no backfill when most covers are here")
     eq(later.fetched, 2, "new books' covers fetched")
+
+    -- A job that dies leaves the cover it was on; it's then skipped.
+    newSync(bstore, Server.new(makeBooks(12), 10), 300):full()
+    local died = pcall(Covers.downloadMissing, function(url)
+        if url:find("/1011$") then error("decoder crash") end
+        return png
+    end, ORIGIN .. "/", bstore, bdir, { limit = 3, now = clock, track = true })
+    check(not died, "simulated crash")
+    eq(bstore:getMeta(Covers.PROGRESS_KEY), books_uuid(11), "cover being worked on recorded")
+    eq(Covers.recoverCrash(bstore, 9500), books_uuid(11), "crashed cover found")
+    eq(bstore:getMeta(Covers.PROGRESS_KEY), nil, "progress cleared")
+    -- "Download missing covers" batches skip covers that failed during it
+    -- (books 12 done, 11 crashed, 10 left).
+    local m1 = Covers.downloadMissing(good, ORIGIN .. "/", bstore, bdir,
+        { limit = 1, now = clock, retry_before = 9400, track = true })
+    check(m1.fetched == 1 and not m1.more, "crashed cover left out of the run")
+    bstore:setCover(books_uuid(10), nil, nil, nil)
+    local m2 = Covers.downloadMissing(good, ORIGIN .. "/", bstore, bdir,
+        { limit = 1, now = clock, retry_before = 9400, track = true })
+    check(m2.fetched == 1 and not m2.left, "batch then finds nothing left")
+    local m3 = Covers.downloadMissing(good, ORIGIN .. "/", bstore, bdir,
+        { limit = 1, now = clock, retry_before = 9600, track = true })
+    eq(m3.fetched, 1, "a later run retries the crashed cover")
+    eq(bstore:getMeta(Covers.PROGRESS_KEY), nil, "finished batch leaves no progress mark")
     bstore:close()
 
     -- Cover states.
