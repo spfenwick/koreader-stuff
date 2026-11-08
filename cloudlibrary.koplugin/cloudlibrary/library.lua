@@ -8,6 +8,8 @@ Settings (settings/cloudlibrary/settings.lua, see settings.lua):
   folder     library folder (default: KOReader's download folder, else home)
   show       show cloud books (default true)
   auto_sync  sync when the file browser opens and Wi-Fi is on (default true)
+  full_sync  scheduled full sync: "daily", "weekly" (default) or "never"; a
+             changed book count asks for one whatever this says
   badge_cloud  cloud badge on cloud-only books (default true)
   badge_local  on-device badge on local catalog books (default false)
   search     cloud books in file search results (default true)
@@ -56,7 +58,9 @@ Badge.isOnDevice = function(path) return Library.on_device[path] == true end
 Badge.isCloud = function(path) return Virtual.by_path[path] ~= nil end
 
 local QUICK_INTERVAL = 60 * 60       -- auto sync at most hourly
-local FULL_INTERVAL = 7 * 24 * 60 * 60 -- and a full sync weekly (or when the book count changes)
+-- Scheduled full syncs (setting full_sync); a changed book count also asks for one.
+local FULL_INTERVALS = { daily = 24 * 60 * 60, weekly = 7 * 24 * 60 * 60 }
+local FULL_SYNC_MODES = { "daily", "weekly", "never" }
 local PREFETCH_COVERS = 300          -- covers a batch after each sync, newest first (all, in batches, on a first sync)
 local PREFETCH_SECONDS = 180        -- (a batch, also for "Download missing covers")
 local MAX_CRASHES = 3               -- cover jobs dying in a row before giving up
@@ -280,6 +284,17 @@ end
 
 -- Syncing ----------------------------------------------------------------------
 
+--- "daily", "weekly" or "never".
+function Library.fullSyncMode()
+    local mode = Library.settings().full_sync
+    if mode == "daily" or mode == "never" then return mode end
+    return "weekly"
+end
+
+local function fullSyncText(mode)
+    return ({ daily = _("daily"), weekly = _("weekly"), never = _("never") })[mode]
+end
+
 local function runJob(server, folder, mode, db_path, wal, covers_dir, opts)
     local Sync = require("cloudlibrary/sync")
     local Http = require("cloudlibrary/http")
@@ -310,7 +325,8 @@ local function runJob(server, folder, mode, db_path, wal, covers_dir, opts)
             else
                 r, serr = sync:quick()
                 local last_full = tonumber(store:getMeta("last_full_sync")) or 0
-                if r and (r.needs_full or os.time() - last_full > FULL_INTERVAL) then
+                local interval = FULL_INTERVALS[Library.fullSyncMode()]
+                if r and (r.needs_full or (interval and os.time() - last_full > interval)) then
                     r, serr = sync:full()
                     if r then r.escalated = true end
                 end
@@ -736,7 +752,7 @@ function Library.menuEntry(plugin)
                 -- Syncing
                 {
                     text = _("Sync now"),
-                    help_text = _("Adds books new to the catalog since the last sync. If the number of books changed, or the last full sync was over a week ago, does a full sync instead."),
+                    help_text = _("Adds books new to the catalog since the last sync. If the number of books changed, or a scheduled full sync is due, does a full sync instead."),
                     enabled_func = has_server,
                     callback = function() Library.sync("quick") end,
                 },
@@ -754,10 +770,28 @@ function Library.menuEntry(plugin)
                 },
                 {
                     text = _("Sync automatically"),
-                    help_text = _("When the file browser opens and Wi-Fi is on: new books at most hourly; everything weekly, or when the number of books changed."),
+                    help_text = _("When the file browser opens and Wi-Fi is on: new books at most hourly, and a full sync when one is due (see Scheduled full sync)."),
                     checked_func = function() return Library.settings().auto_sync ~= false end,
                     callback = function()
                         Library.save("auto_sync", Library.settings().auto_sync == false)
+                    end,
+                },
+                {
+                    text_func = function()
+                        return T(_("Scheduled full sync: %1"), fullSyncText(Library.fullSyncMode()))
+                    end,
+                    help_text = _("How often a sync rereads the whole catalog, picking up books edited on the server (titles, series, covers). A full sync also runs whenever the number of books on the server changes, whatever this says."),
+                    sub_item_table_func = function()
+                        local modes = {}
+                        for _i, mode in ipairs(FULL_SYNC_MODES) do
+                            table.insert(modes, {
+                                text = fullSyncText(mode),
+                                checked_func = function() return Library.fullSyncMode() == mode end,
+                                radio = true,
+                                callback = function() Library.save("full_sync", mode) end,
+                            })
+                        end
+                        return modes
                     end,
                     separator = true,
                 },

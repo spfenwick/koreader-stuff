@@ -1266,7 +1266,7 @@ do
     local real = Library.hasZenOS
     Library.hasZenOS = function() return false end
     eq(labels(Library.menuEntry(nil).sub_item_table_func()),
-        "Sync now | Full sync | Download missing covers | Sync automatically | Catalog | Folder"
+        "Sync now | Full sync | Download missing covers | Sync automatically | Scheduled full sync | Catalog | Folder"
         .. " | Show cloud books | Mark cloud books | Mark books on this device"
         .. " | Include cloud books in file search | Status | Timings",
         "menu without ZenOS")
