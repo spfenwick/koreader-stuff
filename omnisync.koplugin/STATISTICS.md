@@ -210,9 +210,15 @@ Details in [BOOKDATA.md](BOOKDATA.md).
 Also synced with highlights and bookmarks: which book files carry which
 book IDs (the UUIDs Calibre writes into an EPUB). It's groundwork: when a
 server rewrites a book after an edit (a new cover, new tags), the new file
-is a "different" book to KOReader, and these records will let OmniSync
-treat the two files as one book. In this version they're only collected
-and synced; nothing is merged yet.
+is a "different" book to KOReader, and these records let OmniSync treat
+the two files as one book.
+
+- **What's joined**: status, rating, review and custom metadata. Finish a
+  book on one device and it's finished on the others, whichever version
+  of the file they have. Highlights, the handmade table of contents and
+  reading statistics aren't joined yet.
+- **What isn't**: files whose titles and authors both differ, or a book
+  in more than 8 files, are left apart (a UUID shared by mistake).
 
 - **What's read**: EPUBs opened on the device, once each (again if the file
   changes), in the background after a sync's network step: a few tenths of
@@ -222,6 +228,8 @@ and synced; nothing is merged yet.
   its text (to tell a rewritten copy from another edition), and its title,
   authors and other identifiers such as the ISBN.
 - **Status** shows how many books are known in more than one version.
+- **Older versions of OmniSync** on other devices don't join: they see
+  each file's own values, as before.
 
 Details in [IDENTITY.md](IDENTITY.md).
 

@@ -539,6 +539,22 @@ check(not C.last_run.error, "and doesn't fail the sync")
 C.store:forgetSeen()
 sync({ C })
 check(idFacts(C) == idf and C.last_run.id_segments_imported > 0, "rebuild re-imports book identity, same result")
+-- Joining (level 1): status set under the new file's MD5 applies to the old one.
+for _, d in ipairs({ A, B, C }) do
+    local c = S.SQ3.open(d.state)
+    check(tonumber(c:rowexec("SELECT count(*) FROM id_groups")) == 2, "book identity: " .. d.name .. " joined the two files")
+    c:close()
+end
+B.book_store:observe{ md5 = NEW_MD5, values = { status = "complete", rating = 3 }, now = os.time(), device = B.id,
+                      title = "The View From Nowhere", times = { status = 1, rating = 1 } }
+local nowhere = { status = "reading", rating = false }
+A.book_store:observe{ md5 = OLD_MD5, values = nowhere, now = os.time(), device = A.id, title = "The View From Nowhere" }
+A.book_affected = nil
+sync({ B, A })
+check(A.book_affected and A.book_affected[OLD_MD5], "A told its version of the book changed")
+local jplan = A.book_store:plan(OLD_MD5, nowhere)
+check(#jplan == 2 and jplan[1].value == 3 and jplan[2].value == "complete",
+    "A would apply B's status and rating to its own file")
 
 -- 10. Packs ---------------------------------------------------------------------------------------
 -- Packing needs only a few segments here, and deleting waits for nothing,

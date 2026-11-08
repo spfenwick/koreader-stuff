@@ -12,7 +12,8 @@ KOReader's Cloud storage:
   contents**, with highlights (WebDAV). See
   [STATISTICS.md](STATISTICS.md#book-status-and-details).
 - **Book identity** (which files are the same book), with highlights
-  (WebDAV): collected for a later version, nothing merged yet. See
+  (WebDAV): a book's status, rating, review and custom metadata are shared
+  by every version of its file. See
   [STATISTICS.md](STATISTICS.md#book-identity).
 
 It was called SuperSync, and takes over SuperSync's data on each device

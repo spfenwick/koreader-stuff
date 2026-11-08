@@ -12,6 +12,7 @@ local AnnFormat = require("omnisync/annformat")
 local BookFormat = require("omnisync/bookformat")
 local BookStore = require("omnisync/bookstore")
 local BookSync = require("omnisync/booksync")
+local IdStore = require("omnisync/idstore")
 
 local TMP = assert(os.getenv("STATSYNC_TMP"), "STATSYNC_TMP not set") .. "/book"
 S.rmrf(TMP)
@@ -375,6 +376,114 @@ do
     os.remove(pb)
     b.sync:refresh(); b:run()
     check(not b.store:files()[pb], "deleted book forgotten")
+end
+
+-- Versions of a book (IDENTITY.md, level 1) ---------------------------------------------------
+do
+    local a, b = newDev("ver-a"), newDev("ver-b")
+    -- A has the file as first downloaded (X); B downloaded it after the
+    -- server rewrote it (Y). Both carry the book's UUID.
+    local X, Y = string.rep("1", 32), string.rep("2", 32)
+    local UUID = "333d496c-0000-4000-8000-000000000001"
+    local function ids(d) return IdStore.new{ sq3 = S.SQ3, state_path = d.dir .. "/state.sqlite3" } end
+    local function facts(d, list)
+        local st = ids(d)
+        for _, f in ipairs(list) do
+            st:recordScan({ path = "/f/" .. f.md5, md5 = f.md5, size = 1, mtime = 1 },
+                { md5 = f.md5, uuids = f.uuids or { UUID }, sig = f.sig or "s1", title = f.title or "Saga",
+                  authors = f.authors or "Ann Writer" }, d.name)
+        end
+        return st:refreshGroups()
+    end
+    local props = { title = "Saga", authors = "Ann Writer" }
+    local pa = a:book("saga", { partial_md5_checksum = X, doc_props = props,
+                                summary = { status = "reading", modified = "2026-01-01" } })
+    local pb = b:book("saga", { partial_md5_checksum = Y, doc_props = props,
+                                summary = { status = "reading", modified = "2026-01-02" } })
+    a.sync:refresh(); a:run()
+    b.sync:refresh(); b:run()
+
+    -- A finishes and rates the book before either device knows the files are one book.
+    tick(100)
+    local data = readSidecar(pa)
+    data.summary = { status = "complete", rating = 4, modified = "2026-03-01" }
+    writeSidecar(pa, data)
+    lfs.touch(sdrDir(pa) .. "/metadata.epub.lua", clock, clock)
+    a.sync:refresh(); a:run()
+    a:send(b)
+    b:send(a)
+    check(b.store:counts().write == 0, "not joined yet: nothing to write into B's version")
+    check(#b.store:plan(Y, { status = "reading", rating = false }) == 0, "not joined yet: nothing to apply")
+
+    -- The identity facts arrive: X and Y are one book.
+    local changed = facts(b, { { md5 = X }, { md5 = Y } })
+    check(changed[X] and changed[Y], "groups: both files joined")
+    check(next(ids(b):refreshGroups()) == nil, "groups: refreshing again changes nothing")
+    local all = b.store:regroup(changed)
+    check(all[X] and all[Y], "regroup returns the versions")
+    check(b.store:counts().write == 1, "joined: B's version has values to write")
+    b.sync:afterSync(nil); b:run()
+    local s = readSidecar(pb).summary
+    check(s.status == "complete" and s.rating == 4, "A's status and rating written into B's version: "
+        .. tostring(s.status) .. ", " .. tostring(s.rating))
+    check(b.store:counts().outbox == 0, "nothing recorded under B's MD5 for values that came from A's")
+
+    -- B puts it on hold and clears the rating: A gets both, through its own version.
+    facts(a, { { md5 = X }, { md5 = Y } })
+    tick(100)
+    data = readSidecar(pb)
+    data.summary = { status = "abandoned", modified = "2026-04-01" }
+    writeSidecar(pb, data)
+    lfs.touch(sdrDir(pb) .. "/metadata.epub.lua", clock, clock)
+    b.sync:refresh(); b:run()
+    check(b:merged(Y, "status") == "abandoned" and b:merged(Y, "rating") == "(cleared)",
+        "B's changes recorded under its own MD5")
+    check(b:merged(X, "status") == "complete", "A's records untouched on B")
+    b:send(a)
+    a.sync:afterSync(nil); a:run()
+    s = readSidecar(pa).summary
+    check(s.status == "abandoned" and s.rating == nil, "B's status and cleared rating reach A's version")
+    check(a.store:counts().outbox == 0 and a.store:counts().write == 0, "nothing echoed back from A")
+
+    -- A clear isn't lost when the book's own MD5 already holds an older clear.
+    tick(100)
+    local MP, MQ = string.rep("3", 32), string.rep("4", 32)
+    local d = newDev("ver-c")
+    local function obs(md5, values) return d.store:observe{ md5 = md5, values = values, now = clock, device = "c" } end
+    obs(MP, { rating = 3 })
+    tick(1)
+    obs(MP, { rating = false }) -- cleared under P
+    tick(1)
+    local seg = TMP .. "/ver-q.jsonl"
+    S.writeFile(seg, table.concat({ BookFormat.headerLine("q", 1), BookFormat.bookLine{ md5 = MQ },
+        BookFormat.recordLine{ md5 = MQ, prop = "rating", updated = clock, device = "q", value_json = "5" },
+        BookFormat.trailerLine(1, 1) }, "\n") .. "\n")
+    d.store:importSegment(seg, "q", BookFormat.segmentName(900), 1, nil, clock)
+    d.store:regroup(facts(d, { { md5 = MP, uuids = { "0000aaaa-0000-4000-8000-000000000002" } }, { md5 = MQ, uuids = { "0000aaaa-0000-4000-8000-000000000002" } } }))
+    local ops = d.store:plan(MP, { rating = false })
+    check(#ops == 1 and ops[1].value == 5, "the other version's newer rating applies")
+    d.store:applied(MP, { rating = 5 })
+    tick(10)
+    obs(MP, { rating = false })
+    check(#d.store:plan(MP, { rating = false }) == 0, "clearing it again sticks")
+
+    -- Positions don't cross versions: a handmade TOC stays with its file.
+    local toc = { enabled = true, items = { { title = "One", depth = 1, xpointer = "/body/DocFragment[2]" } } }
+    obs(MQ, { ["toc.rolling"] = toc })
+    check(#d.store:plan(MP, { ["toc.rolling"] = false }) == 0, "handmade TOC not shared between versions")
+
+    -- Guards: unrelated books sharing a UUID by mistake aren't joined.
+    local MR, MS = string.rep("5", 32), string.rep("6", 32)
+    obs(MR, { status = "complete" })
+    local ch = facts(d, { { md5 = MR, uuids = { "0000aaaa-0000-4000-8000-000000000003" }, title = "One Book", authors = "Someone" },
+                          { md5 = MS, uuids = { "0000aaaa-0000-4000-8000-000000000003" }, title = "Another", authors = "Else" } })
+    check(not ch[MR] and not ch[MS], "guarded group not joined")
+    check(#d.store:plan(MS, { status = "reading" }) == 0, "guarded group: nothing applied")
+
+    -- A third file joins P and Q: all three are refreshed.
+    local MT = string.rep("7", 32)
+    ch = facts(d, { { md5 = MT, uuids = { "0000aaaa-0000-4000-8000-000000000002" } } })
+    check(ch[MP] and ch[MQ] and ch[MT], "a new version refreshes the whole group")
 end
 
 -- The open book ------------------------------------------------------------------------------

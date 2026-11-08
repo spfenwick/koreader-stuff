@@ -52,6 +52,12 @@ BookFormat.SUMMARY_PROPS = { "status", "rating", "note" }
 BookFormat.CLOSED_PROPS = { status = true, rating = true, note = true }
 for _, k in ipairs(BookFormat.META_KEYS) do BookFormat.CLOSED_PROPS["meta." .. k] = true end
 
+--- Properties about the book rather than places in it: every version of a
+-- book (files sharing a UUID, see IDENTITY.md) shares them. The handmade
+-- TOC and flows hold positions, so they stay with their own file.
+BookFormat.GROUP_PROPS = {}
+for prop in pairs(BookFormat.CLOSED_PROPS) do BookFormat.GROUP_PROPS[prop] = true end
+
 local META = {}
 for _, k in ipairs(BookFormat.META_KEYS) do META["meta." .. k] = k end
 

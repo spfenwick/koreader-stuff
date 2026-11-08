@@ -28,6 +28,13 @@ Tables:
 
 Segments imported are recorded in seen_segments and bad_segments, like the
 other streams' (names book-…).
+
+Versions of a book: id_groups (kept by idstore.lua) says which MD5s are
+the same book. A book's merged value of a property about the book (status,
+rating, review, custom metadata: BookFormat.GROUP_PROPS) is then the winner
+across all of them. Changes are still recorded under the book's own MD5,
+so nothing on the server changes and devices without the groups carry on
+as before.
 --]]
 
 local AnnFormat = require("omnisync/annformat")
@@ -74,6 +81,11 @@ local SCHEMA = [[
         sig  TEXT
     );
     CREATE INDEX IF NOT EXISTS book_files_md5 ON book_files (md5);
+    CREATE TABLE IF NOT EXISTS id_groups (
+        md5 TEXT PRIMARY KEY,
+        grp TEXT NOT NULL
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS id_groups_grp ON id_groups (grp);
     CREATE TABLE IF NOT EXISTS seen_segments (
         device_id   TEXT    NOT NULL,
         name        TEXT    NOT NULL,
@@ -157,6 +169,30 @@ local function loadMerged(conn, md5)
     return map
 end
 
+--- The MD5s of the book's versions, its own first.
+local function groupOf(conn, md5)
+    local stmt = conn:prepare([[
+        SELECT g.md5 FROM id_groups g JOIN id_groups me ON me.grp = g.grp
+        WHERE me.md5 = ? AND g.md5 <> me.md5 ORDER BY g.md5;]])
+    stmt:bind(md5)
+    local out = { md5 }
+    for _, r in ipairs(rows(stmt)) do out[#out + 1] = r[1] end
+    return out
+end
+
+--- The merged state as it applies to this book: its own records, with
+-- the properties about the book taken from whichever version's record wins.
+local function loadEffective(conn, md5)
+    local eff = loadMerged(conn, md5)
+    local group = groupOf(conn, md5)
+    for i = 2, #group do
+        for prop, m in pairs(loadMerged(conn, group[i])) do
+            if BookFormat.GROUP_PROPS[prop] and BookStore.wins(m, eff[prop]) then eff[prop] = m end
+        end
+    end
+    return eff
+end
+
 local function loadLocal(conn, md5)
     local stmt = conn:prepare("SELECT prop, hash FROM book_local WHERE md5 = ?;")
     stmt:bind(md5)
@@ -210,6 +246,23 @@ local function updateWrite(conn, md5, merged, loc)
     stmt:bind(write and 1 or 0, md5):step()
     stmt:close()
     return write
+end
+
+--- Looks again at what's to be written into these books and their other
+-- versions. md5s = { [md5] = true }. Returns the set with the versions added.
+local function updateWriteGroups(conn, md5s)
+    local all = {}
+    for md5 in pairs(md5s) do
+        for _, m in ipairs(groupOf(conn, md5)) do all[m] = true end
+    end
+    local known = conn:prepare("SELECT 1 FROM book_books WHERE md5 = ?;")
+    for md5 in pairs(all) do
+        if known:reset():bind(md5):step() then
+            updateWrite(conn, md5, loadEffective(conn, md5), loadLocal(conn, md5))
+        end
+    end
+    known:close()
+    return all
 end
 
 --- Encodes current values: prop -> { hash, json } ("" and nil for none).
@@ -269,14 +322,18 @@ function BookStore:observe(opts)
             f:close()
         end
         local merged = loadMerged(conn, md5)
+        local eff = loadEffective(conn, md5)
         local loc = loadLocal(conn, md5)
         local res = { changed = 0, skipped = skipped }
 
+        -- Recorded under this book's own MD5; compared with what applies
+        -- to it (its versions' records too) to tell whether it changed.
         local function record(prop, rec)
             if BookStore.wins(rec, merged[prop]) then
                 putMerged(conn, md5, prop, rec)
                 putOutbox(conn, md5, prop, rec.updated)
                 merged[prop] = rec
+                if BookStore.wins(rec, eff[prop]) then eff[prop] = rec end
                 res.changed = res.changed + 1
             end
         end
@@ -284,7 +341,7 @@ function BookStore:observe(opts)
         for prop, s in pairs(snap) do
             local prev = loc[prop]
             local first = opts.fresh or prev == nil
-            local m = merged[prop]
+            local m = eff[prop]
             local same = m and not m.deleted and m.hash == s.hash
             if s.hash == "" then
                 if not first and prev ~= "" and prop ~= "status" and not (m and m.deleted) then
@@ -301,7 +358,7 @@ function BookStore:observe(opts)
             putLocal(conn, md5, prop, s.hash)
             loc[prop] = s.hash
         end
-        res.write = updateWrite(conn, md5, merged, loc)
+        res.write = updateWrite(conn, md5, eff, loc)
         return res
     end)
 end
@@ -314,7 +371,7 @@ end
 function BookStore:plan(md5, values)
     local snap = self:snapshot(values)
     return self:_read(function(conn)
-        local merged = loadMerged(conn, md5)
+        local merged = loadEffective(conn, md5)
         local ops = {}
         for prop, s in pairs(snap) do
             local m = merged[prop]
@@ -345,8 +402,15 @@ function BookStore:applied(md5, values, path, sig)
             f:bind(path, md5, sig):step()
             f:close()
         end
-        return updateWrite(conn, md5, loadMerged(conn, md5), loadLocal(conn, md5))
+        return updateWrite(conn, md5, loadEffective(conn, md5), loadLocal(conn, md5))
     end)
+end
+
+--- After the groups changed (IdStore:refreshGroups): looks again at what's
+-- to be written into these books and their versions. md5s = { [md5] = true }.
+-- Returns the set with the versions added.
+function BookStore:regroup(md5s)
+    return self:_tx(function(conn) return updateWriteGroups(conn, md5s) end)
 end
 
 -- Where books are -----------------------------------------------------------------------
@@ -499,9 +563,10 @@ function BookStore:importSegment(path, device_id, name, size, etag, now)
         for md5 in pairs(summary.affected) do
             local b = book_info[md5]
             if b then fill:reset():bind(b.title, b.authors, md5):step() end
-            updateWrite(conn, md5, loadMerged(conn, md5), loadLocal(conn, md5))
         end
         fill:close()
+        -- The other versions of these books are affected too.
+        summary.affected = updateWriteGroups(conn, summary.affected)
         local stmt = conn:prepare(INSERT_SEEN)
         stmt:bind(device_id, name, size, etag, now, header.records):step()
         stmt:close()

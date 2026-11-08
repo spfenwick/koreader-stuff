@@ -87,6 +87,20 @@ KOReader keeps no times for these properties, so:
   change.
 - **A missing status is never a clear.** Every opened book has one.
 
+### Versions of a book
+
+Files that are the same book (they share a UUID, see
+[IDENTITY.md](IDENTITY.md)) share status, rating, review and custom
+metadata: a book's merged value is the winner across the records of all
+its files, by the same rule. The TOC and flows hold positions, so they stay
+with their own file. Changes are still recorded and sent under the book's
+own MD5; nothing already on the server changes.
+
+The joined files are kept in `id_groups`, rebuilt from the identity facts
+at the end of each sync. When a group changes, its books' closed-book
+writes are looked at again and they count as changed for the open book,
+so a link that arrives after the values did needs nothing more.
+
 ### Reset settings
 
 KOReader's "Reset settings" (and a deleted `.sdr` folder) leaves a sidecar
@@ -147,6 +161,7 @@ book_local(md5, prop, hash)                -- this device's copy, as last seen
 book_outbox(md5, prop, updated)            -- changes waiting to be sent
 book_books(md5, title, authors, write)     -- write: closed-book values to write here
 book_files(path, md5, sig)                 -- where the book is; sidecar size and time
+id_groups(md5, grp)                        -- versions of a book (kept by idstore.lua)
 ```
 
 Segments imported are recorded in `seen_segments`/`bad_segments`, so

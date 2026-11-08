@@ -1,8 +1,8 @@
 # Book identity across file versions (plan)
 
-Status: steps 1 and 2 built (2026-11-06): Cloud library's matcher fix,
-and the identity stream, which records and syncs facts but joins nothing
-yet. Steps 3 onwards are a plan. Sections below say where the build
+Status: steps 1 to 3 built: Cloud library's matcher fix, the identity
+stream (2026-11-06), and book data joining (2026-11-08). Steps 4 onwards
+are a plan. Sections below say where the build
 differs from the plan.
 
 ## The problem
@@ -173,6 +173,16 @@ last writer across all MD5s in its group, by the usual `(upd, dev, hash)`.
 A change made here is still recorded under this file's MD5. Smallest
 change of the three; do it first.
 
+As built: the properties joined are `BookFormat.GROUP_PROPS` (status,
+rating, review, custom metadata); the TOC and flows wait for level 2.
+`IdStore:refreshGroups()` keeps `id_groups(md5, grp)` (groups passing the
+guards only) at the end of each sync and returns the MD5s whose group
+changed; `BookStore:regroup()` then looks again at their closed-book
+writes, and they go into `run.book_affected` so the open book is
+refreshed. Whether a local value changed is judged against the joined
+value, so clearing a value that came from another version is recorded
+even when this file's own records already hold an older clear.
+
 ### Statistics (level 1)
 
 Today an incoming MD5 with no local book becomes a `foreign_books` row.
@@ -256,7 +266,7 @@ Cloud library then:
    **Built.** The status screen shows files known and read, books in more
    than one version, books with different editions under one ID, and
    groups held back by the guards.
-3. Book data joining (level 1).
+3. Book data joining (level 1). **Built** (2026-11-08).
 4. Statistics joining, including the late-link move.
 5. Annotations, TOC and flows joining (level 2).
 6. Cloud library: links, `bookState`, badges and details.

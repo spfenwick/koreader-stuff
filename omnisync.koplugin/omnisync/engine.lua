@@ -718,6 +718,24 @@ function Engine:_finish(run)
         local ok, err = pcall(d.afterImport, run.affected)
         if not ok then self.log.warn("StatSync: refreshing statistics failed:", err) end
     end
+    if run.id and d.id.store.refreshGroups then
+        -- Versions of a book joined or parted: their book data applies anew.
+        local ok, changed = pcall(d.id.store.refreshGroups, d.id.store)
+        if not ok then
+            self.log.warn("StatSync: updating book versions failed:", changed)
+        elseif next(changed) then
+            run.id_regrouped = 0
+            for _ in pairs(changed) do run.id_regrouped = run.id_regrouped + 1 end
+            if run.book and d.book.store.regroup then
+                local rok, all = pcall(d.book.store.regroup, d.book.store, changed)
+                if rok then
+                    for md5 in pairs(all) do run.book_affected[md5] = true end
+                else
+                    self.log.warn("StatSync: applying book data to new versions failed:", all)
+                end
+            end
+        end
+    end
     if run.ann and d.ann.afterSync then
         local ok, err = pcall(d.ann.afterSync, run)
         if not ok then self.log.warn("StatSync: applying annotations failed:", err) end
@@ -801,9 +819,9 @@ function Engine:_finish(run)
             run.book_uploaded_records, run.book_segments_imported, run.book_imported_records, run.book_applied))
     end
     if run.id then
-        self.log.info(string.format("StatSync: book identity: sent %d facts, imported %d segments (%d facts, %d new here), read %d book files (%d new facts, %d still to read)",
+        self.log.info(string.format("StatSync: book identity: sent %d facts, imported %d segments (%d facts, %d new here), read %d book files (%d new facts, %d still to read), %d files joined or parted",
             run.id_uploaded_records, run.id_segments_imported, run.id_imported_records, run.id_applied,
-            run.id_scanned, run.id_new_facts, run.id_scan_left or 0))
+            run.id_scanned, run.id_new_facts, run.id_scan_left or 0, run.id_regrouped or 0))
     end
     self.running = false
     self.current = nil

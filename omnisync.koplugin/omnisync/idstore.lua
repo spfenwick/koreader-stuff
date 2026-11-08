@@ -15,9 +15,10 @@ Tables:
     id_outbox  (md5, fact): facts to send
     id_scanned path -> md5 (the sidecar's), size, mtime: files read, and
                what they were then (read again when any of it changes)
-
-Nothing here joins books yet: groups() only reports which MD5s belong
-together, for the status screen and for checking before joining is built.
+    id_groups  md5 -> grp: the groups that are joined (two or more MD5s,
+               guards passed), grp being the group's smallest MD5. Rebuilt
+               by refreshGroups() after each sync. Book data reads it (see
+               bookstore.lua).
 --]]
 
 local IdFormat = require("omnisync/idformat")
@@ -61,6 +62,11 @@ local SCHEMA = [[
         size  INTEGER,
         mtime INTEGER
     );
+    CREATE TABLE IF NOT EXISTS id_groups (
+        md5 TEXT PRIMARY KEY,
+        grp TEXT NOT NULL
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS id_groups_grp ON id_groups (grp);
     CREATE TABLE IF NOT EXISTS seen_segments (
         device_id   TEXT    NOT NULL,
         name        TEXT    NOT NULL,
@@ -322,79 +328,120 @@ end
 -- { { md5s = { … }, uuids = { … }, sigs = n (distinct signatures known),
 -- title, ok (false when a guard stops it being joined), why }, … } for
 -- groups of two or more MD5s, largest first.
-function IdStore:groups()
-    return self:_read(function(conn)
-        local parent = {}
-        local function find(x)
-            while parent[x] ~= x do
-                parent[x] = parent[parent[x]]
-                x = parent[x]
+local function computeGroups(conn)
+    local parent = {}
+    local function find(x)
+        while parent[x] ~= x do
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        end
+        return x
+    end
+    local function union(a, b)
+        local ra, rb = find(a), find(b)
+        if ra ~= rb then if ra < rb then parent[rb] = ra else parent[ra] = rb end end
+    end
+    local by_uuid = {}
+    for _, r in ipairs(rows(conn:prepare("SELECT uuid, md5 FROM id_uuids ORDER BY uuid, md5;"))) do
+        local uuid, md5 = r[1], r[2]
+        parent[md5] = parent[md5] or md5
+        if by_uuid[uuid] then union(by_uuid[uuid], md5) else by_uuid[uuid] = md5 end
+    end
+    local groups = {}
+    for md5 in pairs(parent) do
+        local root = find(md5)
+        groups[root] = groups[root] or { md5s = {}, uuids = {}, sig_set = {}, titles = {} }
+        table.insert(groups[root].md5s, md5)
+    end
+    for uuid, md5 in pairs(by_uuid) do
+        table.insert(groups[find(md5)].uuids, uuid)
+    end
+    for _, r in ipairs(rows(conn:prepare("SELECT md5, sig, title, authors FROM id_facts;"))) do
+        local g = parent[r[1]] and groups[find(r[1])]
+        if g then
+            if r[2] then g.sig_set[r[2]] = true end
+            if r[3] then
+                local first_author = (r[4] or ""):match("^[^\n]*")
+                g.titles[normTitle(r[3]) .. "\0" .. normTitle(first_author)] = r[3]
             end
-            return x
         end
-        local function union(a, b)
-            local ra, rb = find(a), find(b)
-            if ra ~= rb then if ra < rb then parent[rb] = ra else parent[ra] = rb end end
+    end
+    local out = {}
+    for _, g in pairs(groups) do
+        if #g.md5s >= 2 then
+            table.sort(g.md5s)
+            table.sort(g.uuids)
+            local sigs = 0
+            for _ in pairs(g.sig_set) do sigs = sigs + 1 end
+            g.sigs, g.sig_set = sigs, nil
+            -- Guards: unrelated books sharing a UUID by mistake.
+            local titles, authors_of = {}, {}
+            for key, title in pairs(g.titles) do
+                local t, a = key:match("^(.-)%z(.*)$")
+                titles[t] = true
+                authors_of[a] = true
+                g.title = g.title or title
+            end
+            local function count(set) local n = 0 for _ in pairs(set) do n = n + 1 end return n end
+            g.titles = nil
+            g.ok = true
+            if #g.md5s > IdStore.MAX_GROUP then
+                g.ok, g.why = false, "more than " .. IdStore.MAX_GROUP .. " files"
+            elseif count(titles) > 1 and count(authors_of) > 1 then
+                g.ok, g.why = false, "titles and authors differ"
+            end
+            out[#out + 1] = g
         end
-        local by_uuid = {}
-        for _, r in ipairs(rows(conn:prepare("SELECT uuid, md5 FROM id_uuids ORDER BY uuid, md5;"))) do
-            local uuid, md5 = r[1], r[2]
-            parent[md5] = parent[md5] or md5
-            if by_uuid[uuid] then union(by_uuid[uuid], md5) else by_uuid[uuid] = md5 end
+    end
+    table.sort(out, function(a, b)
+        if #a.md5s ~= #b.md5s then return #a.md5s > #b.md5s end
+        return a.md5s[1] < b.md5s[1]
+    end)
+    return out
+end
+
+function IdStore:groups()
+    return self:_read(computeGroups)
+end
+
+--- Brings id_groups in line with the facts. Returns the MD5s whose group
+-- changed (joined, left, or its members changed): { [md5] = true }.
+function IdStore:refreshGroups()
+    return self:_tx(function(conn)
+        -- Each MD5's group, as the sorted list of its members.
+        local old, new = {}, {}
+        local members = {}
+        for _, r in ipairs(rows(conn:prepare("SELECT grp, md5 FROM id_groups ORDER BY grp, md5;"))) do
+            members[r[1]] = members[r[1]] or {}
+            table.insert(members[r[1]], r[2])
+        end
+        for _, list in pairs(members) do
+            local key = table.concat(list, ",")
+            for _, md5 in ipairs(list) do old[md5] = key end
         end
         local groups = {}
-        for md5 in pairs(parent) do
-            local root = find(md5)
-            groups[root] = groups[root] or { md5s = {}, uuids = {}, sig_set = {}, titles = {} }
-            table.insert(groups[root].md5s, md5)
-        end
-        for uuid, md5 in pairs(by_uuid) do
-            table.insert(groups[find(md5)].uuids, uuid)
-        end
-        for _, r in ipairs(rows(conn:prepare("SELECT md5, sig, title, authors FROM id_facts;"))) do
-            local g = parent[r[1]] and groups[find(r[1])]
-            if g then
-                if r[2] then g.sig_set[r[2]] = true end
-                if r[3] then
-                    local first_author = (r[4] or ""):match("^[^\n]*")
-                    g.titles[normTitle(r[3]) .. "\0" .. normTitle(first_author)] = r[3]
-                end
+        for _, g in ipairs(computeGroups(conn)) do
+            if g.ok then
+                groups[#groups + 1] = g
+                local key = table.concat(g.md5s, ",")
+                for _, md5 in ipairs(g.md5s) do new[md5] = key end
             end
         end
-        local out = {}
-        for _, g in pairs(groups) do
-            if #g.md5s >= 2 then
-                table.sort(g.md5s)
-                table.sort(g.uuids)
-                local sigs = 0
-                for _ in pairs(g.sig_set) do sigs = sigs + 1 end
-                g.sigs, g.sig_set = sigs, nil
-                -- Guards: unrelated books sharing a UUID by mistake.
-                local titles, authors_of = {}, {}
-                for key, title in pairs(g.titles) do
-                    local t, a = key:match("^(.-)%z(.*)$")
-                    titles[t] = true
-                    authors_of[a] = true
-                    g.title = g.title or title
-                end
-                local function count(set) local n = 0 for _ in pairs(set) do n = n + 1 end return n end
-                g.titles = nil
-                g.ok = true
-                if #g.md5s > IdStore.MAX_GROUP then
-                    g.ok, g.why = false, "more than " .. IdStore.MAX_GROUP .. " files"
-                elseif count(titles) > 1 and count(authors_of) > 1 then
-                    g.ok, g.why = false, "titles and authors differ"
-                end
-                out[#out + 1] = g
+        local changed = {}
+        for md5, key in pairs(old) do if new[md5] ~= key then changed[md5] = true end end
+        for md5, key in pairs(new) do if old[md5] ~= key then changed[md5] = true end end
+        if next(changed) then
+            conn:exec("DELETE FROM id_groups;")
+            local put = conn:prepare("INSERT INTO id_groups (md5, grp) VALUES (?, ?);")
+            for _, g in ipairs(groups) do
+                for _, md5 in ipairs(g.md5s) do put:reset():bind(md5, g.md5s[1]):step() end
             end
+            put:close()
         end
-        table.sort(out, function(a, b)
-            if #a.md5s ~= #b.md5s then return #a.md5s > #b.md5s end
-            return a.md5s[1] < b.md5s[1]
-        end)
-        return out
+        return changed
     end)
 end
+
 
 -- Status --------------------------------------------------------------------------------
 
