@@ -291,9 +291,22 @@ local function decorate(item)
     return item
 end
 
+-- The book's metadata on its list item, as KOReader's title, authors and
+-- series sorts leave it. Code that reads metadata from CoverBrowser's
+-- database itself when an item has none (ZenOS's series grouping in the
+-- Library view) would find nothing for a cloud book, so it's always set.
+local function withProps(item, book)
+    if type(item) == "table" and type(item.doc_props) ~= "table" then
+        local props = docProps(book)
+        props.display_title = book.title or (book.filename and book.filename:gsub("%.[^.]*$", ""))
+        item.doc_props = props
+    end
+    return item
+end
+
 function Virtual.listItem(fc, book, collate)
     local dir = book.path:match("^(.*)/[^/]*$")
-    return decorate(fc:getListItem(dir, book.filename, book.path, attributes(book), collate))
+    return decorate(withProps(fc:getListItem(dir, book.filename, book.path, attributes(book), collate), book))
 end
 
 local function installListing()
@@ -308,8 +321,8 @@ local function installListing()
             local t0 = Timing.start()
             for _i, book in ipairs(Virtual.books) do
                 if collate then
-                    table.insert(files, self:getListItem(path, book.filename,
-                        book.path, attributes(book), collate))
+                    table.insert(files, withProps(self:getListItem(path, book.filename,
+                        book.path, attributes(book), collate), book))
                 else -- counting only, like FileChooser:getPathList()
                     table.insert(files, true)
                 end

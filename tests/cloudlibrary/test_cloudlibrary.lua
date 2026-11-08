@@ -1193,6 +1193,16 @@ do
     eq(#Virtual.books, 2, "one entry per catalog book")
     eq(Virtual.folder, "/lib", "folder normalised")
     check(Virtual.isVirtual("/lib/cloud-x2.epub"), "virtual path")
+
+    -- List items carry the book's metadata (ZenOS's series grouping reads
+    -- CoverBrowser's database for items without it, where cloud books aren't).
+    Virtual.setCatalog("/lib/", { { id = "s1", title = "Third", series = "Saga", series_index = 3 } })
+    local fc = { getListItem = function(_self, _dir, _name, item_path) return { path = item_path } end }
+    local item = Virtual.listItem(fc, Virtual.books[1])
+    check(item.doc_props and item.doc_props.series == "Saga" and item.doc_props.series_index == 3
+        and item.doc_props.display_title == "Third", "list item has the book's series and title")
+    fc.getListItem = function(_self, _dir, _name, item_path) return { path = item_path, doc_props = { title = "Own" } } end
+    eq(Virtual.listItem(fc, Virtual.books[1]).doc_props.title, "Own", "metadata set by a sort is kept")
 end
 
 -- ZenOS Authors, Series and Tags ------------------------------------------------------------
