@@ -369,6 +369,20 @@ function Store:useLocation(location)
     return old ~= nil
 end
 
+--- The folder was renamed on the server, files and all: if segments went
+-- to `from`, they're taken to be at `to`, so nothing is sent again.
+-- Returns true when it moved.
+function Store:moveLocation(from, to)
+    if not from or not to or from == to or self:_getMeta("location") ~= from then return false end
+    local conn = self:openState()
+    withConn(conn, function()
+        local stmt = conn:prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('location', ?);")
+        stmt:bind(to):step()
+        stmt:close()
+    end)
+    return true
+end
+
 --- Forgets where segments went. Without `resend`, the next location is
 -- taken as the same place (the folder was moved, files and all), so nothing
 -- is sent again. With `resend`, everything is sent to it and imported again.

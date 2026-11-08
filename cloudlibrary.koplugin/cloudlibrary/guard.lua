@@ -19,6 +19,7 @@ Features:
   badge    the on-device badge
   zenos_listing  keeping ZenOS's library listing (zenos_listing.lua)
   zenos_groups   cloud books in ZenOS's Authors, Series and Tags (zenos_groups.lua)
+  history  cloud books in the reading history (history.lua)
   jobs     background tasks, menu actions: an error is logged and reported,
            nothing is turned off
 ]]
@@ -50,7 +51,7 @@ function Guard.fail(feature, where, err)
     end
     if feature == "library" then
         -- Everything else depends on the library.
-        for other in pairs({ search = true, badge = true, zenos_groups = true }) do
+        for other in pairs({ search = true, badge = true, zenos_groups = true, history = true }) do
             if not Guard.failed[other] then Guard.failed[other] = "library turned off" end
         end
     end
@@ -223,6 +224,10 @@ function Guard.check()
     local ok_bl = pcall(require, "ui/widget/booklist")
     requires("badge", ok_bl and "ui/widget/booklist" or "ui/widget/filechooser", { paintTo = 4 })
     requires("badge", "ui/widget/iconwidget", { new = true })
+    requires("history", "readhistory", {
+        _read = 1, clearMissing = 1, _flush = 1, getIndexByFile = 2, getIndexByTime = 2, removeItem = 2,
+    })
+    requires("history", "apps/filemanager/filemanagerhistory", { onShowHist = 1 })
 
     for feature, problems in pairs(Guard.unavailable) do
         logger.warn("CloudLibrary: not starting", feature, "-", table.concat(problems, "; "))
@@ -233,7 +238,7 @@ end
 --- Lines for the Status screen ("" when all is well).
 function Guard.statusText()
     local lines = {}
-    for _i, feature in ipairs({ "library", "search", "badge", "zenos_listing", "zenos_groups", "jobs" }) do
+    for _i, feature in ipairs({ "library", "search", "badge", "zenos_listing", "zenos_groups", "history", "jobs" }) do
         if Guard.unavailable[feature] then
             table.insert(lines, string.format("%s not started: %s", feature,
                 table.concat(Guard.unavailable[feature], "; ")))

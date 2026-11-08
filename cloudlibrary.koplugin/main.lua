@@ -61,6 +61,7 @@ function CloudLibrary:init()
         end
         require("cloudlibrary/search").install(Virtual)
         Library.installDeleteHooks()
+        if Virtual.installed and require("cloudlibrary/guard").ok("library") then Library.installHistory() end
     end
     -- Not in tests: an update prompt would get in their way.
     if not fixturePath() then Updater.scheduleCheck(self) end

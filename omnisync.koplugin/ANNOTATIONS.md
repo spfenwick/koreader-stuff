@@ -161,7 +161,7 @@ A separate stream in each device folder, with its own numbering and seen
 tracking:
 
 ```
-<folder>/Statistics/devices/<device-id>/
+<folder>/Reading/devices/<device-id>/
   meta.json
   seg-0000000001.jsonl.zst      statistics (unchanged)
   ann-0000000001.jsonl.zst      annotations

@@ -39,6 +39,7 @@ local Downloads = require("cloudlibrary/downloads")
 local ZenListing = require("cloudlibrary/zenos_listing")
 local ZenGroups = require("cloudlibrary/zenos_groups")
 local Guard = require("cloudlibrary/guard")
+local History = require("cloudlibrary/history")
 local Matcher = require("cloudlibrary/matcher")
 local Search = require("cloudlibrary/search")
 local Settings = require("cloudlibrary/settings")
@@ -204,6 +205,7 @@ function Library.load()
         Library.matched, Library.on_device, Library.not_in_catalog = {}, {}, {}
         Covers.configure(nil)
         showCatalog(folder, {})
+        Guard.call("history", History.reconcile)
         Library.loaded_key = loadKey(server, folder, s)
         return
     end
@@ -240,6 +242,7 @@ function Library.load()
     logger.info("CloudLibrary: loaded", Library.stats)
     t0 = Timing.start()
     showCatalog(folder, cloud)
+    Guard.call("history", History.reconcile)
     Timing.record("catalog: show in folder", Timing.since(t0))
     Timing.record("catalog: load", Timing.since(t_load),
         string.format("%d cloud books, %d on this device", #cloud, #books - #cloud))
@@ -266,9 +269,32 @@ local function reloadSoon()
     end)
 end
 
+--- The catalog ID of a downloaded book's file, or nil.
+local function idForPath(path)
+    for id, p in pairs(Library.matched or {}) do
+        if p == path then return id end
+    end
+end
+
+--- Where this device has the catalog book with one of these UUIDs (its
+-- file, or its cloud entry), or nil. Used by OmniSync for the history.
+function Library.pathForUuids(uuids)
+    return History.pathForUuids(uuids)
+end
+
+function Library.installHistory()
+    History.install{
+        folder = Library.folder,
+        matched = function() return Library.matched end,
+        save = Library.save,
+        saved = function() return Library.settings().history_cloud end,
+    }
+end
+
 function Library.installDeleteHooks()
     local FileManager = require("apps/filemanager/filemanager")
     Guard.hook("library", FileManager, "deleteFile", function(orig, self, file, ...)
+        if inLibrary(file) then History.deleting(file, idForPath(file)) end
         local ok = orig(self, file, ...)
         if ok and inLibrary(file) and not Virtual.isVirtual(file) then reloadSoon() end
         return ok
@@ -276,7 +302,10 @@ function Library.installDeleteHooks()
     Guard.hook("library", FileManager, "deleteSelectedFiles", function(orig, self, ...)
         local any = false
         for path in pairs(self.selected_files or {}) do
-            if inLibrary(path) then any = true break end
+            if inLibrary(path) then
+                any = true
+                History.deleting(path, idForPath(path))
+            end
         end
         local r = orig(self, ...)
         if any then reloadSoon() end

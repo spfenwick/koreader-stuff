@@ -64,7 +64,7 @@ identity in IDENTITY.md.
    The segment format inside is unchanged (`v` 1). (Statistics sync put the
    compressed files in a `v2/` subfolder, so its 0.2.2 devices never saw
    them; OmniSync, which those devices can't share a folder with anyway,
-   puts them straight in `<folder>/Statistics/`.)
+   puts them straight in `<folder>/Statistics/`, since 0.5.0 `<folder>/Reading/`.)
 6. **`insertDB` doesn't save the page on screen.** Its duration isn't known
    until the page is turned, so the flush before export (calling the
    statistics plugin's `insertDB()`, as its own `onSuspend` does) writes
@@ -223,7 +223,7 @@ identity in IDENTITY.md.
 - **The server comes from Cloud storage, by name**, and is the one settings
   sync uses: `omnisync/settings.lua` keeps `{name, type}` and a folder
   (default `/KOReader`, relative to the server's address; statistics and
-  annotations go in its `Statistics/`), and the address and credentials
+  annotations go in its `Reading/`, `Statistics/` before 0.5.0), and the address and credentials
   are read from `cloudstorage.lua` when syncing. Statistics and annotations
   need a WebDAV server (settings sync also works with Dropbox). Nothing is
   shared with Reading statistics' own Cloud sync setting. With no server

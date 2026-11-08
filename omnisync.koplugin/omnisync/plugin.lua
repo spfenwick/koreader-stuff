@@ -20,6 +20,7 @@ local AnnSync = require("omnisync/annsync")
 local BookStore = require("omnisync/bookstore")
 local BookSync = require("omnisync/booksync")
 local CollSync = require("omnisync/collsync")
+local HistSync = require("omnisync/histsync")
 local Engine = require("omnisync/engine")
 local IdScan = require("omnisync/idscan")
 local IdStore = require("omnisync/idstore")
@@ -44,10 +45,12 @@ Plugin.DEVICE_FILE = Plugin.DIR .. "/device.lua"
 Plugin.STATE_FILE = Plugin.DIR .. "/state.sqlite3"
 
 --- Folder on the server when none is set. Settings sync uses its Files/
--- subfolder, statistics and annotations its Statistics/ subfolder.
+-- subfolder; statistics, highlights and book data its Reading/ subfolder
+-- (Statistics/ until 0.5.0: see STATISTICS.md, "Moving from Statistics/").
 Plugin.DEFAULT_ROOT = "/KOReader"
 Plugin.SETTINGS_DIR = "Files"
-Plugin.STATS_DIR = "Statistics"
+Plugin.STATS_DIR = "Reading"
+Plugin.OLD_STATS_DIR = "Statistics"
 
 --- Makes settings/omnisync/ if it isn't there; returns the settings folder.
 function Plugin.ensureDir()
@@ -186,19 +189,19 @@ function Plugin.settingsRoot()
 end
 
 --- The folder for statistics and annotations, for the WebDAV client:
--- relative to the server's address. <root>/Statistics.
-function Plugin.remoteRoot()
-    return join(Plugin.root(), Plugin.STATS_DIR)
+-- relative to the server's address. <root>/Reading (or `dir`).
+function Plugin.remoteRoot(dir)
+    return join(Plugin.root(), dir or Plugin.STATS_DIR)
 end
 
 --- Where statistics and annotations sync to, for showing and for noticing
 -- a change: the server's address (without any user:password@) and the
 -- folder. Nil without a WebDAV server.
-function Plugin.serverLocation(server)
+function Plugin.serverLocation(server, dir)
     server = server or Plugin.statsServer()
     if not server or not server.address then return nil end
     local WebDav = require("omnisync/webdav")
-    local root = Plugin.remoteRoot()
+    local root = Plugin.remoteRoot(dir)
     return WebDav.redact(server.address):gsub("/+$", "") .. "/" .. (root ~= "" and root .. "/" or "")
 end
 
@@ -312,6 +315,37 @@ function Plugin.collSync()
     return coll_sync
 end
 
+local hist_sync
+
+--- Where Cloud library has a book with one of these UUIDs (its file, or
+-- its cloud entry), when Cloud library is installed.
+local function cloudPath(uuids)
+    local CloudLibrary = package.loaded["cloudlibrary/library"]
+    if type(CloudLibrary) ~= "table" or type(CloudLibrary.pathForUuids) ~= "function" then return nil end
+    local ok, path = pcall(CloudLibrary.pathForUuids, uuids)
+    if not ok then logger.warn("OmniSync: asking Cloud library failed:", path) end
+    return ok and path or nil
+end
+
+--- The process-wide reading history sync (synced with book data).
+function Plugin.histSync()
+    if hist_sync then return hist_sync end
+    hist_sync = HistSync.new{
+        store = Plugin.bookStore(),
+        finder = Plugin.collSync(),
+        getDeviceId = Plugin.deviceId,
+        now = os.time,
+        logger = logger,
+        enabled = function() return true end,
+        schedule = function(delay, fn)
+            if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
+        end,
+        uuids = function(md5s) return Plugin.idStore():uuids(md5s) end,
+        resolve = cloudPath,
+    }
+    return hist_sync
+end
+
 local id_store
 
 function Plugin.idStore()
@@ -364,6 +398,10 @@ function Plugin.engine()
             if problem then return false, problem end
             -- Another server or folder: send and import everything there.
             local location = Plugin.serverLocation()
+            -- Statistics/ renamed Reading/ (0.5.0): the same place, not a new one.
+            local mok, merr = pcall(store.moveLocation, store,
+                Plugin.serverLocation(nil, Plugin.OLD_STATS_DIR), location)
+            if not mok then return false, "state database: " .. tostring(merr) end
             local lok, changed = pcall(store.useLocation, store, location)
             if not lok then return false, "state database: " .. tostring(changed) end
             if changed then
@@ -443,10 +481,13 @@ function Plugin.engine()
                 Plugin.bookSync():collect()
                 local ok, err = pcall(function() Plugin.collSync():observe() end)
                 if not ok then logger.warn("OmniSync: recording collection changes failed:", err) end
+                ok, err = pcall(function() Plugin.histSync():observe() end)
+                if not ok then logger.warn("OmniSync: recording history changes failed:", err) end
             end,
             afterSync = function(run)
                 Plugin.bookSync():afterSync(run)
                 Plugin.collSync():afterSync()
+                Plugin.histSync():afterSync()
             end,
         },
         id = {

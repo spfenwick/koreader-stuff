@@ -46,7 +46,7 @@ end
 -- Every module loads (catches mistakes in code that only runs at load time) ------------
 
 do
-    for _i, name in ipairs({ "badge", "covers", "downloads", "feed", "guard", "http", "library", "matcher",
+    for _i, name in ipairs({ "badge", "covers", "downloads", "feed", "guard", "history", "http", "library", "matcher",
             "search", "store", "sync", "timing", "virtual" }) do
         local ok, err = pcall(require, "cloudlibrary/" .. name)
         check(ok, "module " .. name .. " loads: " .. tostring(err))
@@ -1180,6 +1180,122 @@ do
     Library.load = real_load
 
     Library.server, UIManager.nextTick = real_server, real_tick
+    Virtual.setCatalog(nil, {})
+end
+
+-- Cloud books in the reading history --------------------------------------------------
+
+do
+    local Library = require("cloudlibrary/library")
+    local History = require("cloudlibrary/history")
+    local Guard = require("cloudlibrary/guard")
+    local ReadHistory = require("readhistory")
+    local UIManager = require("ui/uimanager")
+    local FileManager = require("apps/filemanager/filemanager")
+    local folder = TMP .. "/histlib"
+    lfs.mkdir(folder)
+    local server = { url = "http://hist.invalid/opds", username = "u" }
+    local real_server, real_tick = Library.server, UIManager.nextTick
+    Library.server = function() return server end
+    UIManager.nextTick = function(_self, fn) fn() end
+    Library.save("folder", folder)
+    local U1 = "aaaaaaaa-0000-4000-8000-000000000001"
+    local U2 = "aaaaaaaa-0000-4000-8000-000000000002"
+    local store = Store.open(Library.dbPath(server), false)
+    store:upsertBooks({
+        { uuid = U1, title = "Up", authors = { "Bo Writer" } },
+        { uuid = U2, title = "Down", authors = { "Ann Author" } },
+    }, 1)
+    store:close()
+    local down = folder .. "/Ann Author - Down.epub"
+    local f = io.open(down, "w"); f:write("x"); f:close()
+    local cloud1 = folder .. "/cloud-" .. U1 .. ".epub"
+
+    eq(Library.pathForUuids({ U1 }), nil, "before installing: nothing")
+    Library.installHistory()
+    Library.load()
+    eq(Library.pathForUuids({ U1:upper() }), cloud1, "a cloud book: its cloud entry (any case)")
+    eq(Library.pathForUuids({ "11111111-0000-4000-8000-000000000000", U2 }), down, "a downloaded book: its file")
+    eq(Library.pathForUuids({ "11111111-0000-4000-8000-000000000000" }), nil, "not in the catalog")
+
+    -- A cloud entry, as OmniSync puts one in.
+    ReadHistory.hist = {
+        { time = 200, file = down, text = "Ann Author - Down.epub", dim = false, select_enabled = true },
+        { time = 100, file = cloud1, text = "cloud.epub", dim = false, select_enabled = false },
+    }
+    ReadHistory:_flush()
+    local saved = Library.settings().history_cloud
+    check(type(saved) == "table" and #saved == 1 and saved[1].file == cloud1 and saved[1].time == 100,
+        "cloud entries remembered on save")
+    ReadHistory:reload(true)
+    local e = ReadHistory.hist[ReadHistory:getIndexByFile(cloud1) or 0]
+    check(e and not e.dim and not e.select_enabled, "read back: shown, never reopened")
+    ReadHistory.hist[1].time = 50 -- the cloud entry newest
+    table.sort(ReadHistory.hist, function(a, b) return a.time > b.time end)
+    ReadHistory:ensureLastFile()
+    eq(G_reader_settings:readSetting("lastfile"), down, "startup book: never a cloud entry")
+
+    -- Auto-remove on: kept, and put back after KOReader dropped it at startup.
+    G_reader_settings:saveSetting("autoremove_deleted_items_from_history", true)
+    ReadHistory:clearMissing()
+    check(ReadHistory:getIndexByFile(cloud1), "auto-remove keeps cloud entries")
+    Guard.failed.history = "as before the plugin loads"
+    ReadHistory:clearMissing() -- KOReader's own
+    Guard.failed.history = nil
+    check(not ReadHistory:getIndexByFile(cloud1), "KOReader alone drops it")
+    History.restore(ReadHistory)
+    e = ReadHistory.hist[ReadHistory:getIndexByFile(cloud1) or 0]
+    check(e and e.time == 100, "put back at startup, at its time")
+    G_reader_settings:delSetting("autoremove_deleted_items_from_history")
+    History.restore(ReadHistory) -- auto-remove off: a missing entry was removed by hand
+    ReadHistory:removeItemByPath(cloud1)
+    History.restore(ReadHistory)
+    check(not ReadHistory:getIndexByFile(cloud1), "removed by hand: stays removed")
+    ReadHistory.hist = {
+        { time = 100, file = cloud1, text = "cloud.epub", dim = false, select_enabled = false },
+    }
+    ReadHistory:_flush()
+
+    -- Tapping or long-pressing it in the History view shows its details.
+    local shown, real_show = {}, Virtual.showDetails
+    Virtual.showDetails = function(path) table.insert(shown, path) end
+    local manager = { booklist_menu = {
+        onMenuSelect = function() return "opened" end, onMenuHold = function() return "held" end,
+    } }
+    History.wrapHistoryMenu(manager)
+    check(manager.booklist_menu:onMenuSelect({ file = cloud1 }) == true and shown[1] == cloud1, "tap: details")
+    check(manager.booklist_menu:onMenuHold({ file = cloud1 }) == true and #shown == 2, "long-press: details")
+    eq(manager.booklist_menu:onMenuSelect({ file = down }), "opened", "a file opens as usual")
+    Virtual.showDetails = real_show
+
+    -- Downloaded: the entry becomes the file.
+    local up = folder .. "/Bo Writer - Up.epub"
+    f = io.open(up, "w"); f:write("y"); f:close()
+    Library.load()
+    check(ReadHistory:getIndexByFile(up) and not ReadHistory:getIndexByFile(cloud1), "downloaded: the file's entry")
+    eq(ReadHistory.hist[ReadHistory:getIndexByFile(up) or 0].time, 100, "at the same time")
+    eq(Library.pathForUuids({ U1 }), up, "and OmniSync gets the file")
+
+    -- Deleted: back to the cloud entry.
+    Library.installDeleteHooks()
+    check(FileManager.deleteFile(FileManager, up, true), "file deleted")
+    check(ReadHistory:getIndexByFile(cloud1) and not ReadHistory:getIndexByFile(up), "deleted: the cloud entry again")
+    e = ReadHistory.hist[ReadHistory:getIndexByFile(cloud1) or 0]
+    check(e and not e.dim, "shown as a cloud book")
+
+    -- Gone from the catalog: greyed out.
+    store = Store.open(Library.dbPath(server), false)
+    store:upsertBooks({ { uuid = U2, title = "Down", authors = { "Ann Author" } } }, 2)
+    store:deleteUnseen(2)
+    store:close()
+    Library.load()
+    e = ReadHistory.hist[ReadHistory:getIndexByFile(cloud1) or 0]
+    check(e and e.dim, "book gone from the catalog: greyed out")
+
+    ReadHistory.hist = {}
+    ReadHistory:_flush()
+    Library.server, UIManager.nextTick = real_server, real_tick
+    Library.save("folder", nil)
     Virtual.setCatalog(nil, {})
 end
 

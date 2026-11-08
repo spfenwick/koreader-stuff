@@ -19,7 +19,7 @@ mixing them gives confusing results.
 ## What's on the server
 
 ```
-<folder on server>/Statistics/    /KOReader/Statistics unless changed
+<folder on server>/Reading/       /KOReader/Reading unless changed
   devices/<device-id>/
     meta.json                     device ID, model, format version, when written
     seg-0000000001.jsonl.zst      segment files, numbered 1, 2, 3, …
@@ -32,6 +32,19 @@ mixing them gives confusing results.
     id-0000000001.jsonl.zst       book identity, numbered apart
     …
 ```
+
+### Moving from Statistics/
+
+Until 0.5.0 this folder was `<folder on server>/Statistics/`. Before
+updating any device to 0.5.0, rename it on the server to `Reading/`, and
+to keep devices still on older versions working, make `Statistics` a
+link to it (on the server's disk, e.g. `ln -s Reading Statistics`, if your
+WebDAV server follows links). A device that synced with `Statistics/`
+takes `Reading/` on the same server to be the same folder, so nothing is
+sent again. If a device updates before the folder is renamed, it finds its
+own files missing and stops before writing anything (on "Sync now" it
+asks whether to send everything: don't). Once the folder is renamed, its
+next sync carries on, with nothing sent again.
 
 **Packs:** most syncs upload a small file, so once a day each device packs
 its own small files into one, once it has at least 100 of a kind: up to
@@ -185,7 +198,8 @@ setting):
   series index, keywords, language, description), not custom covers;
 - the **handmade table of contents** and **hidden flows**;
 - **collections and favorites**: which books are in which collection, and
-  the collections' names (see below).
+  the collections' names (see below);
+- the **reading history**: when each book was last opened (see below).
 
 As for highlights, they go to devices with the same file. Each item syncs
 on its own, and the newest change wins.
@@ -219,6 +233,25 @@ each device can keep its books in different folders:
 - Each device keeps its own order of books and collections, sorting,
   filters and connected folders.
 - Don't sync `settings/collection.lua` with settings sync as well.
+
+**The reading history** also goes by book:
+
+- A book read on another device goes into this device's History at the
+  time it was read, right after a sync. The latest book read anywhere is
+  at the top, and it's the one KOReader reopens on startup.
+- While a book is open, books read elsewhere since aren't put above it;
+  they go in when you close it.
+- Only openings are synced. Removing a book from the history (by hand, or
+  KOReader dropping it) doesn't remove it on the other devices, and it
+  stays removed here until the book is opened again somewhere.
+- A book that isn't on this device appears only if Cloud library is
+  installed and has it in its catalog: tapping it shows its details, to
+  download it. Once downloaded, the entry is the downloaded file.
+  (ZenOS's Home page and book switcher only show books on the device.)
+- A book that's on this device but has never been opened there and isn't
+  in a collection is found only through Cloud library (it knows which
+  files are which books); otherwise it's added once it's opened.
+- Don't sync `history.lua` with settings sync as well.
 
 Details in [BOOKDATA.md](BOOKDATA.md).
 

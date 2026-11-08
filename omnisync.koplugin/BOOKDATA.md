@@ -31,6 +31,7 @@ other streams):
 | `toc.<kind>` | sidecar `handmade_toc`, `handmade_toc_enabled` | `{ enabled, items }` |
 | `flows.<kind>` | sidecar `handmade_flow_points`, `handmade_flows_enabled` | `{ enabled, items }` |
 | `coll.<id>` | `settings/collection.lua` | `true`: the book is in collection `<id>` |
+| `hist` | `history.lua` | when the book was last opened (epoch seconds) |
 
 Collections themselves are on a record that isn't a book, MD5
 `collections`: `coll.<id>` → `{ "name": … }`. See
@@ -222,6 +223,51 @@ When things are looked at and applied:
 Settings sync shouldn't also sync `settings/collection.lua`: the two would
 fight over it.
 
+## Reading history
+
+Implemented in `omnisync/histsync.lua`, with its query in `bookstore.lua`
+(`history()`). KOReader keeps the history in `history.lua`: a list of
+`{ time, file }`, newest first, by full path, at most `history_size`
+entries (500). It also uses it for the file it reopens on startup
+(`lastfile`, the first entry whose file exists) and touches each opened
+file's access time ("sort by last read").
+
+- **The property is `hist`**, the time the book was last opened, under the
+  book's MD5. Both the value and the record's `upd` are that time, so the
+  latest opening wins wherever it was recorded; the usual tie-break
+  applies. Versions of a book share it (`GROUP_PROPS`).
+- **Only openings are synced.** An entry can leave the history because the
+  user removed it, because of the size limit, or because the file is gone
+  (with "auto-remove deleted files" on); these can't be told apart, and
+  none of them is a reason to remove it elsewhere. So `hist` is never
+  cleared.
+- **Local changes**, before each sync with book data: each entry whose file
+  exists gets its MD5 (as for collections, `coll_files` as the cache,
+  found a chunk per UI tick before the sync), and its time is recorded,
+  dated by itself.
+- **Applying**, after the sync (unless a menu or dialog is open: KOReader's
+  History view works on its own copy; retried every 2 seconds for 3
+  minutes): every book whose merged `hist` differs from what this device
+  last saw (`book_local`) is put into the history at its time, unless the
+  history already has it as new or newer. Its file's access time is set
+  too. Then `book_local` holds the merged value, so a book removed here
+  isn't put back until a newer opening arrives. The history is saved with
+  KOReader's own `_reduce` and `_flush` (which also sets `lastfile`).
+- **Where the book is**: a file the sync knows for the book or one of its
+  versions (`book_files`, `coll_files`); else, through Cloud library
+  (`package.loaded["cloudlibrary/library"].pathForUuids`, when it's
+  loaded), the book's UUIDs from book identity: the downloaded file, or
+  the book's cloud entry (a path that isn't a file). A cloud entry isn't
+  dimmed but has `select_enabled` false, so KOReader never picks it to
+  reopen. A book found neither way isn't marked seen, and is looked for
+  again after the next sync.
+- **The open book**: KOReader's `updateLastBookTime` sets the first
+  entry's time when the book closes, taking it for the open book. So
+  while a book is open, nothing is put at or above its entry; those wait
+  (not marked seen) for the sync that closing it starts.
+
+Settings sync shouldn't also sync `history.lua`.
+
 ## Local state (in `omnisync/state.sqlite3`)
 
 ```
@@ -230,7 +276,7 @@ book_local(md5, prop, hash)                -- this device's copy, as last seen
 book_outbox(md5, prop, updated)            -- changes waiting to be sent
 book_books(md5, title, authors, write)     -- write: closed-book values to write here
 book_files(path, md5, sig)                 -- where the book is; sidecar size and time
-coll_files(path, md5, sig)                 -- books in collections; file size and time
+coll_files(path, md5, sig)                 -- books in collections or the history; file size and time
 id_groups(md5, grp)                        -- versions of a book (kept by idstore.lua)
 ```
 

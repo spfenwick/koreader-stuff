@@ -191,6 +191,12 @@ function CollSync:_paths()
     return out
 end
 
+--- path -> md5 for these files (found now if not known: see findMd5s).
+function CollSync:md5s(paths) return self:_md5s(paths) end
+
+--- md5 -> { path, … } for every book file on this device known to the sync.
+function CollSync:paths() return self:_paths() end
+
 --- Before a sync: finds the MD5s of books in collections, a chunk per UI
 -- tick (the first time can be many). done() when finished.
 function CollSync:refresh(done)
@@ -200,10 +206,16 @@ function CollSync:refresh(done)
         if done then done() end
         return
     end
+    self:findMd5s(collectionFiles(rc), done)
+end
+
+--- Finds the MD5s of these files that aren't known yet (or changed), a
+-- chunk per UI tick. done() when finished.
+function CollSync:findMd5s(paths, done)
     local cached = self.deps.store:collFiles()
     local books = self.deps.store:files()
     local todo = {}
-    for _, path in ipairs(collectionFiles(rc)) do
+    for _, path in ipairs(paths) do
         local c = cached[path]
         if not ((c and c.sig == self:_sig(path)) or (books[path] and not c)) then todo[#todo + 1] = path end
     end

@@ -1,7 +1,7 @@
 --[[--
 The network part of a sync. Runs in a subprocess; doesn't touch any database.
 
-With a transport (see webdav.lua) rooted at <configured folder>/Statistics:
+With a transport (see webdav.lua) rooted at <configured folder>/Reading:
 
 1. List devices/ (PROPFIND, Depth 1). Create the folders on first use, and
    this device's meta.json.

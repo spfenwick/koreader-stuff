@@ -944,7 +944,7 @@ item("Statistics", "Sync automatically").callback()
 check(Settings.autoStats(), "and on again")
 check(item("Folder on server: /KOReader"), "folder shown")
 check(Settings.settingsRoot() == "/KOReader/Files", "settings in <folder>/Files")
-check(Settings.remoteRoot() == "KOReader/Statistics", "statistics in <folder>/Statistics")
+check(Settings.remoteRoot() == "KOReader/Reading", "statistics in <folder>/Reading")
 check(Settings.server().name == "Mine", "first server by default")
 Settings.settings().server = { name = "Box", type = "dropbox" }
 check(Settings.server().name == "Box", "chosen server")

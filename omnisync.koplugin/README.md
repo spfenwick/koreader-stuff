@@ -9,7 +9,8 @@ KOReader's Cloud storage:
 - **Highlights, notes and page bookmarks** (WebDAV). See
   [STATISTICS.md](STATISTICS.md#highlights-and-bookmarks).
 - **Book status, rating, review, custom metadata, handmade table of
-  contents, and collections and favorites**, with highlights (WebDAV). See
+  contents, collections and favorites, and the reading history**, with
+  highlights (WebDAV). See
   [STATISTICS.md](STATISTICS.md#book-status-and-details).
 - **Book identity** (which files are the same book), with highlights
   (WebDAV): a book's status, rating, review and custom metadata are shared
@@ -51,8 +52,8 @@ Tools → OmniSync, in both the file browser and the reader:
   it off).
 - **Highlights and books** → **Sync now**, **Sync automatically** (on unless
   you turn it off). Highlights, notes and bookmarks, with book status,
-  rating, review, metadata, the handmade table of contents, and
-  collections and favorites.
+  rating, review, metadata, the handmade table of contents,
+  collections and favorites, and the reading history.
 - **Server** and **Folder on server**.
 - **Turn on Wi-Fi for automatic syncs** (off by default).
 - **Status**: server and folders, last syncs and errors, devices seen, books known in more than one version,
@@ -94,11 +95,13 @@ into a book when it's opened, whether or not automatic sync is on.
 ```
 <folder on server>/        /KOReader unless changed
   Files/                   settings sync (manifest.tsv, files/ as in KOReader's folder)
-  Statistics/devices/      statistics and highlights, a folder per device
+  Reading/devices/         statistics, highlights and book data, a folder per device
 ```
 
 Earlier versions kept settings sync's files in `Settings/` (see
-[SETTINGS.md](SETTINGS.md#from-the-earlier-layout)). Statistics sync kept its device folders one level deeper, in
+[SETTINGS.md](SETTINGS.md#from-the-earlier-layout)), and the device folders
+in `Statistics/` until 0.5.0 (see
+[STATISTICS.md](STATISTICS.md#moving-from-statistics)). Statistics sync kept its device folders one level deeper, in
 `/KOReader/Statistics/v2/devices/`.
 
 ## Moving from SuperSync

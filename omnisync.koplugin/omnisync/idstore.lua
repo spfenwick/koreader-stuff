@@ -445,6 +445,26 @@ end
 
 -- Status --------------------------------------------------------------------------------
 
+--- The UUIDs known for these MD5s (from any device's facts):
+-- { [md5] = { uuid, … } }, only for MD5s with any. md5s = { [md5] = true }.
+function IdStore:uuids(md5s)
+    return self:_read(function(conn)
+        local stmt = conn:prepare("SELECT uuid FROM id_uuids WHERE md5 = ? ORDER BY uuid;")
+        local out = {}
+        for md5 in pairs(md5s) do
+            stmt:reset():bind(md5)
+            local r = stmt:step()
+            while r do
+                out[md5] = out[md5] or {}
+                table.insert(out[md5], r[1])
+                r = stmt:step()
+            end
+        end
+        stmt:close()
+        return out
+    end)
+end
+
 function IdStore:counts()
     local groups = self:groups()
     local versions, editions, held = 0, 0, 0

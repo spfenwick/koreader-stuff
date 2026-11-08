@@ -25,8 +25,9 @@ Tables:
     book_books  md5 -> title, authors, write (closed-book properties to write here)
     book_files  path -> md5, sig: where this device has each book, and its
                 sidecar's size and time when last read
-    coll_files  path -> md5, sig: books in collections, with the file's size
-                and time when its MD5 was found (see collsync.lua)
+    coll_files  path -> md5, sig: books in collections or the reading
+                history, with the file's size and time when its MD5 was
+                found (see collsync.lua)
 
 Segments imported are recorded in seen_segments and bad_segments, like the
 other streams' (names book-…).
@@ -509,7 +510,39 @@ function BookStore:memberships(md5s)
     end)
 end
 
---- path -> { md5, sig } for books whose MD5 was found for collections.
+-- Reading history ------------------------------------------------------------------------
+
+--- The reading history in the merged state, as it applies to each book
+-- (its versions' records included): { [md5] = { time, hash, seen, group } }
+-- for every book with a record and every version of one. seen is this
+-- device's copy (hash) as last seen or applied, nil if none; group the
+-- book's MD5s, its own first.
+function BookStore:history()
+    local HIST = BookFormat.HISTORY
+    return self:_read(function(conn)
+        local md5s = {}
+        local stmt = conn:prepare("SELECT md5 FROM book_merged WHERE prop = ? AND deleted = 0;")
+        stmt:bind(HIST)
+        for _, r in ipairs(rows(stmt)) do
+            for _, m in ipairs(groupOf(conn, r[1])) do md5s[m] = true end
+        end
+        local loc = conn:prepare("SELECT hash FROM book_local WHERE md5 = ? AND prop = ?;")
+        local out = {}
+        for md5 in pairs(md5s) do
+            local m = loadEffective(conn, md5)[HIST]
+            local t = m and not m.deleted and tonumber(AnnFormat.decodeValue(m.value))
+            if t then
+                local seen = loc:reset():bind(md5, HIST):step()
+                out[md5] = { time = t, hash = m.hash, seen = seen and seen[1] or nil, group = groupOf(conn, md5) }
+            end
+        end
+        loc:close()
+        return out
+    end)
+end
+
+--- path -> { md5, sig } for books whose MD5 was found for collections or
+-- the reading history.
 function BookStore:collFiles()
     return self:_read(function(conn)
         local out = {}

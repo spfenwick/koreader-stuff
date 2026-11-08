@@ -233,7 +233,13 @@ use.
 Cloud library stays a separate plugin and uses OmniSync when it's present
 (feature-detected on `ui.omnisync`, as with ZenOS).
 
-OmniSync exposes:
+Built so far, the other way round: Cloud library exposes
+`Library.pathForUuids(uuids)` (the downloaded file or the cloud entry of
+the catalog book with one of those UUIDs), which OmniSync's history sync
+calls through `package.loaded["cloudlibrary/library"]` (see BOOKDATA.md,
+Reading history).
+
+OmniSync exposes (planned):
 
 ```
 identity:groupFor(book_id)      -> { md5, ... }        level 1; book_id = any UUID in the group

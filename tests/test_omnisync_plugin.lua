@@ -213,9 +213,9 @@ sub[2].callback()
 check(fileData("omnisync/settings.lua").server.name == "My DAV" and fileData("omnisync/settings.lua").server.password == nil,
     "chosen server kept by name, no credentials")
 check(item("Server: My DAV (WebDAV)"), "chosen server shown")
-check(P.serverLocation() == server.url .. "/KOReader/Statistics/", "location: " .. tostring(P.serverLocation()))
+check(P.serverLocation() == server.url .. "/KOReader/Reading/", "location: " .. tostring(P.serverLocation()))
 check(P.serverLocation({ address = "https://me:secret@dav.example.com/dav/" })
-    == "https://dav.example.com/dav/KOReader/Statistics/", "location shown without credentials")
+    == "https://dav.example.com/dav/KOReader/Reading/", "location shown without credentials")
 
 -- Automatic sync is on: the start-up trigger syncs both, flushing the open book first.
 loop:run(60)
@@ -236,9 +236,9 @@ local function count(dir, pattern)
     end
     return n
 end
-local DAVDIR = server.dir .. "/KOReader/Statistics/devices/"
+local DAVDIR = server.dir .. "/KOReader/Reading/devices/"
 check(count(DAVDIR .. id, "^seg%-") == 1 and count(DAVDIR .. id, "^ann%-") == 1 and count(DAVDIR .. id, "^book%-") == 1,
-    "compressed segments on the server under KOReader/Statistics")
+    "compressed segments on the server under KOReader/Reading")
 check(st.book_uploaded == 1, "book status from the reading history sent with highlights (" .. tostring(st.book_uploaded) .. ")")
 
 -- Offline: automatic triggers skip quietly
@@ -257,7 +257,7 @@ local WebDav = require("omnisync/webdav")
 local ost = Store.new{ sq3 = S.SQ3, stats_path = other.db, state_path = other.state }
 local seg = TMP .. "/other.jsonl"
 ost:export{ device_id = "otherdev", out_path = seg, now = 1, max_events = 1000 }
-local dav = WebDav.new{ http = S.Http.new(), address = server.url, username = "u", password = "p", root = "KOReader/Statistics" }
+local dav = WebDav.new{ http = S.Http.new(), address = server.url, username = "u", password = "p", root = "KOReader/Reading" }
 check(require("omnisync/zstd").compressFile(seg, seg .. ".zst"), "other device's segment compressed")
 dav:mkdir("devices/otherdev")
 check(dav:put_new("devices/otherdev/seg-0000000001.jsonl.zst", seg .. ".zst"), "other device's segment uploaded")
@@ -298,7 +298,7 @@ check(P.autoStats() and P.autoAnnotations(), "both on again")
 -- Status, rebuild
 item("Status").callback()
 check(shown[#shown].text:find("Devices seen: 2", 1, true), "status shows devices seen")
-check(shown[#shown].text:find("Statistics folder: " .. server.url .. "/KOReader/Statistics/", 1, true),
+check(shown[#shown].text:find("Statistics and highlights folder: " .. server.url .. "/KOReader/Reading/", 1, true),
     "status shows the folder")
 item("Troubleshooting", "Rebuild from server").callback()
 shown[#shown].ok_callback()
@@ -326,13 +326,36 @@ st = P.deviceState().status
 check(not st.last_error and st.uploaded_events == 0, "nothing sent again after the move: "
     .. tostring(st.uploaded_events) .. ", " .. tostring(st.last_error))
 
+-- Upgrading from before the Statistics/ folder was renamed Reading/: the
+-- user renamed it on the server; the old location is taken as the new one.
+do
+    local conn = S.SQ3.open(dev.dir .. "/omnisync/state.sqlite3")
+    local old = P.serverLocation(nil, P.OLD_STATS_DIR)
+    check(old == server.url .. "/KOReader/Statistics/", "the old location: " .. tostring(old))
+    conn:exec("UPDATE meta SET value = '" .. old .. "' WHERE key = 'location';")
+    conn:close()
+    local files_before = count(DAVDIR .. id, "%.zst$")
+    item("Statistics", "Sync now").callback()
+    loop:run(60)
+    item("Highlights and books", "Sync now").callback()
+    loop:run(60)
+    st = P.deviceState().status
+    check(not st.last_error and st.uploaded_events == 0 and st.ann_uploaded == 0,
+        "folder renamed: nothing sent again (" .. tostring(st.uploaded_events) .. ", " .. tostring(st.last_error) .. ")")
+    check(count(DAVDIR .. id, "%.zst$") == files_before, "folder renamed: no new files")
+    conn = S.SQ3.open(dev.dir .. "/omnisync/state.sqlite3")
+    local r = conn:exec("SELECT value FROM meta WHERE key = 'location';")
+    conn:close()
+    check(r and r[1][1] == server.url .. "/KOReader/Reading/", "location now the new folder")
+end
+
 -- A database that doesn't know its folder (moved on the server, files and
 -- all): the next folder with this device's files is taken as the same place.
 Store.new{ sq3 = S.SQ3, stats_path = dev.db, state_path = dev.dir .. "/omnisync/state.sqlite3" }:forgetLocation()
 local function cp(from, to) os.execute("cp -r " .. S.q(from) .. " " .. S.q(to)) end
 S.mkdirp(server.dir .. "/Moved")
-cp(server.dir .. "/" .. (root_before or "KOReader"):gsub("^/", "") .. "/Statistics", server.dir .. "/Moved/Statistics")
-local own_files = count(server.dir .. "/Moved/Statistics/devices/" .. id, "%.zst$")
+cp(server.dir .. "/" .. (root_before or "KOReader"):gsub("^/", "") .. "/Reading", server.dir .. "/Moved/Reading")
+local own_files = count(server.dir .. "/Moved/Reading/devices/" .. id, "%.zst$")
 -- First a folder without this device's files (the copy not made yet, or
 -- the wrong folder): stopped before writing anything, and asked.
 P.settings().root = "/Empty"
@@ -342,7 +365,7 @@ loop:run(60)
 local q0 = shown[#shown]
 check(q0 and q0.confirm and q0.text:find("files aren't in the folder"), "folder without this device's files: asked: "
     .. tostring(q0 and q0.text))
-check(not io.open(server.dir .. "/Empty/Statistics/devices/" .. id), "nothing written there")
+check(not io.open(server.dir .. "/Empty/Reading/devices/" .. id), "nothing written there")
 -- Then the folder with the copied files.
 P.settings().root = "/Moved"
 P.saveSettings()
@@ -351,7 +374,7 @@ loop:run(60)
 st = P.deviceState().status
 check(not st.last_error and st.uploaded_events == 0, "nothing sent again to the copied folder: "
     .. tostring(st.uploaded_events) .. ", " .. tostring(st.last_error))
-check(count(server.dir .. "/Moved/Statistics/devices/" .. id, "%.zst$") == own_files, "no new files")
+check(count(server.dir .. "/Moved/Reading/devices/" .. id, "%.zst$") == own_files, "no new files")
 item("Highlights and books", "Sync now").callback()
 loop:run(60)
 st = P.deviceState().status
@@ -370,11 +393,11 @@ loop:run(60)
 st = P.deviceState().status
 check(not st.last_error and st.uploaded_events == 5, "send everything: all 5 entries sent ("
     .. tostring(st.uploaded_events) .. ", " .. tostring(st.last_error) .. ")")
-check(io.open(server.dir .. "/Fresh/Statistics/devices/" .. id .. "/seg-0000000001.jsonl.zst") ~= nil,
+check(io.open(server.dir .. "/Fresh/Reading/devices/" .. id .. "/seg-0000000001.jsonl.zst") ~= nil,
     "segment in the new folder")
 
 -- Highlights and bookmarks ----------------------------------------------------------------
-local FRESH = "Fresh/Statistics"
+local FRESH = "Fresh/Reading"
 local dev_id = id
 local function annSegs() return count(server.dir .. "/" .. FRESH .. "/devices/" .. dev_id, "^ann%-%d+%.jsonl%.zst$") end
 local segs0 = annSegs()

@@ -11,6 +11,7 @@ device. Each is a property of a book, identified by (md5, prop):
     toc.<kind>          handmade table of contents, { enabled, items }
     flows.<kind>        hidden flows, { enabled, items }
     coll.<id>           in collection <id> (favorites, or one of the user's): true
+    hist                last opened (epoch seconds), from the reading history
 
 Collections themselves are properties of a record that isn't a book, its
 MD5 "collections" (BookFormat.COLLECTIONS): coll.<id> -> { name }. The ID
@@ -40,7 +41,7 @@ local BookFormat = {}
 
 BookFormat.FORMAT = "statsync-book"
 BookFormat.VERSION = 1
-BookFormat.MINOR = 1
+BookFormat.MINOR = 2
 --- Version number recorded with bad segments (apart from the other streams').
 BookFormat.BAD_VERSION = 200000 + BookFormat.VERSION * 1000 + BookFormat.MINOR
 
@@ -60,9 +61,13 @@ for _, k in ipairs(BookFormat.META_KEYS) do BookFormat.CLOSED_PROPS["meta." .. k
 --- Properties about the book rather than places in it: every version of a
 -- book (files sharing a UUID, see IDENTITY.md) shares them. The handmade
 -- TOC and flows hold positions, so they stay with their own file.
--- Collection memberships are shared too (see isGroupProp).
-BookFormat.GROUP_PROPS = {}
+-- Collection memberships are shared too (see isGroupProp), and so is
+-- when the book was last opened.
+BookFormat.GROUP_PROPS = { hist = true }
 for prop in pairs(BookFormat.CLOSED_PROPS) do BookFormat.GROUP_PROPS[prop] = true end
+
+--- The reading history property (see histsync.lua).
+BookFormat.HISTORY = "hist"
 
 --- The record holding the collections (not a book; not hex, so no MD5 clashes).
 BookFormat.COLLECTIONS = "collections"
@@ -124,6 +129,8 @@ function BookFormat.validValue(prop, v)
         if type(v) ~= "string" then return nil, "bad note" end
     elseif META[prop] then
         if type(v) ~= "string" and type(v) ~= "number" then return nil, "bad " .. prop end
+    elseif prop == BookFormat.HISTORY then
+        if not isInt(v, 0) then return nil, "bad hist" end
     elseif BookFormat.collId(prop) then
         -- A book's membership, or a collection (on the collections record).
         if v ~= true and not (type(v) == "table" and type(v.name) == "string" and v.name ~= "") then
@@ -143,6 +150,7 @@ end
 --- Is this a property this version applies?
 function BookFormat.known(prop)
     if prop == "status" or prop == "rating" or prop == "note" or META[prop] then return true end
+    if prop == BookFormat.HISTORY then return true end
     if BookFormat.collId(prop) then return true end
     local what, kind = prop:match("^(%a+)%.(%a+)$")
     return (what == "toc" or what == "flows") and AnnFormat.KINDS[kind] or false
