@@ -1210,7 +1210,12 @@ function Library.menuEntry(plugin)
             if plugin then
                 items[#items].separator = true
                 local Updater = require("cloudlibrary/updater")
-                for _i, item in ipairs(Updater.menuItems(plugin)) do table.insert(items, item) end
+                local updates = Updater.menuItems(plugin)
+                local combined = package.loaded["omnisync/updates"]
+                if type(combined) == "table" and combined.active and combined.active() then
+                    updates[1].help_text = _("Checks OmniSync too, with OmniSync's updater.")
+                end
+                for _i, item in ipairs(updates) do table.insert(items, item) end
             end
             return items
         end,

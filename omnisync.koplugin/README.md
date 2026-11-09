@@ -170,15 +170,28 @@ with `OmniSync:`, in KOReader's `crash.log`. Passwords are never logged.
 
 ## Updates
 
-"Check for updates" looks for a newer release of the plugin on GitHub,
-and then of Cloud library, if it's installed and enabled (with Cloud
-library's own updater, so it asks and reports as in its own menu).
-"Automatic updates" sets what happens once a day when KOReader is already
-online: off, notify (the default: asks first), or install. An update is
-checked (checksum, complete plugin) before it replaces the installed one,
-and takes effect after a restart. Don't also copy this plugin between
-devices with settings sync: it never syncs this plugin's folder, as the
-two would fight over it.
+OmniSync checks for new versions of itself and of Cloud library (if it's
+installed and enabled) together, through one connection:
+
+- **Check for updates** shows one message listing both plugins: up to date,
+  a new version, or couldn't check. When there's an update, the dialog
+  offers to install it (**Install all** when both have one). Cloud
+  library's own "Check for updates" runs the same check while OmniSync is
+  running.
+- **Automatic updates** has a setting for each plugin: off, notify (the
+  default: asks first) or install. Once a day, when KOReader is already
+  online, OmniSync checks both. Plugins set to install are installed, and
+  those set to notify are offered in one dialog, which can skip those
+  versions. Cloud library leaves its automatic check to OmniSync (an
+  older Cloud library keeps its own).
+- After installing, there's one restart prompt naming what was updated,
+  and any that failed.
+
+Each plugin keeps its own update settings (Cloud library's in its own
+settings file). An update is checked (checksum, complete plugin) before
+it replaces the installed one, and takes effect after a restart. Don't
+also copy this plugin between devices with settings sync: it never syncs
+this plugin's folder, as the two would fight over it.
 
 ## Tests
 

@@ -39,6 +39,7 @@ local Updater = require("omnisync/updatecore").new{
     settings_key = "omnisync_updates",
     log_prefix = "OmniSync:",
 }
+local Updates = require("omnisync/updates")
 
 local STARTUP_DELAY = 20 -- s: let KOReader settle (and Wi-Fi come up) first
 local CLOSE_DELAY = 2    -- s: after the statistics plugin has written the closed book
@@ -144,7 +145,8 @@ function OmniSync:init()
         started = true
         UIManager:scheduleIn(STARTUP_DELAY, function() self.trigger("start") end)
     end
-    Updater.scheduleCheck(self)
+    Updates.register(function() return self:updateEntries() end)
+    Updates.scheduleCheck()
     if migrated and (migrated.supersync or migrated.layout) and not migrated.shown then
         migrated.shown = true
         local texts = {}
@@ -786,10 +788,7 @@ Turn off KOReader's "Export annotations on book closing" (in the reader's Bookma
         },
     }
     for _i, item in ipairs(more) do table.insert(items, item) end
-    local updates = Updater.menuItems(self)
-    updates[1].help_text = _("Also checks Cloud library, if it's installed.")
-    updates[1].callback = function() self:checkForUpdates() end
-    for _i, item in ipairs(updates) do table.insert(items, item) end
+    for _i, item in ipairs(Updates.menuItems()) do table.insert(items, item) end
     return items
 end
 
@@ -803,14 +802,16 @@ function OmniSync:cloudLibrary()
     end
 end
 
---- Checks OmniSync, then Cloud library with its own updater (its settings,
--- and its record of an update installed this session). Connects once.
-function OmniSync:checkForUpdates()
-    NetworkMgr:runWhenOnline(function()
-        Updater.check(self, true)
-        local plugin, updater = self:cloudLibrary()
-        if plugin then updater.check(plugin, true) end
-    end)
+--- The plugins checked together for updates (omnisync/updates.lua): this
+-- one and Cloud library, each with its own updater and settings. A Cloud
+-- library from before it handed its automatic check to OmniSync keeps it.
+function OmniSync:updateEntries()
+    local entries = { { updater = Updater, plugin = self } }
+    local plugin, updater = self:cloudLibrary()
+    if plugin then
+        table.insert(entries, { updater = updater, plugin = plugin, own_automatic = not updater.defers_to_omnisync })
+    end
+    return entries
 end
 
 function OmniSync:addToMainMenu(menu_items)
