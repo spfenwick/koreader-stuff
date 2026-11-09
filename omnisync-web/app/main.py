@@ -33,7 +33,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
 from . import charts, formatting
-from .cwa import CWA, CWAError
+from .cwa import CWA, CWAError, plain_text
 from .library import STATUS_LABELS, Library
 from .settings import Settings
 from .sync import Syncer
@@ -236,8 +236,10 @@ async def book_page(request: Request):
         if not chapters or chapters[-1][0] != a.md5 or chapters[-1][1] != a.chapter:
             chapters.append((a.md5, a.chapter, []))
         chapters[-1][2].append(a)
+    # A description set in KOReader comes first, then the library's (Calibre-Web).
+    description = plain_text(book.description) or cwa.description(book.uuids, book.calibre_ids)
     return render(request, "book.html", book=book, sessions=sessions, chart=chart, chart_scope=scope,
-                  chapters=chapters, collections=collections,
+                  chapters=chapters, collections=collections, description=description,
                   multi=len({a.md5 for a in book.highlights}) > 1)
 
 

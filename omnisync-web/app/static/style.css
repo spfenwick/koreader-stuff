@@ -181,7 +181,7 @@ tr:last-child td { border-bottom: 0; }
 .description summary, details > summary { cursor: pointer; }
 details > summary h2 { display: inline; }
 details > summary { margin-bottom: 10px; }
-.description div { color: var(--text-2); max-width: 70ch; }
+.description div { color: var(--text-2); max-width: 70ch; white-space: pre-line; }
 @media (max-width: 520px) { .spine.large { width: 60px; height: 86px; font-size: 1.5rem; } .book-head h1 { font-size: 1.5rem; } }
 
 /* Highlights */

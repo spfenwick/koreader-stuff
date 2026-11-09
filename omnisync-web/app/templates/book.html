@@ -20,8 +20,8 @@
   {% if book.review %}
   <section class="review"><h2>Review</h2><p>{{ book.review }}</p></section>
   {% endif %}
-  {% if book.description %}
-  <details class="description"><summary>Description</summary><div>{{ book.description | striptags }}</div></details>
+  {% if description %}
+  <section class="description"><h2>Description</h2><div>{{ description }}</div></section>
   {% endif %}
 
   <section class="tiles small" aria-label="Reading">

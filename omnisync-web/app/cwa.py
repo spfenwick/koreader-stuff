@@ -8,6 +8,8 @@ identifier match by ID as well.
 
 Covers are fetched by the app (the browser never sees the CWA login), kept
 in <data dir>/covers/, and checked again with If-None-Match after a week.
+
+Book descriptions (Calibre's comments) are kept from the catalog too.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from html import unescape
 from pathlib import Path
 
 from .settings import Settings
@@ -39,7 +42,23 @@ MAX_PAGES = 2000
 MAX_COVER = 10 * 1024 * 1024
 TIMEOUT = 30
 USER_AGENT = "omnisync-web"
+CATALOG_VERSION = 2  # 2: with descriptions
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+# Line breaks and paragraph ends (perhaps with a namespace prefix, from inline XHTML).
+_BREAK_RE = re.compile(r"<\s*(?:(?:\w+:)?br|/(?:\w+:)?(?:p|div|li|h[1-6]|blockquote))\b[^>]*>", re.I)
+_TAG_RE = re.compile(r"<[^>]*>")
+
+
+def plain_text(html: str) -> str:
+    """Text of a description that may be HTML: tags dropped, one blank line between paragraphs."""
+    if not html:
+        return ""
+    text = _TAG_RE.sub("", _BREAK_RE.sub("\n", html)) if "<" in html else html
+    text = unescape(text)
+    paras = [" ".join(p.split()) for p in re.split(r"\n\s*\n|\n", text)]
+    return "\n\n".join(p for p in paras if p)
 
 
 class CWAError(Exception):
@@ -74,6 +93,9 @@ class CWA:
         self.fetch_locks: dict[str, threading.Lock] = {}
         self.by_uuid: dict[str, str] = {}   # Calibre UUID -> cover href (absolute)
         self.by_id: dict[int, str] = {}     # Calibre book ID -> cover href
+        self.descs: dict[str, str] = {}     # Calibre UUID (or "id:<n>") -> description
+        self.desc_ids: dict[int, str] = {}  # Calibre book ID -> key in descs
+        self.version = 0                    # of the saved catalog
         self.catalog_url = ""               # the server the catalog was read from
         self.read_at: float | None = None
         self.books = 0
@@ -179,14 +201,15 @@ class CWA:
             return
         self.crawling = True
         try:
-            by_uuid, by_id, count = self._crawl()
+            by_uuid, by_id, descs, desc_ids, count = self._crawl()
             with self.lock:
                 self.by_uuid, self.by_id, self.books = by_uuid, by_id, count
+                self.descs, self.desc_ids, self.version = descs, desc_ids, CATALOG_VERSION
                 self.catalog_url = self.url
                 self.read_at = time.time()
                 self.last_error = ""
             self._save_catalog()
-            log.info("CWA catalog: %d books, %d with covers", count, len(by_uuid))
+            log.info("CWA catalog: %d books, %d with covers, %d with descriptions", count, len(by_uuid), len(descs))
         except CWAError as e:
             self.last_error = str(e)
             log.warning("CWA catalog: %s", e)
@@ -208,6 +231,8 @@ class CWA:
             raise CWAError("No \"All\" entry in the catalog's alphabetical index.")
         by_uuid: dict[str, str] = {}
         by_id: dict[int, str] = {}
+        descs: dict[str, str] = {}
+        desc_ids: dict[int, str] = {}
         count = 0
         seen_pages = set()
         for _ in range(MAX_PAGES):
@@ -231,11 +256,17 @@ class CWA:
                 if not is_book:
                     continue
                 count += 1
+                uuid = normalize_uuid(entry.findtext(ATOM + "id") or "")
+                desc = self._description(entry)
+                if desc and (uuid or calibre_id is not None):
+                    key = uuid or f"id:{calibre_id}"
+                    descs[key] = desc
+                    if calibre_id is not None:
+                        desc_ids[calibre_id] = key
                 href = cover or thumb  # the full image: the thumbnail is small
                 if not href:
                     continue
                 href = urllib.parse.urljoin(url, href)
-                uuid = normalize_uuid(entry.findtext(ATOM + "id") or "")
                 if uuid:
                     by_uuid[uuid] = href
                 if calibre_id is not None:
@@ -244,12 +275,30 @@ class CWA:
             if not nxt:
                 break
             url = urllib.parse.urljoin(url, nxt)
-        return by_uuid, by_id, count
+        return by_uuid, by_id, descs, desc_ids, count
+
+    @staticmethod
+    def _description(entry: ET.Element) -> str:
+        """The entry's description: <content> or <summary>, as text or (X)HTML."""
+        for tag in ("content", "summary"):
+            el = entry.find(ATOM + tag)
+            if el is None:
+                continue
+            if len(el):  # inline XHTML: serialize the children so paragraphs survive
+                html = "".join(ET.tostring(c, encoding="unicode") for c in el)
+            else:
+                html = el.text or ""
+            text = plain_text(html)
+            if text:
+                return text
+        return ""
 
     def _save_catalog(self) -> None:
         with self.lock:
-            data = {"url": self.catalog_url, "read_at": self.read_at, "books": self.books,
-                    "by_uuid": self.by_uuid, "by_id": {str(k): v for k, v in self.by_id.items()}}
+            data = {"version": self.version, "url": self.catalog_url, "read_at": self.read_at,
+                    "books": self.books, "by_uuid": self.by_uuid,
+                    "by_id": {str(k): v for k, v in self.by_id.items()},
+                    "descs": self.descs, "desc_ids": {str(k): v for k, v in self.desc_ids.items()}}
         tmp = self.catalog_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data))
         tmp.replace(self.catalog_path)
@@ -262,13 +311,16 @@ class CWA:
             self.books = data.get("books", 0)
             self.by_uuid = dict(data.get("by_uuid", {}))
             self.by_id = {int(k): v for k, v in data.get("by_id", {}).items()}
+            self.descs = dict(data.get("descs", {}))
+            self.desc_ids = {int(k): v for k, v in data.get("desc_ids", {}).items()}
+            self.version = data.get("version", 1)
         except (OSError, ValueError, AttributeError):
             pass
 
     def catalog_due(self) -> bool:
         if not self.configured:
             return False
-        if self.catalog_url != self.url or not self.read_at:
+        if self.catalog_url != self.url or not self.read_at or self.version < CATALOG_VERSION:
             return True
         return time.time() - self.read_at > CATALOG_AGE
 
@@ -276,6 +328,7 @@ class CWA:
         """Drops the catalog and kept covers (the server changed or was removed)."""
         with self.lock:
             self.by_uuid, self.by_id, self.books = {}, {}, 0
+            self.descs, self.desc_ids, self.version = {}, {}, 0
             self.catalog_url, self.read_at, self.last_error = "", None, ""
         self.catalog_path.unlink(missing_ok=True)
         if self.dir.exists():
@@ -297,6 +350,19 @@ class CWA:
                 if href:
                     return href
         return None
+
+    def description(self, uuids, calibre_ids) -> str:
+        if not self.configured or self.catalog_url != self.url:
+            return ""
+        with self.lock:
+            for u in uuids:
+                if u in self.descs:
+                    return self.descs[u]
+            for i in calibre_ids:
+                key = self.desc_ids.get(i)
+                if key in self.descs:
+                    return self.descs[key]
+        return ""
 
     def matched(self, books) -> int:
         return sum(1 for b in books if self.cover_href(b.uuids, b.calibre_ids))

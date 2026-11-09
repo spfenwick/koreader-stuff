@@ -17,8 +17,8 @@ reads them.
   time of day, day of the week, and books by time read. Click a day for what
   was read that day.
 - **Status**: devices, the last import, and files that couldn't be read.
-- **Settings**: book covers from a Calibre-Web Automated (or Calibre-Web)
-  server (see [Covers](#covers)).
+- **Settings**: book covers and descriptions from a Calibre-Web Automated
+  (or Calibre-Web) server (see [Covers](#covers)).
 
 ## How it works
 
@@ -88,6 +88,9 @@ matches books by their Calibre UUID: OPDS entries are identified by it, and
 OmniSync's book identity records it from each EPUB. Files carrying a
 `calibre:<id>` identifier match by ID too. Books without a match keep the
 coloured spine.
+
+Book descriptions come from the catalog too, and show on each book's page. A
+description edited in KOReader (custom metadata) comes first.
 
 - The app fetches covers itself and keeps them in `/cache/covers/`, so the
   browser never needs the CWA login. Each is checked for changes (by ETag)
