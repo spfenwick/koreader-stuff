@@ -223,7 +223,7 @@ do -- book identity: same md5, different title/authors locally
     check(ok, "totals after identity merge: " .. tostring(why))
 end
 
-do -- several local rows for one md5: merge into the newest, update an existing key in place
+do -- several local rows for one md5: all events end up in the newest
     local A, B = device("A"), device("B")
     B:read({ title = "Old title", authors = "X", md5 = BOOK1.md5, pages = 100 }, { { 1, 1000, 10 } })
     B:read({ title = "New title", authors = "X", md5 = BOOK1.md5, pages = 100 }, { { 2, 2000, 10 } })
@@ -231,12 +231,49 @@ do -- several local rows for one md5: merge into the newest, update an existing 
     A:read(BOOK1, { { 1, 1000, 25 }, { 3, 3000, 5 } })
     import(B, export(A), "A")
     local c = B:open()
-    local old_dur = tonumber(c:rowexec("SELECT duration FROM page_stat_data p JOIN book b ON b.id = p.id_book WHERE b.title = 'Old title' AND start_time = 1000"))
+    local new_dur = tonumber(c:rowexec("SELECT duration FROM page_stat_data p JOIN book b ON b.id = p.id_book WHERE b.title = 'New title' AND start_time = 1000"))
     local new_rows = tonumber(c:rowexec("SELECT count(*) FROM page_stat_data p JOIN book b ON b.id = p.id_book WHERE b.title = 'New title'"))
+    local old_rows = tonumber(c:rowexec("SELECT count(*) FROM page_stat_data p JOIN book b ON b.id = p.id_book WHERE b.title = 'Old title'"))
+    local old_book = tonumber(c:rowexec("SELECT count(*) FROM book WHERE title = 'Old title'"))
     local dups = tonumber(c:rowexec("SELECT count(*) FROM page_stat_data WHERE start_time = 1000"))
     c:close()
-    check(old_dur == 25 and dups == 1, "existing key updated in its own row, not duplicated")
-    check(new_rows == 2, "new key goes to the most recently opened row")
+    check(new_dur == 25 and dups == 1, "existing key moved to the newest row with the longer duration, not duplicated")
+    check(new_rows == 3 and old_rows == 0, "every event of the md5 is in the most recently opened row")
+    check(old_book == 1, "the older row is left (empty), not deleted")
+    local ok, why = B:totalsMatch()
+    check(ok, "totals after gathering rows: " .. tostring(why))
+end
+
+do -- rows split differently on two devices end up with the same totals
+    -- Like a title changing case: A has one row with everything, B made a
+    -- second row for the new title and has events in both.
+    local A, B = device("A"), device("B")
+    local old = { title = "Owned By The Alphas", authors = "JC", md5 = BOOK2.md5, pages = 50 }
+    local new = { title = "Owned by the Alphas", authors = "JC", md5 = BOOK2.md5, pages = 50 }
+    B:read(old, { { 1, 1000, 30 }, { 2, 1100, 30 } })
+    B:read(new, { { 3, 2000, 40 } })
+    local cb = B:open(); cb:exec("UPDATE book SET last_open = 50 WHERE title = 'Owned By The Alphas';"); cb:close()
+    A:read(new, { { 4, 3000, 20 } })
+    import(A, export(B), "B")
+    import(B, export(A), "A")
+    local function bookTime(d, title)
+        local c = d:open()
+        local t = tonumber(c:rowexec("SELECT coalesce(total_read_time, 0) FROM book WHERE title = '" .. title .. "'"))
+        c:close()
+        return t
+    end
+    check(bookTime(A, "Owned by the Alphas") == 120 and bookTime(B, "Owned by the Alphas") == 120,
+        "same book time on both devices")
+    check(bookTime(B, "Owned By The Alphas") == 0, "older row on B now empty")
+    -- Opening the older title again makes it the newest: everything follows it.
+    B:read(old, { { 5, 4000, 10 } })
+    local cb2 = B:open(); cb2:exec("UPDATE book SET last_open = 9e9 WHERE title = 'Owned By The Alphas';"); cb2:close()
+    A:read(new, { { 6, 5000, 10 } })
+    import(B, export(A), "A")
+    check(bookTime(B, "Owned By The Alphas") == 140 and bookTime(B, "Owned by the Alphas") == 0,
+        "events follow the row opened most recently")
+    local ok, why = B:totalsMatch()
+    check(ok, "totals: " .. tostring(why))
 end
 
 do -- foreign books converge on the newest metadata whatever the order, until opened locally

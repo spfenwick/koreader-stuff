@@ -423,6 +423,71 @@ local function metaKey(b)
     return table.concat({ str(b.title), str(b.authors), str(b.series), str(b.language), str(b.pages) }, "\0")
 end
 
+--- Gathers each book's events into one row. KOReader makes a new book row
+-- when a file's title or authors change, so one md5 can have several rows,
+-- and how the events are split between them differs from device to device.
+-- Each md5's events go to its most recently opened row (the one KOReader
+-- uses now, and where imports put new events); the other rows are left
+-- empty. A key on both sides follows the merge rule. Adds the ids it
+-- changed to `affected`.
+function Store.consolidate(conn, affected)
+    local md5s = {}
+    local q_md5s = conn:prepare([[
+        SELECT md5 FROM book WHERE md5 IS NOT NULL AND md5 <> ''
+        GROUP BY md5 HAVING count(*) > 1;]])
+    local m = q_md5s:step()
+    while m do
+        md5s[#md5s + 1] = m[1]
+        m = q_md5s:step()
+    end
+    q_md5s:close()
+    if #md5s == 0 then return end
+    local q_rows = conn:prepare("SELECT id FROM book WHERE md5 = ? ORDER BY last_open DESC, id ASC;")
+    local q_events = conn:prepare("SELECT page, start_time, duration, total_pages FROM page_stat_data WHERE id_book = ?;")
+    local q_event = conn:prepare("SELECT duration, total_pages FROM page_stat_data WHERE id_book = ? AND page = ? AND start_time = ?;")
+    local upd_event = conn:prepare("UPDATE page_stat_data SET duration = ?, total_pages = ? WHERE id_book = ? AND page = ? AND start_time = ?;")
+    local del_event = conn:prepare("DELETE FROM page_stat_data WHERE id_book = ? AND page = ? AND start_time = ?;")
+    local move = conn:prepare("UPDATE page_stat_data SET id_book = ? WHERE id_book = ?;")
+    for _, md5 in ipairs(md5s) do
+        local ids = {}
+        q_rows:reset():bind(md5)
+        local r = q_rows:step()
+        while r do
+            ids[#ids + 1] = num(r[1])
+            r = q_rows:step()
+        end
+        local target = ids[1]
+        for i = 2, #ids do
+            local id = ids[i]
+            -- Keys the target already has: keep the winner there, drop this copy.
+            local events = {}
+            q_events:reset():bind(id)
+            local e = q_events:step()
+            while e do
+                events[#events + 1] = { num(e[1]), num(e[2]), num(e[3]), num(e[4]) or 0 }
+                e = q_events:step()
+            end
+            if #events > 0 then
+                for _, ev in ipairs(events) do
+                    local page, start, dur, tp = ev[1], ev[2], ev[3], ev[4]
+                    local t = q_event:reset():bind(target, page, start):step()
+                    if t then
+                        local t_dur, t_tp = num(t[1]), num(t[2]) or 0
+                        if dur > t_dur or (dur == t_dur and tp > t_tp) then
+                            upd_event:reset():bind(dur, tp, target, page, start):step()
+                        end
+                        del_event:reset():bind(id, page, start):step()
+                    end
+                end
+                move:reset():bind(target, id):step()
+                affected[id] = true
+                affected[target] = true
+            end
+        end
+    end
+    for _, s in ipairs({ q_rows, q_events, q_event, upd_event, del_event, move }) do s:close() end
+end
+
 --- Recomputes book.total_read_pages/total_read_time the way insertDB() does.
 function Store.recomputeTotals(conn, ids)
     local up = conn:prepare("UPDATE book SET total_read_time = ?, total_read_pages = ? WHERE id = ?;")
@@ -554,6 +619,7 @@ local function mergeSegment(stats, state, path)
     end
     set_foreign:close()
     if not header then return nil, err end
+    Store.consolidate(stats, summary.affected)
     Store.recomputeTotals(stats, summary.affected)
     return summary
 end
