@@ -998,6 +998,44 @@ do
         end
     end
     check(dark > 10, "crossed-out cloud icon drawn")
+
+    -- ZenOS Home covers (cover_common.make_cover_widget): badged when built
+    -- for Home, painted after the cover.
+    Badge.noncloud_enabled = false
+    local painted = 0
+    local covers = { make_cover_widget = function(book, w, h)
+        local frame = { getSize = function() return { w = w, h = h } end }
+        function frame:paintTo(target) painted = painted + 1 target:paintRect(0, 0, 1, 1, Blitbuffer.COLOR_GRAY) end
+        return frame, w, h, false
+    end }
+    package.loaded["modules/filebrowser/patches/home/widgets/cover_common"] = covers
+    check(Badge.installHome(), "Home badges installed")
+    local function build(chunkname, path)
+        return assert(loadstring("local covers, book = ... local f, w, h, n = covers.make_cover_widget(book, 120, 180)"
+            .. " return f, w, h, n",
+            chunkname))(covers, { path = path })
+    end
+    local home_frame, fw, fh, hyd = build("@/zen/modules/filebrowser/patches/home/widgets/strip_common.lua",
+        "/lib/cloud-x.epub")
+    check(fw == 120 and fh == 180 and hyd == false, "ZenOS's results passed on")
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    home_frame:paintTo(bb, 20, 10)
+    check(painted == 1, "cover painted first")
+    check(changed(x, y, size, size), "cloud badge on a Home cover")
+    local browser_frame = build("@/zen/modules/filebrowser/patches/zen_renderer.lua", "/lib/cloud-x.epub")
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    browser_frame:paintTo(bb, 20, 10)
+    check(not changed(x, y, size, size), "file browser covers left to the list badges (no double badge)")
+    local other_frame = build("@/zen/modules/filebrowser/patches/home/widgets/featured_common.lua", "/lib/other.epub")
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    other_frame:paintTo(bb, 20, 10)
+    check(not changed(x, y, size, size), "no badge on a Home book without one")
+    Badge.cloud_enabled = false
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    home_frame:paintTo(bb, 20, 10)
+    check(not changed(x, y, size, size), "Home badge follows the setting at paint time")
+    Badge.cloud_enabled = true
+    package.loaded["modules/filebrowser/patches/home/widgets/cover_common"] = nil
     Badge.noncloud_enabled, Badge.isNonCloud = false, nil
 
     Badge.cloud_enabled, Badge.local_enabled = true, false

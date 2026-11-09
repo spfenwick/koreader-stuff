@@ -12,6 +12,11 @@ ZenOS's Authors, Series and Tags pages are Menus. Only the items on the page
 shown are looked at. The cover's position comes from the ImageWidget that
 drew it. In KOReader's plain list (no CoverBrowser) the badge goes before
 the name: Badge.decorate gives those rows an indent to make room for it.
+
+ZenOS's Home page isn't a list: its rows (strips, featured book) build each
+cover with cover_common.make_cover_widget. Covers built for Home get the
+badge painted after the cover (and ZenOS's own badges on it), at paint
+time, so setting changes and downloads show on the next redraw.
 ]]
 
 local Blitbuffer = require("ffi/blitbuffer")
@@ -149,6 +154,67 @@ function Badge.paintOn(menu, bb)
     end, 0, {})
 end
 
+-- Home covers ---------------------------------------------------------------------
+
+local HOME_COVERS = "modules/filebrowser/patches/home/widgets/cover_common"
+
+-- True when make_cover_widget was called for Home (its strips and featured
+-- book), not the file browser or the book switcher, which use it too.
+local function forHome()
+    for level = 3, 10 do
+        local info = debug.getinfo(level, "S")
+        if not info then return false end
+        local src = info.source
+        if type(src) == "string" and src:find("/patches/home/widgets/", 1, true)
+                and not src:find("/cover_common.lua", 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+local function badgeHomeCover(frame, path)
+    if frame._cloudlibrary_badge then return end
+    frame._cloudlibrary_badge = true
+    local orig = frame.paintTo
+    frame.paintTo = function(self, bb, x, y)
+        orig(self, bb, x, y)
+        local Guard = require("cloudlibrary/guard")
+        if not Guard.ok("badge") then return end
+        local ok, err = pcall(function()
+            local kind = Badge.kind(path)
+            if not kind then return end
+            local size = self:getSize()
+            if not (size and size.w >= 20 and size.h >= 20) then return end
+            local bx, by, badge = Badge.place({ x = x, y = y, w = size.w, h = size.h })
+            badgeWidget(badge, kind):paintTo(bb, bx, by)
+        end)
+        if not ok then Guard.fail("badge", "Home cover badge", err) end
+    end
+end
+
+--- Badges on ZenOS's Home covers. False when ZenOS's cover builder isn't
+-- there (Home then has no badges; nothing else changes).
+function Badge.installHome()
+    local ok, covers = pcall(require, HOME_COVERS)
+    if not ok or type(covers) ~= "table" or type(covers.make_cover_widget) ~= "function" then
+        require("logger").warn("CloudLibrary: no badges on Home: ZenOS's cover builder not found")
+        return false
+    end
+    local Guard = require("cloudlibrary/guard")
+    local function pack(...) return { n = select("#", ...), ... } end
+    Guard.hook("badge", covers, "make_cover_widget", function(orig, book, ...)
+        local r = pack(orig(book, ...))
+        local frame = r[1]
+        if type(book) == "table" and type(book.path) == "string" and type(frame) == "table"
+                and type(frame.paintTo) == "function" and forHome() then
+            badgeHomeCover(frame, book.path)
+        end
+        return unpack(r, 1, r.n)
+    end, "ZenOS cover_common.make_cover_widget")
+    return true
+end
+
 function Badge.install()
     if Badge.installed then return end
     local Guard = require("cloudlibrary/guard")
@@ -170,6 +236,7 @@ function Badge.install()
             Badge.paintOn(self, bb)
         end, "Menu:paintTo")
     end
+    Badge.installHome()
 end
 
 return Badge
