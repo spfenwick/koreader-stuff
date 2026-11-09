@@ -1,6 +1,7 @@
 --[[
 Keeps KOReader working if KOReader, CoverBrowser or ZenOS change under the
-plugin.
+plugin. The plugin needs ZenOS with book sources (common/book_sources.lua):
+without it, the library doesn't start.
 
 Guard.hook(feature, target, name, fn)
     replaces target[name] with fn(orig, ...). If fn throws, the original
@@ -17,9 +18,8 @@ Features:
            covers); turning it off removes the cloud books
   search   cloud books in file search
   badge    the on-device badge
-  zenos_listing  keeping ZenOS's library listing (zenos_listing.lua)
-  zenos_groups   cloud books in ZenOS's Authors, Series and Tags, Home...
-                 (zenos_source.lua, or zenos_groups.lua for older ZenOS)
+  zenos    cloud books in ZenOS's Authors, Series and Tags tabs, and the
+           open and tag hooks in zenos_source.lua
   history  cloud books in the reading history (history.lua)
   jobs     background tasks, menu actions: an error is logged and reported,
            nothing is turned off
@@ -52,7 +52,7 @@ function Guard.fail(feature, where, err)
     end
     if feature == "library" then
         -- Everything else depends on the library.
-        for other in pairs({ search = true, badge = true, zenos_groups = true, history = true }) do
+        for other in pairs({ search = true, badge = true, zenos = true, history = true }) do
             if not Guard.failed[other] then Guard.failed[other] = "library turned off" end
         end
     end
@@ -183,12 +183,21 @@ end
 function Guard.check()
     Guard.unavailable = {}
     requires("library", "ui/widget/filechooser", {
-        getList = 3, getListItem = 6, genItemTable = 3, genItemTableFromPath = 2,
+        getList = 3, getListItem = 6, genItemTable = 3,
         onMenuSelect = 2, onMenuHold = 2, refreshPath = true, updateItems = true,
     })
     requires("library", "apps/reader/readerui", { showReader = 2 })
     requires("library", "docsettings", { flush = 1 })
     requires("library", "apps/filemanager/filemanager", { openFile = true })
+    -- ZenOS's book sources (the plugin is ZenOS-only).
+    local ok_zen, zen = pcall(require, "common/book_sources")
+    Guard.zenos_missing = not ok_zen or type(zen) ~= "table"
+    if Guard.zenos_missing then
+        Guard.problem("library", "needs ZenOS with book sources")
+    else requires("library", "common/book_sources", {
+        register = 2, changed = true, bookInfo = true, listingKey = true,
+        installMetadataIntegration = true,
+    }) end
     requires("library", "ffi/util", {
         runInSubProcess = 2, isSubProcessDone = 1, readAllFromFD = 1, writeToFD = 2,
     })
@@ -239,7 +248,7 @@ end
 --- Lines for the Status screen ("" when all is well).
 function Guard.statusText()
     local lines = {}
-    for _i, feature in ipairs({ "library", "search", "badge", "zenos_listing", "zenos_groups", "history", "jobs" }) do
+    for _i, feature in ipairs({ "library", "search", "badge", "zenos", "history", "jobs" }) do
         if Guard.unavailable[feature] then
             table.insert(lines, string.format("%s not started: %s", feature,
                 table.concat(Guard.unavailable[feature], "; ")))

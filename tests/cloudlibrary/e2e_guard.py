@@ -49,8 +49,16 @@ EXTRA = """
             cloud_books = #Virtual.books, dialogs = texts }
     end
     if kind == "cl_refresh" then
-        -- As after a sync: new folder timestamp, so the listing is rebuilt.
-        local ok, err = pcall(package.loaded["cloudlibrary/virtual"].refresh)
+        -- As after a sync that changed the catalog: ZenOS's cached listing
+        -- is dropped and the folder listed again.
+        local Virtual = package.loaded["cloudlibrary/virtual"]
+        local FileChooser = require("ui/widget/filechooser")
+        local FileManager = require("apps/filemanager/filemanager")
+        local fc = FileManager.instance and FileManager.instance.file_chooser
+        if fc and type(FileChooser._zen_invalidate_item_table_path) == "function" then
+            pcall(FileChooser._zen_invalidate_item_table_path, fc, Virtual.folder)
+        end
+        local ok, err = pcall(Virtual.refresh)
         return { ok = ok, error = err and tostring(err) or nil }
     end
 """

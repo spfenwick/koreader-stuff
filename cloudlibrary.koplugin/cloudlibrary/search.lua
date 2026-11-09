@@ -81,7 +81,6 @@ function Search.install(Virtual)
         local collate = fc:getCollate()
         local files = {}
         for _i, b in ipairs(books) do table.insert(files, Virtual.listItem(fc, b, collate)) end
-        Virtual.ensureOutermost()
         return fc:genItemTable({}, files)
     end
 

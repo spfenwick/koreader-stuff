@@ -16,8 +16,6 @@ Settings (settings/cloudlibrary/settings.lua, see settings.lua):
   badge_local  on-device badge on local catalog books (default false)
   badge_noncloud  badge on books in the folder not in the catalog (default false)
   search     cloud books in file search results (default true)
-  keep_zenos_listing  experimental: keep ZenOS's cached library listing when
-             the Library tab is opened from another tab (default true)
   zenos_groups  cloud books in ZenOS's Authors, Series and Tags tabs (default true)
 
 The password stays in KOReader's OPDS settings and is read from there.
@@ -36,8 +34,6 @@ local T = ffiutil.template
 local Badge = require("cloudlibrary/badge")
 local Covers = require("cloudlibrary/covers")
 local Downloads = require("cloudlibrary/downloads")
-local ZenListing = require("cloudlibrary/zenos_listing")
-local ZenGroups = require("cloudlibrary/zenos_groups")
 local ZenSource = require("cloudlibrary/zenos_source")
 local Guard = require("cloudlibrary/guard")
 local History = require("cloudlibrary/history")
@@ -61,7 +57,7 @@ Covers.on_arrived = function(books)
 end
 -- Cloud books in ZenOS's groups (setting zenos_groups).
 ZenSource.enabled = function()
-    return ZenGroups.enabled and Guard.ok("zenos_groups")
+    return Settings.all().zenos_groups ~= false and Guard.ok("zenos")
 end
 -- Badges change how listed items are laid out (see Badge.decorate).
 Virtual.listingExtra = function()
@@ -163,27 +159,14 @@ end
 
 -- Loading into the file browser --------------------------------------------------
 
--- Updating the folder's timestamp makes file browsers (ZenOS included) drop
--- their saved listing, so only do it when the cloud books shown changed.
--- (ZenOS with book sources keys its listings on the same signature.)
+-- The folder is redrawn only when the cloud books shown changed (ZenOS's
+-- cached listing is keyed on the same signature, Virtual.listingKey()).
 local function showCatalog(folder, cloud)
+    local before = Virtual.catalog_sig
     Virtual.setCatalog(folder, cloud)
     -- A refetched cover keeps its file name: don't show the old image.
     Virtual.forgetDecodedCovers()
-    -- In the database's order (not sorted: a different order only costs a
-    -- refresh, and only happens when the catalog changed anyway).
-    local sig = Virtual.catalog_sig
-    if Library.settings().listing_sig ~= sig then
-        Library.save("listing_sig", sig)
-        Virtual.refresh()
-    end
-end
-
---- True when ZenOS is installed (its menu items only apply then).
-function Library.hasZenOS()
-    local module = "common/db_bookinfo"
-    return package.loaded[module] ~= nil
-        or (package.searchpath ~= nil and package.searchpath(module, package.path) ~= nil)
+    if Virtual.catalog_sig ~= before then Virtual.refresh() end
 end
 
 --- Library.load() with a message up, for when it's slow (many cloud books
@@ -214,9 +197,6 @@ function Library.load()
     Badge.local_enabled = s.badge_local == true
     Badge.noncloud_enabled = s.badge_noncloud == true
     Search.enabled = s.search ~= false
-    ZenListing.enabled = s.keep_zenos_listing ~= false
-    ZenGroups.enabled = s.zenos_groups ~= false
-    ZenGroups.install(Virtual)
     if not server or not folder or s.show == false then
         Library.stats = {}
         Library.matched, Library.on_device, Library.not_in_catalog = {}, {}, {}
@@ -982,6 +962,15 @@ function Library.menuEntry(plugin)
                     end,
                 },
                 {
+                    text = _("Include cloud books in Authors, Series and Tags"),
+                    help_text = _("Lists cloud books in ZenOS's Authors, Series and Tags tabs, as well as downloaded ones."),
+                    checked_func = function() return Library.settings().zenos_groups ~= false end,
+                    callback = function()
+                        Library.save("zenos_groups", Library.settings().zenos_groups == false)
+                        ZenSource.changed()
+                    end,
+                },
+                {
                     text = _("Include cloud books in file search"),
                     help_text = _("KOReader's file search also finds cloud books, by title, author or series."),
                     checked_func = function() return Library.settings().search ~= false end,
@@ -991,32 +980,6 @@ function Library.menuEntry(plugin)
                     end,
                 },
             }
-            if Library.hasZenOS() then
-                table.insert(items, {
-                    text = _("ZenOS"),
-                    sub_item_table = {
-                        {
-                            text = _("Cloud books in Authors, Series and Tags"),
-                            help_text = _("Lists cloud books in ZenOS's Authors, Series and Tags tabs, as well as downloaded ones."),
-                            checked_func = function() return Library.settings().zenos_groups ~= false end,
-                            callback = function()
-                                Library.save("zenos_groups", Library.settings().zenos_groups == false)
-                                ZenGroups.enabled = Library.settings().zenos_groups ~= false
-                                ZenSource.changed()
-                            end,
-                        },
-                        {
-                            text = _("Faster Library tab (experimental)"),
-                            help_text = _("Opening the Library tab from another tab (Authors, Series…) reuses ZenOS's saved listing instead of listing the whole folder again."),
-                            checked_func = function() return Library.settings().keep_zenos_listing ~= false end,
-                            callback = function()
-                                Library.save("keep_zenos_listing", Library.settings().keep_zenos_listing == false)
-                                ZenListing.enabled = Library.settings().keep_zenos_listing ~= false
-                            end,
-                        },
-                    },
-                })
-            end
             items[#items].separator = true
             -- Diagnostics
             table.insert(items, {

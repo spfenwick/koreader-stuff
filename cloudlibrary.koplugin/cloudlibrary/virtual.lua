@@ -3,10 +3,12 @@ Virtual entries: books in the cloud library that aren't on the device are
 listed in the library folder as files that don't exist. Their metadata and
 covers come from the catalog cache instead of the file.
 
-Everything here changes KOReader and CoverBrowser functions only:
+The plugin runs under ZenOS only: the cloud books are a ZenOS book source
+(zenos_source.lua), so ZenOS answers CoverBrowser's getBookInfo and
+getDocProps for them (from Virtual.bookInfoFor) and keys its cached
+listings on Virtual.listingKey(). The KOReader and CoverBrowser functions
+changed here:
   FileChooser:getList              adds the entries to the library folder
-  BookInfoManager:getBookInfo      metadata and cover for a virtual path
-  BookInfoManager:getDocProps      metadata for sorting and book info
   BookInfoManager:extractInBackground / :isExtractingInBackground
                                    covers not downloaded yet are fetched when
                                    CoverBrowser (or ZenOS) asks to extract
@@ -20,14 +22,9 @@ Everything here changes KOReader and CoverBrowser functions only:
                                    book (ZenOS marks a book "reading" as
                                    soon as it's opened, for example)
 
-Optional ZenOS dependencies:
-  ZenOS shows an "Opening" banner as soon as a book is tapped and removes it
-  only when a reader opens. If its __ZEN_UI_CANCEL_OPENING_BANNER function
-  exists, it's called when the details are shown instead.
-  Where ZenOS has book sources (zenos_source.lua), the cloud books are one:
-  ZenOS then answers getBookInfo for them inside its own cover caches, and
-  keys its cached listings on Virtual.listingKey() instead of the folder's
-  timestamp.
+ZenOS shows an "Opening" banner as soon as a book is tapped and removes it
+only when a reader opens. If its __ZEN_UI_CANCEL_OPENING_BANNER function
+exists, it's called when the details are shown instead.
 ]]
 
 local logger = require("logger")
@@ -42,7 +39,6 @@ local Virtual = {
     books = {},
     by_path = {},
     installed = false,
-    has_bookinfo = false,
     generation = 0, -- changes with every setCatalog()
     catalog_sig = "", -- the books listed and what their list items show
     listingExtra = nil, -- function() -> string: other settings list items show
@@ -111,28 +107,17 @@ function Virtual.notifyChanged(old_books)
     ZenSource.changed(paths)
 end
 
---- Key for cached listings that show the cloud books (ZenOS's book
--- sources): changes with the books and how their items are drawn, and is
--- the same after a restart.
+--- Key for ZenOS's cached listings that show the cloud books: changes with
+-- the books and how their items are drawn, and is the same after a restart.
 function Virtual.listingKey()
     local extra = Virtual.listingExtra and Virtual.listingExtra() or ""
     return Virtual.catalog_sig .. "/" .. extra
 end
 
--- Call after the catalog changes. File browsers (ZenOS's included) cache a
--- folder's listing until the folder's timestamp changes, so update it; the
--- new timestamp is on disk, so cached listings saved before a restart are
--- also seen as stale. Timestamps on FAT have a 2 s resolution, hence +2.
--- Not needed where ZenOS keys its listings on Virtual.listingKey().
+-- Call after the catalog changes: redraws the library folder if it's shown
+-- (ZenOS's cached listing has a new key by then, so it's rebuilt).
 function Virtual.refresh()
     if not Virtual.folder then return end
-    local lfs = require("libs/libkoreader-lfs")
-    local attr = lfs.attributes(Virtual.folder)
-    if not ZenSource.listing and type(attr) == "table" and attr.mode == "directory" then
-        local stamp = math.max(os.time(), (attr.modification or 0) + 2)
-        local ok, err = lfs.touch(Virtual.folder, stamp, stamp)
-        if not ok then logger.warn("CloudLibrary: can't update folder timestamp", err) end
-    end
     local FileManager = require("apps/filemanager/filemanager")
     local fc = FileManager.instance and FileManager.instance.file_chooser
     if fc and normalize(fc.path) == Virtual.folder then fc:refreshPath() end
@@ -366,10 +351,6 @@ local function installListing()
         local dirs, files, readable = orig(self, path, collate)
         if self.name == "filemanager" and Virtual.folder
                 and normalize(path) == Virtual.folder then
-            Virtual.ensureOutermost()
-            require("cloudlibrary/zenos_listing").install(function() return Virtual.folder end)
-            ZenSource.install(Virtual)
-            require("cloudlibrary/zenos_groups").install(Virtual)
             local t0 = Timing.start()
             for _i, book in ipairs(Virtual.books) do
                 if collate then
@@ -388,63 +369,13 @@ local function installListing()
     end, "FileChooser:getList")
 end
 
--- The getBookInfo hook stays the outermost one: other plugins (ZenOS) wrap
--- it with caches of their own, which would keep "cover not fetched yet"
--- after the cover arrives. Virtual books are answered here directly; this is
--- re-checked whenever the library folder is listed. Where ZenOS answers
--- for the cloud books itself (book sources) and drops its cached entries
--- when told, the hook stays where it is (inside ZenOS's, answering only
--- if ZenOS doesn't).
-local BookInfoManager
-local our_getBookInfo
-
-local function wrapBookInfo()
-    our_getBookInfo = Guard.hook("library", BookInfoManager, "getBookInfo",
-        function(orig, self, filepath, get_cover)
-            local book = Virtual.by_path[filepath]
-            if book then return bookInfo(book, get_cover) end
-            return orig(self, filepath, get_cover)
-        end, "BookInfoManager:getBookInfo")
-    if type(BookInfoManager.getDocProps) == "function" then
-        Guard.hook("library", BookInfoManager, "getDocProps", function(orig, self, filepath)
-            local book = Virtual.by_path[filepath]
-            if book then return docProps(book) end
-            return orig(self, filepath)
-        end, "BookInfoManager:getDocProps")
-    end
-end
-
-function Virtual.ensureOutermost()
-    if ZenSource.book_info then return end
-    if BookInfoManager and BookInfoManager.getBookInfo ~= our_getBookInfo then
-        wrapBookInfo()
-    end
-end
-
--- Times building the library folder's listing (when it's built: file
--- browsers that cache listings, like ZenOS, skip this when they can).
-local function installListingTimer()
-    local FileChooser = require("ui/widget/filechooser")
-    Guard.hook("library", FileChooser, "genItemTableFromPath", function(orig, self, path, ...)
-        if not (Virtual.folder and self.name == "filemanager" and normalize(path) == Virtual.folder) then
-            return orig(self, path, ...)
-        end
-        local t0 = Timing.start()
-        local results = Timing.pack(orig(self, path, ...))
-        Timing.record("listing: build library folder", Timing.since(t0),
-            #(results[1] or {}) .. " entries, sorted")
-        return unpack(results, 1, results.n)
-    end, "FileChooser:genItemTableFromPath")
-end
-
 local function installBookInfo()
     local ok, bim = pcall(require, "bookinfomanager")
     if not ok or type(bim) ~= "table" or type(bim.getBookInfo) ~= "function" then
         logger.warn("CloudLibrary: CoverBrowser unavailable, no covers for cloud books")
         return false
     end
-    BookInfoManager = bim
-    wrapBookInfo()
+    local BookInfoManager = bim
     -- Virtual books are never extracted from a file: their covers are
     -- downloaded instead.
     Guard.hook("library", BookInfoManager, "extractInBackground", function(orig, self, files, ...)
@@ -558,12 +489,14 @@ function Virtual.install()
         local UIManager = require("ui/uimanager")
         UIManager:nextTick(function() pcall(Virtual.refresh) end)
     end
-    -- Before the getBookInfo hook, and before the file browser lists the
-    -- folder (plugins start first), so ZenOS's saved listing is used.
-    ZenSource.install(Virtual)
+    -- Before the file browser lists the folder (plugins start first), so
+    -- ZenOS's saved listing is used.
+    if not ZenSource.install(Virtual) then
+        logger.warn("CloudLibrary: not installed:", Guard.statusText())
+        return false
+    end
     installListing()
-    installListingTimer()
-    Virtual.has_bookinfo = installBookInfo()
+    installBookInfo()
     installSelectAndHold()
     installOpen()
     installSettingsGuard()

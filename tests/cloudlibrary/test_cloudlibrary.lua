@@ -16,6 +16,17 @@ G_reader_settings = require("luasettings"):open(TMP .. "/settings.reader.lua")
 require("document/canvascontext"):init(require("device"))
 package.path = REPO .. "/cloudlibrary.koplugin/?.lua;" .. package.path
 
+-- ZenOS's book sources (common/book_sources.lua), which the plugin needs:
+-- records what the plugin registers and reports.
+local ZenOS = { sources = {}, changes = {}, integrated = 0 }
+package.loaded["common/book_sources"] = {
+    register = function(id, source) ZenOS.sources[id] = source return true end,
+    changed = function(paths) table.insert(ZenOS.changes, paths or false) end,
+    bookInfo = function() end,
+    listingKey = function() end,
+    installMetadataIntegration = function() ZenOS.integrated = ZenOS.integrated + 1 return true end,
+}
+
 local lfs = require("libs/libkoreader-lfs")
 local Feed = require("cloudlibrary/feed")
 local Store = require("cloudlibrary/store")
@@ -47,7 +58,7 @@ end
 
 do
     for _i, name in ipairs({ "badge", "covers", "downloads", "feed", "guard", "history", "http", "library", "matcher",
-            "search", "store", "sync", "timing", "virtual" }) do
+            "search", "store", "sync", "timing", "virtual", "zenos_source" }) do
         local ok, err = pcall(require, "cloudlibrary/" .. name)
         check(ok, "module " .. name .. " loads: " .. tostring(err))
     end
@@ -1089,6 +1100,15 @@ do
     check(Guard.check(), "search missing doesn't stop the library")
     check(Guard.unavailable.search ~= nil and not Guard.ok("search"), "search not started")
     FileSearcher.onShowSearchResults = real_show
+    local zen = package.loaded["common/book_sources"]
+    package.loaded["common/book_sources"] = nil
+    local real_path = package.path
+    package.path = REPO .. "/cloudlibrary.koplugin/?.lua"
+    check(not Guard.check() and Guard.zenos_missing, "no ZenOS: library not started")
+    check(Guard.statusText():find("needs ZenOS", 1, true), "missing ZenOS described: " .. Guard.statusText())
+    package.path = real_path
+    package.loaded["common/book_sources"] = zen
+    check(Guard.check() and not Guard.zenos_missing, "ZenOS back")
     reset()
 end
 
@@ -1336,110 +1356,26 @@ do
     eq(Virtual.listItem(fc, Virtual.books[1]).doc_props.title, "Own", "metadata set by a sort is kept")
 end
 
--- ZenOS Authors, Series and Tags ------------------------------------------------------------
-
-do
-    local ZenGroups = require("cloudlibrary/zenos_groups")
-    local local_groups = { { author = "Ann", files = { "/lib/a.epub" } }, { author = "Zed", files = { "/lib/z.epub" } } }
-    local local_series = { { series = "Saga", items = { { file = "/lib/s3.epub", series_index = 3, filename = "s3.epub" } } } }
-    -- ZenOS lists a book twice when a tag appears twice in its keywords.
-    local local_tags = { { tag = "x", files = { "/lib/a.epub", "/lib/a.epub", "/lib/z.epub" } },
-                         { tag = "z", files = { "/lib/z.epub" } } }
-    local local_meta = { ["/lib/a.epub"] = { title = "A" } }
-    local calls = 0
-    local fake = {
-        getGroupedByAuthor = function() calls = calls + 1 return local_groups end,
-        getGroupedBySeries = function() return local_series end,
-        getGroupedByTags = function() return local_tags end,
-        getLightMetadata = function(dir) return dir and { dir = dir } or local_meta end,
-    }
-    package.loaded["common/db_bookinfo"] = fake
-    Virtual.setCatalog("/lib", {
-        { id = "c1", title = "Cloud One", authors = { "Ann" }, series = "Saga", series_index = 1 },
-        { id = "c2", title = "Cloud Two", authors = { "Bob", "Cy" }, tags = { "x", "y" } },
-        { id = "c3", title = "Cloud Three", authors = { "Bob", "Cy" }, series = "New", series_index = 2 },
-    })
-    ZenGroups.install(Virtual)
-    check(ZenGroups.installed, "installs when ZenOS's module is loaded")
-
-    local groups = fake.getGroupedByAuthor()
-    local names = {}
-    for i, g in ipairs(groups) do names[i] = g.author .. ":" .. #g.files end
-    eq(table.concat(names, ","), "Ann:2,Bob\nCy:2,Zed:1", "cloud books in author groups, sorted")
-    eq(#local_groups[1].files, 1, "ZenOS's cached list is left alone")
-    check(fake.getGroupedByAuthor() == groups, "merged once while nothing changes")
-
-    local series = fake.getGroupedBySeries()
-    eq(#series, 2, "new series added")
-    eq(series[2].series, "Saga", "series sorted")
-    eq(series[2].items[1].file, "/lib/cloud-c1.epub", "series items by number")
-    eq(#local_series[1].items, 1, "ZenOS's series list is left alone")
-
-    local tags = fake.getGroupedByTags()
-    local tag_names = {}
-    for i, g in ipairs(tags) do tag_names[i] = g.tag .. ":" .. table.concat(g.files, " ") end
-    eq(table.concat(tag_names, ","), "x:/lib/a.epub /lib/z.epub /lib/cloud-c2.epub,y:/lib/cloud-c2.epub,z:/lib/z.epub",
-        "cloud books in tag groups, each book once")
-    eq(#local_tags[1].files, 3, "ZenOS's tag list is left alone")
-    check(tags[3] == local_tags[2], "unchanged tag groups reused")
-    check(fake.getGroupedByTags() == tags, "tags merged once while nothing changes")
-
-    local meta = fake.getLightMetadata()
-    eq(meta["/lib/cloud-c2.epub"].authors, "Bob\nCy", "metadata for cloud books")
-    eq(meta["/lib/cloud-c2.epub"].keywords, "x\ny", "tags as keywords")
-    check(meta["/lib/a.epub"] ~= nil and local_meta["/lib/cloud-c1.epub"] == nil, "metadata copied, not changed")
-    eq(fake.getLightMetadata("/lib").dir, "/lib", "one folder's metadata unchanged")
-
-    Virtual.setCatalog("/lib", { { id = "c9", title = "Other", authors = { "Ann" } } })
-    eq(#fake.getGroupedByAuthor()[1].files, 2, "merged again after a catalog change")
-
-    ZenGroups.enabled = false
-    check(fake.getGroupedByAuthor() == local_groups, "turned off: ZenOS's list as is")
-    ZenGroups.enabled = true
-
-    -- Opening a cloud book from these lists shows its details.
-    local fmu = require("apps/filemanager/filemanagerutil")
-    local shown, opened
-    local real_show = Virtual.showDetails
-    Virtual.showDetails = function(path) shown = path end
-    local zen_open = fmu.openFile
-    fmu.openFile = function(_ui, file) opened = file end -- as ZenOS wraps it after us
-    fake.getGroupedByAuthor()
-    fmu.openFile(nil, "/lib/cloud-c9.epub")
-    eq(shown, "/lib/cloud-c9.epub", "tap on a cloud book: details")
-    check(opened == nil, "ZenOS's openFile not reached")
-    fmu.openFile(nil, "/lib/a.epub")
-    eq(opened, "/lib/a.epub", "other books open as usual")
-    fmu.openFile = zen_open
-    Virtual.showDetails = real_show
-
-    package.loaded["common/db_bookinfo"] = nil
-    Virtual.setCatalog(nil, {})
-end
-
--- ZenOS book sources (common/book_sources.lua) ----------------------------------------------
+-- ZenOS book sources -----------------------------------------------------------------------
 
 do
     local ZenSource = require("cloudlibrary/zenos_source")
-    local ZenGroups = require("cloudlibrary/zenos_groups")
-    local registered, changes, integrated = {}, {}, 0
-    package.loaded["common/book_sources"] = {
-        register = function(id, source) registered[id] = source return true end,
-        changed = function(paths) table.insert(changes, paths or false) end,
-        bookInfo = function() end,
-        listingKey = function() end,
-        installMetadataIntegration = function() integrated = integrated + 1 return true end,
-    }
+    local Settings = require("cloudlibrary/settings")
+    local zen_tags = { { tag = "x", files = { "/lib/a.epub", "/lib/a.epub" } }, { tag = "y", files = { "/lib/a.epub" } } }
+    local db = { getGroupedByTags = function() return zen_tags end }
+    local orig_tags = db.getGroupedByTags
+    package.loaded["common/db_bookinfo"] = db
     Virtual.setCatalog("/lib", {
         { id = "c1", title = "Cloud One", authors = { "Ann", "Bo" }, series = "Saga", series_index = "2",
           tags = { "x" }, language = "en" },
     })
+    local fmu = require("apps/filemanager/filemanagerutil")
+    local real_openFile = fmu.openFile
     check(ZenSource.install(Virtual), "registers with ZenOS")
-    local source = registered.cloudlibrary
+    local source = ZenOS.sources.cloudlibrary
     check(source ~= nil, "source registered as cloudlibrary")
-    check(ZenSource.book_info and integrated == 1, "ZenOS answers metadata")
-    check(ZenSource.listing, "ZenOS keys listings")
-    check(ZenSource.install(Virtual) and integrated == 1, "registers once")
+    eq(ZenOS.integrated, 1, "ZenOS's metadata integration installed")
+    check(ZenSource.install(Virtual) and ZenOS.integrated == 1, "registers once")
 
     local books = source.books()
     eq(#books, 1, "cloud books listed")
@@ -1450,9 +1386,9 @@ do
     eq(info.keywords, "x", "tags as keywords")
     eq(info.language, "en", "language")
     check(source.books() == books, "books cached while the catalog is unchanged")
-    ZenGroups.enabled = false
+    Settings.save("zenos_groups", false)
     eq(#source.books(), 0, "groups setting off: none")
-    ZenGroups.enabled = true
+    Settings.save("zenos_groups", true)
 
     check(source.owns("/lib/cloud-c1.epub") and not source.owns("/lib/a.epub"), "owns cloud books only")
     local shown
@@ -1462,6 +1398,17 @@ do
     shown = nil
     check(not source.open("/lib/a.epub") and shown == nil, "other books not handled")
     check(source.showContextMenu(nil, { path = "/lib/cloud-c1.epub" }) == true, "long-press shows details")
+
+    -- Open backstop, outside ZenOS's openFile wrapper (ZenOS wraps it later).
+    local opened
+    fmu.openFile = function(_ui, file) opened = file end
+    shown = nil
+    source.books() -- ZenOS rebuilding a grouping
+    fmu.openFile(nil, "/lib/cloud-c1.epub")
+    check(shown == "/lib/cloud-c1.epub" and opened == nil, "tap from other ZenOS views: details")
+    fmu.openFile(nil, "/lib/a.epub")
+    eq(opened, "/lib/a.epub", "other books open as usual")
+    fmu.openFile = real_openFile
     Virtual.showDetails = real_show
 
     local bi = source.bookInfo("/lib/cloud-c1.epub", false)
@@ -1474,10 +1421,10 @@ do
     eq(source.listingKey("/"), key, "parent folders count the books")
     check(source.listingKey("/libx") == nil and source.listingKey("/lib/sub") == nil, "no key for other folders")
 
-    changes = {}
+    ZenOS.changes = {}
     Virtual.setCatalog("/lib", { { id = "c2", title = "Cloud Two" } })
     check(source.listingKey("/lib") ~= key, "key changes with the catalog")
-    local paths = changes[#changes]
+    local paths = ZenOS.changes[#ZenOS.changes]
     check(type(paths) == "table" and table.concat(paths, " ") == "/lib/cloud-c1.epub /lib/cloud-c2.epub",
         "ZenOS told of old and new books")
     eq(source.books()[1].file, "/lib/cloud-c2.epub", "books rebuilt after a catalog change")
@@ -1489,36 +1436,24 @@ do
     check(source.listingKey("/lib") ~= key2, "key changes with badge settings")
     Virtual.listingExtra = real_extra
 
-    -- The folder's timestamp is left alone.
-    local lfs = require("libs/libkoreader-lfs")
-    local real_touch = lfs.touch
-    local touched = false
-    lfs.touch = function() touched = true return true end
-    Virtual.refresh()
-    lfs.touch = real_touch
-    check(not touched, "no folder timestamp change with listing keys")
-
     -- Covers arriving: ZenOS drops its cached covers.
-    changes = {}
+    ZenOS.changes = {}
     Covers.on_arrived({ Virtual.books[1] })
-    check(changes[1] and changes[1][1] == "/lib/cloud-c2.epub", "cover arrival reported")
+    check(ZenOS.changes[1] and ZenOS.changes[1][1] == "/lib/cloud-c2.epub", "cover arrival reported")
 
-    -- What's left of the groups hooks: tags once per book, open backstop.
-    local fake = { getGroupedByTags = function()
-        return { { tag = "x", files = { "/lib/a.epub", "/lib/a.epub" } } }
-    end }
-    local orig_tags = fake.getGroupedByTags
-    ZenGroups.installWithSource(Virtual, fake)
-    check(fake.getGroupedByTags ~= orig_tags, "tags hooked")
-    eq(#fake.getGroupedByTags()[1].files, 1, "tag lists each book once")
-    check(ZenSource.on_books ~= nil, "open hooks rechecked with groupings")
+    -- Tags: each book once.
+    check(db.getGroupedByTags ~= orig_tags, "tags hooked")
+    local tags = db.getGroupedByTags()
+    eq(#tags[1].files, 1, "tag lists each book once")
+    eq(#zen_tags[1].files, 2, "ZenOS's cached list is left alone")
+    check(tags[2] == zen_tags[2], "unchanged tag groups reused")
+    check(db.getGroupedByTags() == tags, "de-duplicated once while ZenOS's list is the same")
 
-    package.loaded["common/book_sources"] = nil
-    ZenSource.registered, ZenSource.book_info, ZenSource.listing, ZenSource.on_books = false, false, false, nil
+    package.loaded["common/db_bookinfo"] = nil
     Virtual.setCatalog(nil, {})
 end
 
--- The menu: groups in order, every entry explained, ZenOS items only with ZenOS.
+-- The menu: groups in order, every entry explained.
 
 do
     local Library = require("cloudlibrary/library")
@@ -1532,20 +1467,17 @@ do
         end
         return table.concat(out, " | ")
     end
-    local real = Library.hasZenOS
-    Library.hasZenOS = function() return false end
-    eq(labels(Library.menuEntry(nil).sub_item_table_func()),
+    local items = Library.menuEntry(nil).sub_item_table_func()
+    eq(labels(items),
         "Quick sync now | Full sync now | Download missing covers | Quick sync | Full sync | Catalog | Folder"
         .. " | Show cloud books | Mark cloud books | Mark books on this device | Mark books not in the cloud library"
-        .. " | Include cloud books in file search | Status | Timings",
-        "menu without ZenOS")
-    Library.hasZenOS = function() return true end
-    local items = Library.menuEntry(nil).sub_item_table_func()
-    local zen
-    for _i, item in ipairs(items) do if item.text == "ZenOS" then zen = item end end
-    check(zen ~= nil and #zen.sub_item_table == 2, "ZenOS submenu with ZenOS")
-    check(zen and zen.separator, "ZenOS submenu ends the display group")
-    Library.hasZenOS = real
+        .. " | Include cloud books in Authors, Series and Tags | Include cloud books in file search | Status | Timings",
+        "menu")
+    for _i, item in ipairs(items) do
+        if item.text == "Include cloud books in file search" then
+            check(item.separator, "display group ends after file search")
+        end
+    end
 end
 
 io.stdout:write(string.format("cloudlibrary: %d checks, %d failures\n", checks, failures))

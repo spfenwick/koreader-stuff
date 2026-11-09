@@ -1,6 +1,7 @@
 --[[
 Cloud library: every book in your OPDS library (Calibre-Web / Calibre-Web
-Automated) is listed in your library folder, downloaded or not.
+Automated) is listed in your library folder, downloaded or not. Runs under
+ZenOS only (it needs ZenOS's book sources).
 
 Tools → Cloud library: choose the catalog (one of the OPDS plugin's
 catalogs), the folder, and sync.
@@ -50,7 +51,17 @@ function CloudLibrary:init()
     local first = not Virtual.installed
     if first then
         Virtual.details = Library.bookDetails
-        Virtual.install()
+        if not Virtual.install() then
+            local Guard = require("cloudlibrary/guard")
+            if Guard.zenos_missing then
+                local UIManager = require("ui/uimanager")
+                UIManager:nextTick(function()
+                    UIManager:show(require("ui/widget/infomessage"):new{
+                        text = _("Cloud library needs ZenOS (a version with book sources). It's turned off."),
+                    })
+                end)
+            end
+        end
         local Badge = require("cloudlibrary/badge")
         Badge.install()
         if Badge.installed then
