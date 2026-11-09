@@ -14,7 +14,7 @@ so loading doesn't redo it for every book.
 local SQ3 = require("lua-ljsqlite3/init")
 local logger = require("logger")
 
-local SCHEMA_VERSION = 5
+local SCHEMA_VERSION = 6
 
 local SCHEMA = [[
 CREATE TABLE IF NOT EXISTS books (
@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS books (
     cover_h INTEGER,
     cover_failed INTEGER,
     match_title TEXT,
-    match_author TEXT
+    match_author TEXT,
+    cover_stale INTEGER
 );
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -101,14 +102,15 @@ function Store.open(path, wal)
         -- Calibre); read every file again.
         conn:exec("DELETE FROM local_files;")
     end
-    if version >= 1 and version <= 4 then
+    if version >= 1 and version < SCHEMA_VERSION then
         -- 4 -> 5: normalised title and author (filled by fillMatchKeys()).
+        -- 5 -> 6: cover_stale (a cover to download again, see upsertBooks).
         local have = {}
         local stmt = conn:prepare("PRAGMA table_info(books);")
         for row in stmt:rows() do have[row[2]] = true end
         stmt:close()
-        for _i, col in ipairs({ "match_title", "match_author" }) do
-            if not have[col] then conn:exec("ALTER TABLE books ADD COLUMN " .. col .. " TEXT;") end
+        for _i, col in ipairs({ { "match_title", "TEXT" }, { "match_author", "TEXT" }, { "cover_stale", "INTEGER" } }) do
+            if not have[col[1]] then conn:exec("ALTER TABLE books ADD COLUMN " .. col[1] .. " " .. col[2] .. ";") end
         end
     elseif version ~= 0 and version ~= SCHEMA_VERSION then
         -- A cache: start again rather than migrate.
@@ -163,7 +165,16 @@ ON CONFLICT(uuid) DO UPDATE SET
     cover_file = CASE WHEN cover IS excluded.cover THEN cover_file END,
     cover_w = CASE WHEN cover IS excluded.cover THEN cover_w END,
     cover_h = CASE WHEN cover IS excluded.cover THEN cover_h END,
-    cover_failed = CASE WHEN cover IS excluded.cover THEN cover_failed END;
+    -- Calibre-Web's cover links never change (/opds/cover/<id>), but a new
+    -- cover rewrites the book file, so its size changes: download the cover
+    -- again, showing the old one until then. (SET reads the old row, so
+    -- size and cover here are the stored values.)
+    cover_failed = CASE WHEN cover IS NOT excluded.cover THEN NULL
+        WHEN cover_file IS NOT NULL AND size IS NOT excluded.size THEN NULL
+        ELSE cover_failed END,
+    cover_stale = CASE WHEN cover IS NOT excluded.cover THEN NULL
+        WHEN cover_file IS NOT NULL AND size IS NOT excluded.size THEN 1
+        ELSE cover_stale END;
 ]]
 
 local function formatsText(formats)
@@ -256,7 +267,7 @@ function Store:listing()
     local stmt = self.conn:prepare([[SELECT uuid, title, authors, tags, language,
         CAST(added AS REAL), CAST(size AS REAL), series, series_index, CAST(pages AS REAL),
         cover, cover_file, CAST(cover_w AS REAL), CAST(cover_h AS REAL), CAST(cover_failed AS REAL),
-        match_title, match_author FROM books;]])
+        match_title, match_author, cover_stale FROM books;]])
     local row = {}
     while stmt:step(row) do
         local book = setmetatable({
@@ -265,7 +276,7 @@ function Store:listing()
             series = row[8], series_index = row[9], pages = row[10],
             cover_href = row[11], cover_file = row[12], cover_w = row[13],
             cover_h = row[14], cover_failed = row[15],
-            match_title = row[16], match_author = row[17],
+            match_title = row[16], match_author = row[17], cover_stale = row[18] ~= nil or nil,
         }, ListingRow)
         out[#out + 1] = book
         if row[11] ~= nil then with_cover = with_cover + 1 end
@@ -328,7 +339,7 @@ end
 -- image size).
 function Store:setCover(uuid, file, w, h)
     local stmt = self.conn:prepare(
-        "UPDATE books SET cover_file = ?, cover_w = ?, cover_h = ?, cover_failed = NULL WHERE uuid = ?;")
+        "UPDATE books SET cover_file = ?, cover_w = ?, cover_h = ?, cover_failed = NULL, cover_stale = NULL WHERE uuid = ?;")
     stmt:bind(file, w, h, uuid):step()
     stmt:close()
 end
@@ -346,12 +357,13 @@ function Store:setCoverFailed(uuid, when)
     stmt:close()
 end
 
---- Books with a cover on the server but not here, newest first. Failed
--- downloads are retried once they're older than retry_before.
+--- Books with a cover on the server but not here (or out of date, see
+-- markCoversStale), newest first. Failed downloads are retried once they're
+-- older than retry_before.
 function Store:missingCovers(limit, retry_before)
     local out = {}
     local stmt = self.conn:prepare([[SELECT uuid, cover FROM books
-        WHERE cover IS NOT NULL AND cover_file IS NULL
+        WHERE cover IS NOT NULL AND (cover_file IS NULL OR cover_stale IS NOT NULL)
           AND (cover_failed IS NULL OR cover_failed < ?)
         ORDER BY added DESC LIMIT ?;]])
     stmt:bind(retry_before or 0, limit or -1)
@@ -360,6 +372,26 @@ function Store:missingCovers(limit, retry_before)
     end
     stmt:close()
     return out
+end
+
+--- Marks downloaded covers to be downloaded again (the old file stays in
+-- use until then): these books (list of ids), or all of them. Returns how
+-- many were marked.
+function Store:markCoversStale(ids)
+    if not ids then
+        self.conn:exec("UPDATE books SET cover_stale = 1, cover_failed = NULL WHERE cover_file IS NOT NULL;")
+        return tonumber(self.conn:rowexec("SELECT changes();")) or 0
+    end
+    local stmt = self.conn:prepare(
+        "UPDATE books SET cover_stale = 1, cover_failed = NULL WHERE uuid = ? AND cover_file IS NOT NULL;")
+    local n = 0
+    for _i, id in ipairs(ids) do
+        stmt:reset():bind(id):step()
+        stmt:clearbind()
+        n = n + (tonumber(self.conn:rowexec("SELECT changes();")) or 0)
+    end
+    stmt:close()
+    return n
 end
 
 function Store:coverCounts()

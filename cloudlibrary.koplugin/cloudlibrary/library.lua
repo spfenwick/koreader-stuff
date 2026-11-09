@@ -697,6 +697,30 @@ local function pollJob()
     end
 end
 
+--- Marks every downloaded cover out of date and downloads them all again
+-- (after a confirmation).
+function Library.refreshCovers()
+    local server = Library.server()
+    if not server then return end
+    if Library.job then
+        notify(T(_("Cloud library: a %1 is already running."), jobName(Library.job.mode)))
+        return
+    end
+    UIManager:show(require("ui/widget/confirmbox"):new{
+        text = T(_("Download all %1 covers again?\n\nThis runs in the background and can take a while."),
+            Library.stats and Library.stats.covers or 0),
+        ok_text = _("Refresh"),
+        ok_callback = function()
+            local store = openStore(server)
+            local n = store:markCoversStale()
+            store:close()
+            logger.info("CloudLibrary: refreshing", n, "covers")
+            Library.load()
+            Library.sync("covers")
+        end,
+    })
+end
+
 --- Called when the file browser opens: load, then sync if it's due.
 -- The automatic sync due now: "quick", "full" or nil. A quick sync also
 -- runs a full sync when one is due, so "full" only when quick syncs are off.
@@ -809,6 +833,9 @@ function Library.downloaded(book, result, opts)
             mtime = attr.modification, size = attr.size, uuids = { book.id:lower() },
             title = book.title, authors = book.authors,
         })
+        -- The file has the server's current cover; the cover kept for the
+        -- cloud entry (shown again if the book is deleted) may be older.
+        store:markCoversStale({ book.id })
         store:close()
     end
     local cloud_path
@@ -816,6 +843,12 @@ function Library.downloaded(book, result, opts)
         if b.id == book.id then cloud_path = b.path; break end
     end
     Library.load() -- redraws the library folder if it's shown
+    for _i, b in ipairs(Library.catalog or {}) do
+        if b.id == book.id then
+            if b.cover_stale then Covers.request({ b }) end
+            break
+        end
+    end
     if cloud_path then
         -- Other views listing the book (Home, Authors, Series, ...) show the file.
         local ok, err = pcall(ZenSource.downloaded, cloud_path, result.path)
@@ -977,7 +1010,7 @@ function Library.menuEntry(plugin)
                 },
                 {
                     text = _("Full sync now"),
-                    help_text = _("Reads the whole catalog again: picks up edited and removed books, series, and changed covers."),
+                    help_text = _("Reads the whole catalog again: picks up edited and removed books, series, and changed covers (a book whose file changed on the server gets its cover downloaded again)."),
                     enabled_func = has_server,
                     callback = function() Library.sync("full") end,
                 },
@@ -986,6 +1019,12 @@ function Library.menuEntry(plugin)
                     help_text = _("Downloads every cover not on this device yet, in the background, including covers a full sync found changed on the server. Covers are otherwise downloaded as you browse, and some after each quick or full sync."),
                     enabled_func = has_server,
                     callback = function() Library.sync("covers") end,
+                },
+                {
+                    text = _("Refresh all covers"),
+                    help_text = _("Downloads every cover again, replacing the ones on this device. Use it if some cloud books show an old cover. The old covers stay until their new ones arrive."),
+                    enabled_func = has_server,
+                    callback = function() Library.refreshCovers() end,
                 },
                 {
                     text_func = function()

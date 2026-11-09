@@ -282,7 +282,7 @@ function Covers.request(books)
     if not Covers.canFetch() then return false end
     local fresh = {}
     for _i, b in ipairs(books) do
-        if b.cover_href and not b.cover_file and not b.cover_failed
+        if b.cover_href and (not b.cover_file or b.cover_stale) and not b.cover_failed
                 and not (b.cover_retry_at and b.cover_retry_at > os.time()) then
             if Covers.job then
                 if not Covers.pending[b.id] then
@@ -331,7 +331,7 @@ local function pollCovers()
         if r then
             b.cover_file, b.cover_w, b.cover_h = r.file, r.w, r.h
             b.cover = cfg.dir .. "/" .. r.file
-            b.cover_failed, b.cover_retry_at = nil, nil
+            b.cover_failed, b.cover_retry_at, b.cover_stale = nil, nil, nil
         elseif r == false then
             -- The server had no usable cover: the store retries it in a day.
             b.cover_failed = now

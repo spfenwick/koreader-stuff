@@ -589,6 +589,21 @@ do
     eq(row.authors[2], "Bob", "second author")
     eq(#row.tags, 0, "no tags: empty list")
     store5:close()
+
+    -- 5 -> 6 adds cover_stale, keeping downloaded covers.
+    local conn5 = SQ3.open(path)
+    conn5:exec([[CREATE TABLE b2 AS SELECT uuid, calibre_id, title, authors, tags, language, publisher,
+            published, added, pages, summary, formats, cover, size, series, series_index, seen,
+            series_seen, cover_file, cover_w, cover_h, cover_failed, match_title, match_author FROM books;
+        DROP TABLE books; ALTER TABLE b2 RENAME TO books;
+        UPDATE books SET cover_file = 'ol/old-1.webp';
+        PRAGMA user_version=5;]])
+    conn5:close()
+    local store6 = Store.open(path, false)
+    eq(store6:count(), 1, "5 -> 6 keeps books")
+    eq(store6:listing()[1].cover_file, "ol/old-1.webp", "5 -> 6 keeps covers")
+    eq(store6:markCoversStale(), 1, "cover_stale column added")
+    store6:close()
 end
 
 -- Covers ------------------------------------------------------------------------------
@@ -687,6 +702,43 @@ do
         if m.id == books[5].uuid then wanted = m.href == "/opds/cover/1005?v=2" end
     end
     check(wanted, "changed cover downloaded again, from the new link")
+
+    -- Calibre-Web keeps the link (/opds/cover/<id>) but a new cover rewrites
+    -- the book: a changed file size downloads the cover again, keeping the
+    -- old file until then.
+    local function row(id)
+        for _i, b in ipairs(store:listing()) do
+            if b.id == id then return b end
+        end
+    end
+    local old_file = row(books[4].uuid).cover_file
+    check(old_file ~= nil, "book 4 has a cover")
+    eq(row(books[4].uuid).cover_stale, nil, "not stale before")
+    newSync(store, server, 160):full()
+    eq(row(books[4].uuid).cover_stale, nil, "same size: not stale")
+    books[4].size = 2222
+    newSync(store, server, 170):full()
+    eq(row(books[4].uuid).cover_stale, true, "changed size: stale")
+    eq(row(books[4].uuid).cover_file, old_file, "old cover kept until the new one arrives")
+    local stale_wanted = false
+    for _i, m in ipairs(store:missingCovers(nil, 0)) do
+        if m.id == books[4].uuid then stale_wanted = true end
+    end
+    check(stale_wanted, "stale cover downloaded again")
+    local _wc, have_before = store:coverCounts()
+    newSync(store, server, 175):full()
+    eq(row(books[4].uuid).cover_stale, true, "still stale on the next sync")
+    Covers.download(function() return png end, ORIGIN .. "/", store, dir,
+        { { id = books[4].uuid, href = "/opds/cover/1004" } }, { now = function() return 8000 end })
+    eq(row(books[4].uuid).cover_stale, nil, "downloaded: not stale")
+    local _wc2, have_after = store:coverCounts()
+    eq(have_after, have_before, "refetch doesn't change the cover count")
+    -- "Refresh all covers" and a download mark covers stale.
+    eq(store:markCoversStale({ books[4].uuid, "no-such-book" }), 1, "one book marked")
+    eq(row(books[4].uuid).cover_stale, true, "marked stale")
+    eq(row(books[3].uuid).cover_stale, nil, "others untouched")
+    check(store:markCoversStale() >= 2, "all downloaded covers marked")
+    eq(row(books[5].uuid).cover_stale, nil, "books without a cover file not marked")
 
     -- Books gone from the catalog lose their cover file.
     local f2 = io.open(dir .. "/stray.webp", "w"); f2:write("x"); f2:close()
@@ -1664,7 +1716,7 @@ do
     end
     local items = Library.menuEntry(nil).sub_item_table_func()
     eq(labels(items),
-        "Quick sync now | Full sync now | Download missing covers | Quick sync | Full sync | Catalog | Folder"
+        "Quick sync now | Full sync now | Download missing covers | Refresh all covers | Quick sync | Full sync | Catalog | Folder"
         .. " | Show cloud books | Mark cloud books | Mark books on this device | Mark books not in the cloud library"
         .. " | Include cloud books in Authors, Series and Tags | Include cloud books in file search | Status | Timings",
         "menu")
