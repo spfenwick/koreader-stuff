@@ -20,10 +20,14 @@ Everything here changes KOReader and CoverBrowser functions only:
                                    book (ZenOS marks a book "reading" as
                                    soon as it's opened, for example)
 
-The one optional ZenOS dependency: ZenOS shows an "Opening" banner as soon
-as a book is tapped and removes it only when a reader opens. If its
-__ZEN_UI_CANCEL_OPENING_BANNER function exists, it's called when the
-details are shown instead. Without it, nothing else changes.
+Optional ZenOS dependencies:
+  ZenOS shows an "Opening" banner as soon as a book is tapped and removes it
+  only when a reader opens. If its __ZEN_UI_CANCEL_OPENING_BANNER function
+  exists, it's called when the details are shown instead.
+  Where ZenOS has book sources (zenos_source.lua), the cloud books are one:
+  ZenOS then answers getBookInfo for them inside its own cover caches, and
+  keys its cached listings on Virtual.listingKey() instead of the folder's
+  timestamp.
 ]]
 
 local logger = require("logger")
@@ -31,6 +35,7 @@ local util = require("util")
 local _ = require("gettext")
 local Timing = require("cloudlibrary/timing")
 local Guard = require("cloudlibrary/guard")
+local ZenSource = require("cloudlibrary/zenos_source")
 
 local Virtual = {
     folder = nil, -- library folder, no trailing slash
@@ -39,6 +44,8 @@ local Virtual = {
     installed = false,
     has_bookinfo = false,
     generation = 0, -- changes with every setCatalog()
+    catalog_sig = "", -- the books listed and what their list items show
+    listingExtra = nil, -- function() -> string: other settings list items show
 }
 
 local PREFIX = "cloud-"
@@ -56,12 +63,27 @@ function Virtual.getBook(path)
     return Virtual.by_path[path]
 end
 
+local function signature(folder, books)
+    local parts = { folder or "" }
+    for i, b in ipairs(books) do
+        parts[i + 1] = table.concat({ b.id, b.title or "",
+            type(b.authors) == "table" and table.concat(b.authors, "\31") or "",
+            b.series or "", tostring(b.series_index or "") }, "\t")
+    end
+    return require("ffi/sha2").md5(table.concat(parts, "\n"))
+end
+
 function Virtual.setCatalog(folder, books)
+    local old = Virtual.books
     Virtual.folder = normalize(folder)
     Virtual.books, Virtual.by_path = {}, {}
     Virtual.generation = Virtual.generation + 1
     -- Turned off (startup check or an error): no cloud books.
-    if not Virtual.folder or not Guard.ok("library") then return end
+    if not Virtual.folder or not Guard.ok("library") then
+        Virtual.catalog_sig = signature(Virtual.folder, {})
+        Virtual.notifyChanged(old)
+        return
+    end
     for _i, book in ipairs(books or {}) do
         local path = type(book.id) == "string" and book.id ~= ""
             and Virtual.folder .. "/" .. PREFIX .. book.id .. ".epub"
@@ -73,17 +95,40 @@ function Virtual.setCatalog(folder, books)
             Virtual.by_path[book.path] = book
         end
     end
+    Virtual.catalog_sig = signature(Virtual.folder, Virtual.books)
+    Virtual.notifyChanged(old)
+end
+
+--- Tells ZenOS the cloud books changed: groupings are rebuilt, and its
+-- cached covers and metadata for these books (and the current ones)
+-- dropped. A refetched cover keeps its file name.
+function Virtual.notifyChanged(old_books)
+    if not ZenSource.registered then return end
+    local paths = {}
+    for _i, list in ipairs({ old_books or {}, Virtual.books }) do
+        for _j, book in ipairs(list) do paths[#paths + 1] = book.path end
+    end
+    ZenSource.changed(paths)
+end
+
+--- Key for cached listings that show the cloud books (ZenOS's book
+-- sources): changes with the books and how their items are drawn, and is
+-- the same after a restart.
+function Virtual.listingKey()
+    local extra = Virtual.listingExtra and Virtual.listingExtra() or ""
+    return Virtual.catalog_sig .. "/" .. extra
 end
 
 -- Call after the catalog changes. File browsers (ZenOS's included) cache a
 -- folder's listing until the folder's timestamp changes, so update it; the
 -- new timestamp is on disk, so cached listings saved before a restart are
 -- also seen as stale. Timestamps on FAT have a 2 s resolution, hence +2.
+-- Not needed where ZenOS keys its listings on Virtual.listingKey().
 function Virtual.refresh()
     if not Virtual.folder then return end
     local lfs = require("libs/libkoreader-lfs")
     local attr = lfs.attributes(Virtual.folder)
-    if type(attr) == "table" and attr.mode == "directory" then
+    if not ZenSource.listing and type(attr) == "table" and attr.mode == "directory" then
         local stamp = math.max(os.time(), (attr.modification or 0) + 2)
         local ok, err = lfs.touch(Virtual.folder, stamp, stamp)
         if not ok then logger.warn("CloudLibrary: can't update folder timestamp", err) end
@@ -227,6 +272,12 @@ local function bookInfo(book, get_cover)
     return info
 end
 
+--- CoverBrowser metadata for a cloud book, or nil (ZenOS's book sources).
+function Virtual.bookInfoFor(path, get_cover)
+    local book = Virtual.by_path[path]
+    return book and bookInfo(book, get_cover) or nil
+end
+
 local function cancelZenOSOpeningBanner()
     local cancel = rawget(_G, "__ZEN_UI_CANCEL_OPENING_BANNER")
     if type(cancel) == "function" then pcall(cancel) end
@@ -317,6 +368,7 @@ local function installListing()
                 and normalize(path) == Virtual.folder then
             Virtual.ensureOutermost()
             require("cloudlibrary/zenos_listing").install(function() return Virtual.folder end)
+            ZenSource.install(Virtual)
             require("cloudlibrary/zenos_groups").install(Virtual)
             local t0 = Timing.start()
             for _i, book in ipairs(Virtual.books) do
@@ -339,7 +391,10 @@ end
 -- The getBookInfo hook stays the outermost one: other plugins (ZenOS) wrap
 -- it with caches of their own, which would keep "cover not fetched yet"
 -- after the cover arrives. Virtual books are answered here directly; this is
--- re-checked whenever the library folder is listed.
+-- re-checked whenever the library folder is listed. Where ZenOS answers
+-- for the cloud books itself (book sources) and drops its cached entries
+-- when told, the hook stays where it is (inside ZenOS's, answering only
+-- if ZenOS doesn't).
 local BookInfoManager
 local our_getBookInfo
 
@@ -360,6 +415,7 @@ local function wrapBookInfo()
 end
 
 function Virtual.ensureOutermost()
+    if ZenSource.book_info then return end
     if BookInfoManager and BookInfoManager.getBookInfo ~= our_getBookInfo then
         wrapBookInfo()
     end
@@ -404,6 +460,9 @@ local function installBookInfo()
             -- Can't download now (Wi-Fi went off): show them without a
             -- cover for now instead of waiting.
             for _i, book in ipairs(wanted) do book.cover_retry_at = os.time() + 120 end
+            local paths = {}
+            for i, book in ipairs(wanted) do paths[i] = book.path end
+            ZenSource.changed(paths)
         end
         if #real > 0 then return orig(self, real, ...) end
         -- Report success even when nothing was started: CoverBrowser
@@ -499,6 +558,9 @@ function Virtual.install()
         local UIManager = require("ui/uimanager")
         UIManager:nextTick(function() pcall(Virtual.refresh) end)
     end
+    -- Before the getBookInfo hook, and before the file browser lists the
+    -- folder (plugins start first), so ZenOS's saved listing is used.
+    ZenSource.install(Virtual)
     installListing()
     installListingTimer()
     Virtual.has_bookinfo = installBookInfo()

@@ -18,14 +18,21 @@ the file chooser's showFileDialog, which ZenOS replaces on the file
 chooser itself. Both are wrapped (outermost, checked again each time the
 lists are built) to show a cloud book's details instead.
 
-This depends on ZenOS internals, so it's a stopgap until ZenOS offers a way
-for plugins to add books to these lists (a PR to propose). If ZenOS changes
-them, the hooks turn themselves off and the tabs show downloaded books only.
-Setting "zenos_groups" (default true).
+This depends on ZenOS internals: it's the fallback for a ZenOS without book
+sources. Where ZenOS has them, the cloud books are one (zenos_source.lua)
+and only these are kept here:
+  getGroupedByTags     each book once per tag (ZenOS adds a book again for
+                       each time a tag appears in its keywords)
+  openFile, showFileDialog
+                       for ZenOS views that don't ask the book sources yet
+                       (To Be Read, end-of-book "next in series")
+If ZenOS changes them, the hooks turn themselves off and the tabs show
+downloaded books only. Setting "zenos_groups" (default true).
 ]]
 
 local logger = require("logger")
 local Guard = require("cloudlibrary/guard")
+local ZenSource = require("cloudlibrary/zenos_source")
 
 local ZenGroups = {
     enabled = true,
@@ -275,6 +282,7 @@ function ZenGroups.install(virtual)
     end
     if type(db) ~= "table" then return end
     if not Guard.ok("library") then return end
+    if ZenSource.install(virtual) then return ZenGroups.installWithSource(virtual, db) end
     for _i, name in ipairs({ "getGroupedByAuthor", "getGroupedBySeries", "getLightMetadata" }) do
         if type(db[name]) ~= "function" then
             Guard.problem("zenos_groups", "ZenOS's " .. name .. " is missing")
@@ -323,6 +331,31 @@ function ZenGroups.install(virtual)
 
     ZenGroups.ensureOutermost()
     logger.info("CloudLibrary: cloud books added to ZenOS's Authors, Series and Tags")
+end
+
+--- With ZenOS's book sources: the tag de-duplication and the open and
+-- long-press backstops only.
+function ZenGroups.installWithSource(virtual, db)
+    Virtual = virtual
+    ZenGroups.installed = true
+    fmu = require("apps/filemanager/filemanagerutil")
+    -- Checked again whenever ZenOS rebuilds a grouping.
+    ZenSource.on_books = function()
+        if Guard.ok("zenos_groups") then ZenGroups.ensureOutermost() end
+    end
+    if type(db.getGroupedByTags) == "function" then
+        local last_in, last_out
+        Guard.hook("zenos_groups", db, "getGroupedByTags", function(orig, ...)
+            local groups = orig(...)
+            if type(groups) ~= "table" or not Guard.ok("zenos_groups") then return groups end
+            if groups ~= last_in then
+                last_in, last_out = groups, ZenGroups.mergeTags(groups, {})
+            end
+            return last_out
+        end, "ZenOS getGroupedByTags")
+    end
+    ZenGroups.ensureOutermost()
+    logger.info("CloudLibrary: ZenOS book source in use; open and tag hooks only")
 end
 
 return ZenGroups

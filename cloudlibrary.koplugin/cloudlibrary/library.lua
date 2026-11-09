@@ -38,6 +38,7 @@ local Covers = require("cloudlibrary/covers")
 local Downloads = require("cloudlibrary/downloads")
 local ZenListing = require("cloudlibrary/zenos_listing")
 local ZenGroups = require("cloudlibrary/zenos_groups")
+local ZenSource = require("cloudlibrary/zenos_source")
 local Guard = require("cloudlibrary/guard")
 local History = require("cloudlibrary/history")
 local Matcher = require("cloudlibrary/matcher")
@@ -50,6 +51,23 @@ local Virtual = require("cloudlibrary/virtual")
 Virtual.canFetchCovers = Covers.canFetch
 Virtual.requestCovers = Covers.request
 Virtual.coversBusy = Covers.busy
+-- ZenOS's cached covers for these books are stale once theirs arrive.
+Covers.on_arrived = function(books)
+    local paths = {}
+    for _i, b in ipairs(books) do
+        if b.path then paths[#paths + 1] = b.path end
+    end
+    if #paths > 0 then ZenSource.changed(paths) end
+end
+-- Cloud books in ZenOS's groups (setting zenos_groups).
+ZenSource.enabled = function()
+    return ZenGroups.enabled and Guard.ok("zenos_groups")
+end
+-- Badges change how listed items are laid out (see Badge.decorate).
+Virtual.listingExtra = function()
+    return table.concat({ tostring(Guard.ok("badge")), tostring(Badge.cloud_enabled),
+        tostring(Badge.local_enabled), tostring(Badge.noncloud_enabled) }, ",")
+end
 
 local Library = {
     job = nil,          -- running sync: { pid, fd, mode, started }
@@ -147,15 +165,14 @@ end
 
 -- Updating the folder's timestamp makes file browsers (ZenOS included) drop
 -- their saved listing, so only do it when the cloud books shown changed.
+-- (ZenOS with book sources keys its listings on the same signature.)
 local function showCatalog(folder, cloud)
     Virtual.setCatalog(folder, cloud)
     -- A refetched cover keeps its file name: don't show the old image.
     Virtual.forgetDecodedCovers()
     -- In the database's order (not sorted: a different order only costs a
     -- refresh, and only happens when the catalog changed anyway).
-    local ids = {}
-    for i, b in ipairs(cloud) do ids[i] = b.id .. "\t" .. (b.title or "") end
-    local sig = require("ffi/sha2").md5((folder or "") .. "\n" .. table.concat(ids, "\n"))
+    local sig = Virtual.catalog_sig
     if Library.settings().listing_sig ~= sig then
         Library.save("listing_sig", sig)
         Virtual.refresh()
@@ -985,6 +1002,7 @@ function Library.menuEntry(plugin)
                             callback = function()
                                 Library.save("zenos_groups", Library.settings().zenos_groups == false)
                                 ZenGroups.enabled = Library.settings().zenos_groups ~= false
+                                ZenSource.changed()
                             end,
                         },
                         {

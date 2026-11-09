@@ -18,7 +18,8 @@ Features:
   search   cloud books in file search
   badge    the on-device badge
   zenos_listing  keeping ZenOS's library listing (zenos_listing.lua)
-  zenos_groups   cloud books in ZenOS's Authors, Series and Tags (zenos_groups.lua)
+  zenos_groups   cloud books in ZenOS's Authors, Series and Tags, Home...
+                 (zenos_source.lua, or zenos_groups.lua for older ZenOS)
   history  cloud books in the reading history (history.lua)
   jobs     background tasks, menu actions: an error is logged and reported,
            nothing is turned off

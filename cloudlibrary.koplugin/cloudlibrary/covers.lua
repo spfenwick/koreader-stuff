@@ -25,6 +25,7 @@ local Covers = {
     pending = {},   -- id -> book, asked for while a job runs
     pending_count = 0,
     on_done = nil,  -- function(results) after each job, in the UI process
+    on_arrived = nil, -- function(books) whose cover state a job changed, before on_done
 }
 
 local RETRY_AFTER = 24 * 60 * 60 -- covers the server couldn't provide
@@ -346,6 +347,11 @@ local function pollCovers()
     for _id, b in pairs(Covers.pending) do table.insert(next_books, b) end
     Covers.pending, Covers.pending_count = {}, 0
     if #next_books > 0 then start(next_books) end
+    -- Every book asked for changed state (cover, none, or retry later).
+    if Covers.on_arrived and #job.books > 0 then
+        local ok, err = pcall(Covers.on_arrived, job.books)
+        if not ok then logger.warn("CloudLibrary: covers: on_arrived:", err) end
+    end
     if Covers.on_done then Covers.on_done(result) end
 end
 

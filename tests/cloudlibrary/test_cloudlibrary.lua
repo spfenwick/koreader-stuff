@@ -1417,6 +1417,107 @@ do
     Virtual.setCatalog(nil, {})
 end
 
+-- ZenOS book sources (common/book_sources.lua) ----------------------------------------------
+
+do
+    local ZenSource = require("cloudlibrary/zenos_source")
+    local ZenGroups = require("cloudlibrary/zenos_groups")
+    local registered, changes, integrated = {}, {}, 0
+    package.loaded["common/book_sources"] = {
+        register = function(id, source) registered[id] = source return true end,
+        changed = function(paths) table.insert(changes, paths or false) end,
+        bookInfo = function() end,
+        listingKey = function() end,
+        installMetadataIntegration = function() integrated = integrated + 1 return true end,
+    }
+    Virtual.setCatalog("/lib", {
+        { id = "c1", title = "Cloud One", authors = { "Ann", "Bo" }, series = "Saga", series_index = "2",
+          tags = { "x" }, language = "en" },
+    })
+    check(ZenSource.install(Virtual), "registers with ZenOS")
+    local source = registered.cloudlibrary
+    check(source ~= nil, "source registered as cloudlibrary")
+    check(ZenSource.book_info and integrated == 1, "ZenOS answers metadata")
+    check(ZenSource.listing, "ZenOS keys listings")
+    check(ZenSource.install(Virtual) and integrated == 1, "registers once")
+
+    local books = source.books()
+    eq(#books, 1, "cloud books listed")
+    eq(books[1].file, "/lib/cloud-c1.epub", "book path")
+    local info = books[1].info
+    eq(info.authors, "Ann\nBo", "authors joined as in bookinfo")
+    eq(info.series_index, 2, "series number")
+    eq(info.keywords, "x", "tags as keywords")
+    eq(info.language, "en", "language")
+    check(source.books() == books, "books cached while the catalog is unchanged")
+    ZenGroups.enabled = false
+    eq(#source.books(), 0, "groups setting off: none")
+    ZenGroups.enabled = true
+
+    check(source.owns("/lib/cloud-c1.epub") and not source.owns("/lib/a.epub"), "owns cloud books only")
+    local shown
+    local real_show = Virtual.showDetails
+    Virtual.showDetails = function(path) shown = path end
+    check(source.open("/lib/cloud-c1.epub") == true and shown == "/lib/cloud-c1.epub", "open shows details")
+    shown = nil
+    check(not source.open("/lib/a.epub") and shown == nil, "other books not handled")
+    check(source.showContextMenu(nil, { path = "/lib/cloud-c1.epub" }) == true, "long-press shows details")
+    Virtual.showDetails = real_show
+
+    local bi = source.bookInfo("/lib/cloud-c1.epub", false)
+    check(bi and bi.title == "Cloud One" and bi.cover_fetched == "Y", "bookInfo for a cloud book")
+    check(source.bookInfo("/lib/a.epub", false) == nil, "bookInfo: nil for other books")
+
+    local key = source.listingKey("/lib")
+    check(type(key) == "string" and key ~= "", "listing key for the library folder")
+    eq(source.listingKey("/lib/"), key, "trailing slash")
+    eq(source.listingKey("/"), key, "parent folders count the books")
+    check(source.listingKey("/libx") == nil and source.listingKey("/lib/sub") == nil, "no key for other folders")
+
+    changes = {}
+    Virtual.setCatalog("/lib", { { id = "c2", title = "Cloud Two" } })
+    check(source.listingKey("/lib") ~= key, "key changes with the catalog")
+    local paths = changes[#changes]
+    check(type(paths) == "table" and table.concat(paths, " ") == "/lib/cloud-c1.epub /lib/cloud-c2.epub",
+        "ZenOS told of old and new books")
+    eq(source.books()[1].file, "/lib/cloud-c2.epub", "books rebuilt after a catalog change")
+    local key2 = source.listingKey("/lib")
+    Virtual.setCatalog("/lib", { { id = "c2", title = "Cloud Two" } })
+    eq(source.listingKey("/lib"), key2, "same catalog, same key (stable across restarts)")
+    local real_extra = Virtual.listingExtra
+    Virtual.listingExtra = function() return "badges" end
+    check(source.listingKey("/lib") ~= key2, "key changes with badge settings")
+    Virtual.listingExtra = real_extra
+
+    -- The folder's timestamp is left alone.
+    local lfs = require("libs/libkoreader-lfs")
+    local real_touch = lfs.touch
+    local touched = false
+    lfs.touch = function() touched = true return true end
+    Virtual.refresh()
+    lfs.touch = real_touch
+    check(not touched, "no folder timestamp change with listing keys")
+
+    -- Covers arriving: ZenOS drops its cached covers.
+    changes = {}
+    Covers.on_arrived({ Virtual.books[1] })
+    check(changes[1] and changes[1][1] == "/lib/cloud-c2.epub", "cover arrival reported")
+
+    -- What's left of the groups hooks: tags once per book, open backstop.
+    local fake = { getGroupedByTags = function()
+        return { { tag = "x", files = { "/lib/a.epub", "/lib/a.epub" } } }
+    end }
+    local orig_tags = fake.getGroupedByTags
+    ZenGroups.installWithSource(Virtual, fake)
+    check(fake.getGroupedByTags ~= orig_tags, "tags hooked")
+    eq(#fake.getGroupedByTags()[1].files, 1, "tag lists each book once")
+    check(ZenSource.on_books ~= nil, "open hooks rechecked with groupings")
+
+    package.loaded["common/book_sources"] = nil
+    ZenSource.registered, ZenSource.book_info, ZenSource.listing, ZenSource.on_books = false, false, false, nil
+    Virtual.setCatalog(nil, {})
+end
+
 -- The menu: groups in order, every entry explained, ZenOS items only with ZenOS.
 
 do
