@@ -124,8 +124,6 @@ function Virtual.refresh()
     local path = fc and normalize(fc.path)
     local shown = path and (path == Virtual.folder or path == ""
             or Virtual.folder:sub(1, #path + 1) == path .. "/")
-    logger.info("CloudLibrary: redraw", shown and "yes" or "no", "- showing", path or "nothing",
-        "library", Virtual.folder, "cloud books", #Virtual.books)
     if shown then fc:refreshPath() end
 end
 

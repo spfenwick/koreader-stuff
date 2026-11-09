@@ -271,11 +271,21 @@ function ZenSource.downloaded(old_path, new_path)
             end
         end
     end
-    -- Home rebuilds now if it's on top, else when it's next shown.
+    ZenSource.refreshHome({ old_path, new_path })
+end
+
+--- A book's file came or went (downloaded, or deleted and back to its
+-- cloud entry): ZenOS's Home forgets what it cached for these paths and
+-- rebuilds now if it's on top, else when it's next shown.
+function ZenSource.refreshHome(paths)
     local FileManager = require("apps/filemanager/filemanager")
     local plugin = FileManager.instance and FileManager.instance.zenos
     local home = plugin and require("common/shared_state").get(plugin, "home")
-    if type(home) == "table" and type(home.rebuildActive) == "function" then home.rebuildActive() end
+    if type(home) ~= "table" then return end
+    if type(home.invalidateBookCache) == "function" then
+        for _i, path in ipairs(paths or {}) do home.invalidateBookCache(path, true) end
+    end
+    if type(home.rebuildActive) == "function" then home.rebuildActive() end
 end
 
 --- Tells ZenOS the cloud books changed; with paths, also that their covers

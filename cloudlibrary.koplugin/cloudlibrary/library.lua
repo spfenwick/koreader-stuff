@@ -278,24 +278,42 @@ end
 -- redraw of whoever deleted the file (scheduled before this runs): on a
 -- Kobo that one could still show the folder without the book's cloud
 -- entry, which only came back on leaving and reopening the folder.
+-- ZenOS's Home is rebuilt too: its rows show the deleted file until then.
 local reload_scheduled = false
-local function reloadSoon(after_delete)
-    if reload_scheduled or Library.fixture then return end
+local deleted_paths = {}
+local function reloadSoon(after_delete, paths)
+    if Library.fixture then return end
+    for _i, path in ipairs(paths or {}) do deleted_paths[#deleted_paths + 1] = path end
+    if reload_scheduled then return end
     reload_scheduled = true
     UIManager:nextTick(function()
         reload_scheduled = false
         local before = Virtual.catalog_sig
         Guard.call("jobs", Library.load)
-        logger.info("CloudLibrary: reloaded after a delete, cloud books changed:",
-            Virtual.catalog_sig ~= before, "cloud books", #Virtual.books)
         -- Library.load() redraws when the cloud books changed.
         if after_delete and Virtual.catalog_sig == before then
-            UIManager:nextTick(function()
-                logger.info("CloudLibrary: redrawing the library after a delete")
-                Guard.call("jobs", Virtual.refresh)
-            end)
+            UIManager:nextTick(function() Guard.call("jobs", Virtual.refresh) end)
+        end
+        if after_delete then
+            local home_paths = deleted_paths
+            deleted_paths = {}
+            local ok, err = pcall(ZenSource.refreshHome, home_paths)
+            if not ok then logger.warn("CloudLibrary: rebuilding Home after a delete:", err) end
         end
     end)
+end
+
+-- The deleted files and their books' cloud entries ({ path = id } from
+-- unmatch()), for Home to forget.
+local function homePaths(changed)
+    local out = {}
+    for path, id in pairs(changed) do
+        out[#out + 1] = path
+        for _i, b in ipairs(Virtual.books) do
+            if b.id == id then out[#out + 1] = b.path; break end
+        end
+    end
+    return out
 end
 
 --- The catalog ID of a downloaded book's file, or nil.
@@ -370,19 +388,14 @@ function Library.installDeleteHooks()
     -- cloud entry is back by then.
     Guard.hook("library", FileManager, "deleteFile", function(orig, self, file, ...)
         local path = libraryPath(file)
-        logger.info("CloudLibrary: deleting", file, "library folder:", Library.folder(),
-            "as library path:", path or "not in library", "catalog book:", path and idForPath(path) or "none")
         if path then History.deleting(path, idForPath(path)) end
         local ok = orig(self, file, ...)
         if ok and path and not Virtual.isVirtual(path) then
             local changed = Library.unmatch({ path })
-            logger.info("CloudLibrary: deleted", path, "catalog book:", changed[path] or "none")
             -- The history entry moves to the cloud entry before the caller
             -- redraws, so a "last read" sort keeps the book in its place.
             Guard.call("history", History.reconcile)
-            reloadSoon(true)
-        elseif not ok then
-            logger.info("CloudLibrary: delete failed or cancelled", file)
+            reloadSoon(true, next(changed) and homePaths(changed) or { path })
         end
         return ok
     end, "FileManager:deleteFile")
@@ -400,8 +413,11 @@ function Library.installDeleteHooks()
         local r = orig(self, ...)
         Library.restoreMatched(changed)
         if #paths > 0 then
-            logger.info("CloudLibrary: deleted", #paths, "selected files in the library")
-            reloadSoon(true)
+            local gone = {}
+            for path, id in pairs(changed) do
+                if not Library.matched[id] then gone[path] = id end
+            end
+            reloadSoon(true, homePaths(gone))
         end
         return r
     end, "FileManager:deleteSelectedFiles")

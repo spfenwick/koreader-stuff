@@ -1438,8 +1438,20 @@ do
     check(ReadHistory.hist[1] ~= first and ReadHistory.hist[1].file == down and ReadHistory.hist[1].time == 300,
         "first entry replaced by a copy")
     check(#ReadHistory.hist == len and ReadHistory.hist[#ReadHistory.hist] == last, "length and last unchanged")
+    -- ZenOS's Home forgets the file and the cloud entry and is rebuilt.
+    local forgot, rebuilt = {}, 0
+    local real_fm = FileManager.instance
+    FileManager.instance = { zenos = { _zen_shared = { home = {
+        invalidateBookCache = function(p, history_changed) if history_changed then forgot[p] = true end end,
+        rebuildActive = function() rebuilt = rebuilt + 1 end,
+    } } } }
+    package.loaded["common/shared_state"] = { get = function(p, key) return p._zen_shared[key] end }
     UIManager.nextTick = function(_self, fn) fn() end
     for _i, fn in ipairs(ticks) do fn() end
+    check(forgot[up] and forgot[cloud1], "Home forgets the deleted file and the cloud entry")
+    eq(rebuilt, 1, "Home rebuilt after the delete")
+    FileManager.instance = real_fm
+    package.loaded["common/shared_state"] = nil
     e = ReadHistory.hist[ReadHistory:getIndexByFile(cloud1) or 0]
     check(e and not e.dim, "shown as a cloud book")
     eq(e and e.time, 100, "at its read time")
