@@ -87,6 +87,8 @@ local FULL_INTERVALS = { daily = 24 * HOUR, weekly = 7 * 24 * HOUR }
 local FULL_SYNC_MODES = { "daily", "weekly", "never" }
 local PREFETCH_COVERS = 300          -- covers a batch after each sync, newest first (all, in batches, on a first sync)
 local PREFETCH_SECONDS = 180        -- (a batch, also for "Download missing covers")
+local CHECK_COVERS = 300            -- kept covers checked for changes after each sync (a cover changed on the
+local CHECK_AGE = 7 * 24 * 60 * 60  -- server keeps its link), each at most once in this time
 local MAX_CRASHES = 3               -- cover jobs dying in a row before giving up
 local CHECK_DELAY = 3                -- s after the file browser opens: let it draw first
 
@@ -501,6 +503,7 @@ local function runJob(server, folder, mode, db_path, wal, covers_dir, opts)
             -- In batches: if a job dies, only its batch is cut short.
             local batch = { limit = PREFETCH_COVERS, deadline = os.time() + PREFETCH_SECONDS, track = true }
             if mode == "prefetch" then
+                batch.check_limit, batch.check_before = CHECK_COVERS, os.time() - CHECK_AGE
                 result.covers = Covers.prefetch(Http.fetcher(server), server.url, store, covers_dir, batch)
             else
                 -- "Download missing covers": also retry covers that failed
@@ -555,8 +558,12 @@ local function describeResult(r)
     end
     if r.mode == "covers" and r.covers then
         local n = r.covers.fetched_total or r.covers.fetched
+        local same = r.covers.unchanged_total or r.covers.unchanged or 0
         if r.covers.network_error then
             return T(_("Cloud library: %1 covers downloaded, then the network was lost."), n)
+        end
+        if same > 0 then
+            return T(_("Cloud library: %1 covers downloaded, %2 unchanged."), n, same)
         end
         return T(_("Cloud library: %1 covers downloaded."), n)
     end
@@ -668,6 +675,10 @@ local function pollJob()
     Timing.record(label .. ": job", Timing.since(job.t0), "in the background, from start to result (checked every second)")
     if result.sync then Timing.recordAll(result.sync.timing, label .. ": ") end
     if result.covers then Timing.recordAll(result.covers.timing, label .. ": ") end
+    if result.covers and result.covers.check_timing then
+        Timing.recordAll(result.covers.check_timing, "covers (check for changes): ")
+        logger.info("CloudLibrary: checked", result.covers.checked, "covers,", result.covers.changed, "changed")
+    end
     if result.scan_ms then
         Timing.record("folder check: scan files", result.scan_ms,
             string.format("%d files read", result.scanned or 0))
@@ -677,7 +688,10 @@ local function pollJob()
     -- Cover downloads go in batches: "Download missing covers" until done,
     -- and after a sync while backfilling (most covers were missing).
     local covers = is_covers and result.covers
-    if covers then covers.fetched_total = (job.opts.fetched or 0) + (covers.fetched or 0) end
+    if covers then
+        covers.fetched_total = (job.opts.fetched or 0) + (covers.fetched or 0)
+        covers.unchanged_total = (job.opts.unchanged or 0) + (covers.unchanged or 0)
+    end
     local more = covers and covers.more and not result.error and Covers.canFetch()
     local quiet = job.quiet and not job.opts.manual
     if not more and (not quiet or result.error or changed) then
@@ -690,7 +704,7 @@ local function pollJob()
     end
     if more then
         Library.sync(job.mode, true, { manual = job.opts.manual, retry_before = job.opts.retry_before,
-            fetched = covers.fetched_total, crashes = crashes })
+            fetched = covers.fetched_total, unchanged = covers.unchanged_total, crashes = crashes })
     elseif result.sync and not result.error and Covers.canFetch() then
         -- After a sync, download some missing covers (newest books first).
         Library.sync("prefetch", true)
@@ -707,7 +721,7 @@ function Library.refreshCovers()
         return
     end
     UIManager:show(require("ui/widget/confirmbox"):new{
-        text = T(_("Download all %1 covers again?\n\nThis runs in the background and can take a while."),
+        text = T(_("Check all %1 covers for changes?\n\nThis runs in the background and can take a while."),
             Library.stats and Library.stats.covers or 0),
         ok_text = _("Refresh"),
         ok_callback = function()
@@ -1010,19 +1024,19 @@ function Library.menuEntry(plugin)
                 },
                 {
                     text = _("Full sync now"),
-                    help_text = _("Reads the whole catalog again: picks up edited and removed books, series, and changed covers (a book whose file changed on the server gets its cover downloaded again)."),
+                    help_text = _("Reads the whole catalog again: picks up edited and removed books and series. Changed covers are found separately: after each sync, some covers are checked with the server, so every cover is checked about once a week."),
                     enabled_func = has_server,
                     callback = function() Library.sync("full") end,
                 },
                 {
                     text = _("Download missing covers"),
-                    help_text = _("Downloads every cover not on this device yet, in the background, including covers a full sync found changed on the server. Covers are otherwise downloaded as you browse, and some after each quick or full sync."),
+                    help_text = _("Downloads every cover not on this device yet, in the background, including covers found changed on the server. Covers are otherwise downloaded as you browse, and some after each quick or full sync."),
                     enabled_func = has_server,
                     callback = function() Library.sync("covers") end,
                 },
                 {
                     text = _("Refresh all covers"),
-                    help_text = _("Downloads every cover again, replacing the ones on this device. Use it if some cloud books show an old cover. The old covers stay until their new ones arrive."),
+                    help_text = _("Checks every cover with the server now and downloads the ones that changed (the first time, every cover is downloaded again). Use it if some cloud books show an old cover. The old covers stay until their new ones arrive."),
                     enabled_func = has_server,
                     callback = function() Library.refreshCovers() end,
                 },

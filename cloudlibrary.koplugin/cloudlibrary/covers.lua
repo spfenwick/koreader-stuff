@@ -62,34 +62,26 @@ function Covers.fileFor(id, ext)
 end
 
 --- Downloads covers, writing each file atomically and recording it in the
--- store. opts: { now = os.time, deadline = unix time to stop at,
--- image_size = function(data) -> w, h, track = true to record the cover
--- being worked on under PROGRESS_KEY }. Returns { fetched, failed,
--- results = { [id] = { file, w, h } or false } }.
+-- store. books: { id, href, etag, modified }; with etag or modified (the
+-- cover kept here), it's asked for only if it changed. opts: { now =
+-- os.time, deadline = unix time to stop at, image_size = function(data) ->
+-- w, h, track = true to record the cover being worked on under
+-- PROGRESS_KEY }. Returns { fetched, failed, unchanged, results = { [id] =
+-- { file, w, h }, { unchanged = true } or false } }.
 function Covers.download(fetch, root, store, dir, books, opts)
     opts = opts or {}
     local now = opts.now or os.time
     local measure = opts.image_size or imageSize
     local resolve = require("cloudlibrary/sync").resolve
     local clock = require("cloudlibrary/timing").clock
-    local result = { fetched = 0, failed = 0, results = {} }
+    local result = { fetched = 0, failed = 0, unchanged = 0, results = {} }
     local t_start = clock()
     local spent = { network = 0, reading = 0, saving = 0, bytes = 0 }
-    for _i, book in ipairs(books) do
-        if opts.deadline and now() >= opts.deadline then break end
-        if opts.track then store:setMeta(Covers.PROGRESS_KEY, book.id) end
-        local t0 = clock()
-        local data, err, kind = fetch(resolve(root, book.href))
-        spent.network = spent.network + (clock() - t0)
-        if data == nil and kind ~= "http" then
-            -- Not reached (Wi-Fi off, device asleep...): stop here, and don't
-            -- count it against the covers.
-            result.network_error = err or "network error"
-            break
-        end
+    -- Keeps a downloaded image, or marks the cover failed.
+    local function save(book, data, headers)
         spent.bytes = spent.bytes + (type(data) == "string" and #data or 0)
         local ext = Covers.imageType(data)
-        local w, h
+        local w, h, t0
         if ext then
             t0 = clock()
             w, h = measure(data)
@@ -104,7 +96,11 @@ function Covers.download(fetch, root, store, dir, books, opts)
             local written = f and f:write(data)
             if f then f:close() end
             local renamed = written and os.rename(tmp, dir .. "/" .. file)
-            if renamed then store:setCover(book.id, file, w, h) end
+            if renamed then
+                headers = type(headers) == "table" and headers or {}
+                store:setCover(book.id, file, w, h,
+                    { etag = headers["etag"], modified = headers["last-modified"], checked = now() })
+            end
             spent.saving = spent.saving + (clock() - t0)
             if renamed then
                 result.fetched = result.fetched + 1
@@ -120,8 +116,31 @@ function Covers.download(fetch, root, store, dir, books, opts)
             result.results[book.id] = false
         end
     end
+    for _i, book in ipairs(books) do
+        if opts.deadline and now() >= opts.deadline then break end
+        if opts.track then store:setMeta(Covers.PROGRESS_KEY, book.id) end
+        local t0 = clock()
+        local conditional
+        if book.etag or book.modified then
+            conditional = { ["If-None-Match"] = book.etag, ["If-Modified-Since"] = book.modified }
+        end
+        local data, err, kind, headers = fetch(resolve(root, book.href), conditional)
+        spent.network = spent.network + (clock() - t0)
+        if kind == "not_modified" then
+            store:setCoverUnchanged(book.id, now())
+            result.unchanged = result.unchanged + 1
+            result.results[book.id] = { unchanged = true }
+        elseif data == nil and kind ~= "http" then
+            -- Not reached (Wi-Fi off, device asleep...): stop here, and don't
+            -- count it against the covers.
+            result.network_error = err or "network error"
+            break
+        else
+            save(book, data, headers)
+        end
+    end
     if opts.track then store:setMeta(Covers.PROGRESS_KEY, nil) end
-    local n = result.fetched + result.failed
+    local n = result.fetched + result.failed + result.unchanged
     if n > 0 then
         result.timing = {
             total = { ms = clock() - t_start, note = string.format("%d covers, %.1f MB, %.0f ms a cover",
@@ -149,7 +168,7 @@ function Covers.downloadMissing(fetch, root, store, dir, opts)
     local result = Covers.download(fetch, root, store, dir, books, opts)
     if opts.limit and not result.network_error then
         result.left = #store:missingCovers(1, retryBefore()) > 0
-        result.more = result.left and result.fetched + result.failed > 0
+        result.more = result.left and result.fetched + result.failed + result.unchanged > 0
     end
     return result
 end
@@ -182,6 +201,22 @@ function Covers.prefetch(fetch, root, store, dir, opts)
     end
     local result = Covers.downloadMissing(fetch, root, store, dir, opts)
     result.backfill = backfill
+    -- Then, with time left, check some kept covers against the server
+    -- (opts.check_limit of those not checked since opts.check_before): a
+    -- changed cover keeps its link, and the catalog doesn't say it changed.
+    local now = opts.now or os.time
+    if not backfill and opts.check_limit and not result.network_error
+            and not (opts.deadline and now() >= opts.deadline) then
+        local books = store:coversToCheck(opts.check_limit, opts.check_before or now())
+        local checked = Covers.download(fetch, root, store, dir, books, opts)
+        result.checked = checked.fetched + checked.failed + checked.unchanged
+        result.changed = checked.fetched
+        result.fetched = result.fetched + checked.fetched
+        result.failed = result.failed + checked.failed
+        result.unchanged = result.unchanged + checked.unchanged
+        result.network_error = result.network_error or checked.network_error
+        result.check_timing = checked.timing
+    end
     if not backfill then
         result.more = nil
     elseif result.left == false then
@@ -328,7 +363,9 @@ local function pollCovers()
     local results = type(result.results) == "table" and result.results or {}
     for _i, b in ipairs(job.books) do
         local r = results[b.id]
-        if r then
+        if r and r.unchanged then
+            b.cover_stale = nil
+        elseif r then
             b.cover_file, b.cover_w, b.cover_h = r.file, r.w, r.h
             b.cover = cfg.dir .. "/" .. r.file
             b.cover_failed, b.cover_retry_at, b.cover_stale = nil, nil, nil

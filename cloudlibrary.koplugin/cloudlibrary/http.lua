@@ -5,29 +5,34 @@ from a subprocess.
 
 local Http = {}
 
---- Returns body, or nil, an error message and "http" (the server answered
--- with an error) or "network" (it wasn't reached).
--- server: { url, username, password } as in KOReader's OPDS settings.
-function Http.get(server, url)
+--- Returns body, nil, nil and the response headers (lower-case names), or
+-- nil, an error message and "http" (the server answered with an error),
+-- "network" (it wasn't reached) or "not_modified" (304, for a conditional
+-- request). server: { url, username, password } as in KOReader's OPDS
+-- settings. extra_headers: more request headers (If-None-Match...).
+function Http.get(server, url, extra_headers)
     local http = require("socket.http")
     local ltn12 = require("ltn12")
     local socket = require("socket")
     local socketutil = require("socketutil")
     local sink = {}
+    local headers = {
+        ["Accept-Encoding"] = "identity",
+        ["Accept"] = "application/atom+xml, application/xml;q=0.9, image/*;q=0.8, */*;q=0.5",
+    }
+    for k, v in pairs(extra_headers or {}) do headers[k] = v end
     socketutil:set_timeout(socketutil.LARGE_BLOCK_TIMEOUT, socketutil.LARGE_TOTAL_TIMEOUT)
-    local code, _headers, status = socket.skip(1, http.request{
+    local code, resp_headers, status = socket.skip(1, http.request{
         url = url,
         method = "GET",
-        headers = {
-            ["Accept-Encoding"] = "identity",
-            ["Accept"] = "application/atom+xml, application/xml;q=0.9, image/*;q=0.8, */*;q=0.5",
-        },
+        headers = headers,
         sink = ltn12.sink.table(sink),
         user = server.username,
         password = server.password,
     })
     socketutil:reset_timeout()
-    if code == 200 then return table.concat(sink) end
+    if code == 200 then return table.concat(sink), nil, nil, resp_headers or {} end
+    if code == 304 then return nil, "not modified", "not_modified" end
     -- Without an HTTP status, the server wasn't reached (no network, timeout).
     if type(code) ~= "number" then
         return nil, "Network error: " .. tostring(code or status), "network"
@@ -69,7 +74,7 @@ end
 
 --- fetch(url) for Sync.
 function Http.fetcher(server)
-    return function(url) return Http.get(server, url) end
+    return function(url, headers) return Http.get(server, url, headers) end
 end
 
 return Http

@@ -14,7 +14,7 @@ so loading doesn't redo it for every book.
 local SQ3 = require("lua-ljsqlite3/init")
 local logger = require("logger")
 
-local SCHEMA_VERSION = 6
+local SCHEMA_VERSION = 7
 
 local SCHEMA = [[
 CREATE TABLE IF NOT EXISTS books (
@@ -42,7 +42,10 @@ CREATE TABLE IF NOT EXISTS books (
     cover_failed INTEGER,
     match_title TEXT,
     match_author TEXT,
-    cover_stale INTEGER
+    cover_stale INTEGER,
+    cover_etag TEXT,
+    cover_modified TEXT,
+    cover_checked INTEGER
 );
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -105,11 +108,14 @@ function Store.open(path, wal)
     if version >= 1 and version < SCHEMA_VERSION then
         -- 4 -> 5: normalised title and author (filled by fillMatchKeys()).
         -- 5 -> 6: cover_stale (a cover to download again, see upsertBooks).
+        -- 6 -> 7: the cover's ETag and Last-Modified, and when it was last
+        -- checked against the server (see coversToCheck).
         local have = {}
         local stmt = conn:prepare("PRAGMA table_info(books);")
         for row in stmt:rows() do have[row[2]] = true end
         stmt:close()
-        for _i, col in ipairs({ { "match_title", "TEXT" }, { "match_author", "TEXT" }, { "cover_stale", "INTEGER" } }) do
+        for _i, col in ipairs({ { "match_title", "TEXT" }, { "match_author", "TEXT" }, { "cover_stale", "INTEGER" },
+                { "cover_etag", "TEXT" }, { "cover_modified", "TEXT" }, { "cover_checked", "INTEGER" } }) do
             if not have[col[1]] then conn:exec("ALTER TABLE books ADD COLUMN " .. col[1] .. " " .. col[2] .. ";") end
         end
     elseif version ~= 0 and version ~= SCHEMA_VERSION then
@@ -336,12 +342,40 @@ end
 -- Covers ------------------------------------------------------------------------
 
 --- Records a downloaded cover (file path relative to the covers folder,
--- image size).
-function Store:setCover(uuid, file, w, h)
-    local stmt = self.conn:prepare(
-        "UPDATE books SET cover_file = ?, cover_w = ?, cover_h = ?, cover_failed = NULL, cover_stale = NULL WHERE uuid = ?;")
-    stmt:bind(file, w, h, uuid):step()
+-- image size). v: { etag, modified, checked } from the response, or nil.
+function Store:setCover(uuid, file, w, h, v)
+    v = v or {}
+    local stmt = self.conn:prepare([[UPDATE books SET cover_file = ?, cover_w = ?, cover_h = ?,
+        cover_failed = NULL, cover_stale = NULL, cover_etag = ?, cover_modified = ?, cover_checked = ?
+        WHERE uuid = ?;]])
+    stmt:bind(file, w, h, v.etag, v.modified, v.checked, uuid):step()
     stmt:close()
+end
+
+--- The server said the cover kept is still current (304).
+function Store:setCoverUnchanged(uuid, when)
+    local stmt = self.conn:prepare(
+        "UPDATE books SET cover_stale = NULL, cover_failed = NULL, cover_checked = ? WHERE uuid = ?;")
+    stmt:bind(when, uuid):step()
+    stmt:close()
+end
+
+--- Downloaded covers not checked against the server since before (unix
+-- time), least recently checked first, as for missingCovers. Covers that
+-- failed since then are left out.
+function Store:coversToCheck(limit, before)
+    local out = {}
+    local stmt = self.conn:prepare([[SELECT uuid, cover, cover_etag, cover_modified FROM books
+        WHERE cover IS NOT NULL AND cover_file IS NOT NULL AND cover_stale IS NULL
+          AND (cover_checked IS NULL OR cover_checked < ?)
+          AND (cover_failed IS NULL OR cover_failed < ?)
+        ORDER BY cover_checked ASC, added DESC LIMIT ?;]])
+    stmt:bind(before, before, limit or -1)
+    for row in stmt:rows() do
+        table.insert(out, { id = row[1], href = row[2], etag = row[3], modified = row[4] })
+    end
+    stmt:close()
+    return out
 end
 
 --- Renames a cover file (moved to another place in the covers folder).
@@ -362,13 +396,16 @@ end
 -- older than retry_before.
 function Store:missingCovers(limit, retry_before)
     local out = {}
-    local stmt = self.conn:prepare([[SELECT uuid, cover FROM books
+    local stmt = self.conn:prepare([[SELECT uuid, cover, cover_file, cover_etag, cover_modified FROM books
         WHERE cover IS NOT NULL AND (cover_file IS NULL OR cover_stale IS NOT NULL)
           AND (cover_failed IS NULL OR cover_failed < ?)
         ORDER BY added DESC LIMIT ?;]])
     stmt:bind(retry_before or 0, limit or -1)
     for row in stmt:rows() do
-        table.insert(out, { id = row[1], href = row[2] })
+        -- A stale cover is asked for conditionally: unchanged ones cost little.
+        local have = row[3] ~= nil
+        table.insert(out, { id = row[1], href = row[2],
+            etag = have and row[4] or nil, modified = have and row[5] or nil })
     end
     stmt:close()
     return out
