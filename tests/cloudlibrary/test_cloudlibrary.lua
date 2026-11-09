@@ -1256,9 +1256,11 @@ do
     local sig = Virtual.catalog_sig
     local refreshed, real_refresh = 0, Virtual.refresh
     Virtual.refresh = function() refreshed = refreshed + 1 end
-    for _i, fn in ipairs(ticks) do fn() end
+    local i = 1
+    while ticks[i] do ticks[i]() i = i + 1 end -- runs ticks they schedule too
     eq(Virtual.catalog_sig, sig, "reload finds the same cloud books")
-    eq(refreshed, 0, "so the folder isn't redrawn again")
+    eq(refreshed, 1, "folder redrawn once more after the delete's own redraw")
+    eq(#ticks, 2, "that redraw comes after the reload")
 
     -- Several at once: entries back before deleteSelectedFiles redraws;
     -- files it couldn't delete keep their own entry.
@@ -1283,7 +1285,8 @@ do
     FileManager.deleteSelectedFiles({ selected_files = { [path] = true, [stuck] = true } })
     check(seen_during, "deleted book's cloud entry there when the list is redrawn")
     check(not Virtual.isVirtual(folder .. "/cloud-del-2.epub"), "file not deleted: no cloud entry for it")
-    for _i, fn in ipairs(ticks) do fn() end
+    i = 1
+    while ticks[i] do ticks[i]() i = i + 1 end
     check(Virtual.isVirtual(cloud_path) and not Virtual.isVirtual(folder .. "/cloud-del-2.epub"),
         "reload agrees")
     FileManager.deleteSelectedFiles, FileManager.deleteFile = saved_delete, saved_delete_file

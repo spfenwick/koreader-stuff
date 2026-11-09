@@ -258,13 +258,25 @@ local function inLibrary(path)
         and (path == folder or path:sub(1, #folder + 1) == folder .. "/")
 end
 
+-- After a delete, the library folder is also redrawn once more, after the
+-- redraw of whoever deleted the file (scheduled before this runs): on a
+-- Kobo that one could still show the folder without the book's cloud
+-- entry, which only came back on leaving and reopening the folder.
 local reload_scheduled = false
-local function reloadSoon()
+local function reloadSoon(after_delete)
     if reload_scheduled or Library.fixture then return end
     reload_scheduled = true
     UIManager:nextTick(function()
         reload_scheduled = false
+        local before = Virtual.catalog_sig
         Guard.call("jobs", Library.load)
+        -- Library.load() redraws when the cloud books changed.
+        if after_delete and Virtual.catalog_sig == before then
+            UIManager:nextTick(function()
+                logger.info("CloudLibrary: redrawing the library after a delete")
+                Guard.call("jobs", Virtual.refresh)
+            end)
+        end
     end)
 end
 
@@ -342,8 +354,9 @@ function Library.installDeleteHooks()
         if inLibrary(file) then History.deleting(file, idForPath(file)) end
         local ok = orig(self, file, ...)
         if ok and inLibrary(file) and not Virtual.isVirtual(file) then
-            Library.unmatch({ file })
-            reloadSoon()
+            local changed = Library.unmatch({ file })
+            logger.info("CloudLibrary: deleted", file, "catalog book:", changed[file] or "none")
+            reloadSoon(true)
         end
         return ok
     end, "FileManager:deleteFile")
@@ -360,7 +373,10 @@ function Library.installDeleteHooks()
         local changed = #paths > 0 and Library.unmatch(paths) or {}
         local r = orig(self, ...)
         Library.restoreMatched(changed)
-        if #paths > 0 then reloadSoon() end
+        if #paths > 0 then
+            logger.info("CloudLibrary: deleted", #paths, "selected files in the library")
+            reloadSoon(true)
+        end
         return r
     end, "FileManager:deleteSelectedFiles")
 end
