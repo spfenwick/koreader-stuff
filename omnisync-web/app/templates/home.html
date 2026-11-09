@@ -49,7 +49,7 @@
         {% if read %}
         <ul class="month-books">
           {% for b, t, p in read %}
-          <li><a href="/book/{{ b.id }}" data-tip="{{ b.title }} · {{ t | duration }}, {{ p }} page{{ 's' if p != 1 }}" aria-label="{{ b.title }}: {{ t | duration }}, {{ p }} pages">{{ spine(b, 'tiny') }}</a></li>
+          <li><a href="/book/{{ b.id }}" data-tip="{{ b.title }} · {{ t | duration }}, {{ p }} page{{ 's' if p != 1 }}" aria-label="{{ b.title }}: {{ t | duration }}, {{ p }} pages">{{ spine(b) }}</a></li>
           {% endfor %}
         </ul>
         {% endif %}
