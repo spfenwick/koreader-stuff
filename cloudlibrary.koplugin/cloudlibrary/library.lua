@@ -303,17 +303,34 @@ local function reloadSoon(after_delete, paths)
     end)
 end
 
+local function cloudPathFor(id)
+    for _i, b in ipairs(Virtual.books) do
+        if b.id == id then return b.path end
+    end
+end
+
 -- The deleted files and their books' cloud entries ({ path = id } from
 -- unmatch()), for Home to forget.
 local function homePaths(changed)
     local out = {}
     for path, id in pairs(changed) do
         out[#out + 1] = path
-        for _i, b in ipairs(Virtual.books) do
-            if b.id == id then out[#out + 1] = b.path; break end
-        end
+        out[#out + 1] = cloudPathFor(id)
     end
     return out
+end
+
+-- Open ZenOS views list the deleted files' cloud entries instead. Done
+-- before the caller redraws: ZenOS then takes a deleted file out of its
+-- open Authors/Series/... lists, which would leave its book out.
+local function showCloudInViews(changed)
+    for path, id in pairs(changed) do
+        local cloud = cloudPathFor(id)
+        if cloud then
+            local ok, err = pcall(ZenSource.replaceInViews, path, cloud)
+            if not ok then logger.warn("CloudLibrary: redrawing views after a delete:", err) end
+        end
+    end
 end
 
 --- The catalog ID of a downloaded book's file, or nil.
@@ -395,6 +412,7 @@ function Library.installDeleteHooks()
             -- The history entry moves to the cloud entry before the caller
             -- redraws, so a "last read" sort keeps the book in its place.
             Guard.call("history", History.reconcile)
+            showCloudInViews(changed)
             reloadSoon(true, next(changed) and homePaths(changed) or { path })
         end
         return ok
@@ -417,6 +435,7 @@ function Library.installDeleteHooks()
             for path, id in pairs(changed) do
                 if not Library.matched[id] then gone[path] = id end
             end
+            showCloudInViews(gone)
             reloadSoon(true, homePaths(gone))
         end
         return r

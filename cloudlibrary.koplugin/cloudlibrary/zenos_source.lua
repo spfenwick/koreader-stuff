@@ -251,11 +251,11 @@ local function swapInItem(item, old, new)
     return found
 end
 
---- A cloud book was downloaded: every open ZenOS view that lists it (Home,
--- Authors/Series/Languages/Tags and their book lists, To Be Read,
--- history and search lists) now shows the file, and is redrawn. The
--- library folder itself is redrawn by Virtual.refresh().
-function ZenSource.downloaded(old_path, new_path)
+--- Every open ZenOS view that lists a book at old_path (Authors/Series/
+-- Languages/Tags and their book lists, To Be Read, history and search
+-- lists) lists it at new_path instead, and is redrawn. The library folder
+-- itself is redrawn by Virtual.refresh().
+function ZenSource.replaceInViews(old_path, new_path)
     for _i, entry in ipairs(UIManager._window_stack or {}) do
         local w = entry.widget
         if type(w) == "table" and type(w.item_table) == "table" then
@@ -271,6 +271,11 @@ function ZenSource.downloaded(old_path, new_path)
             end
         end
     end
+end
+
+--- A cloud book was downloaded: open views and Home show the file.
+function ZenSource.downloaded(old_path, new_path)
+    ZenSource.replaceInViews(old_path, new_path)
     ZenSource.refreshHome({ old_path, new_path })
 end
 

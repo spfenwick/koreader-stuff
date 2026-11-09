@@ -1430,7 +1430,25 @@ do
     Library.installDeleteHooks()
     local ticks = {}
     UIManager.nextTick = function(_self, fn) table.insert(ticks, fn) end
+    -- An open ZenOS Series list with the book, and its book list.
+    local real_stack = UIManager._window_stack
+    local series_files = { up }
+    local series_redraws = 0
+    local series = { item_table = { { text = "Saga", _zen_files = series_files } },
+        updateItems = function() series_redraws = series_redraws + 1 end }
+    local book_list = { item_table = { { text = "Bo Writer - Up", path = up, filepath = up } },
+        updateItems = function() series_redraws = series_redraws + 1 end }
+    UIManager._window_stack = { { widget = series }, { widget = book_list } }
     check(FileManager.deleteFile(FileManager, up, true), "file deleted")
+    eq(series_files[1], cloud1, "series list has the cloud entry before the caller redraws")
+    eq(book_list.item_table[1].path, cloud1, "book list item is the cloud entry")
+    eq(series_redraws, 2, "both redrawn")
+    -- ZenOS then takes the deleted file out of its lists: nothing to take.
+    for i = #series_files, 1, -1 do
+        if series_files[i] == up then table.remove(series_files, i) end
+    end
+    eq(#series_files, 1, "book still in the series after ZenOS's clean-up")
+    UIManager._window_stack = real_stack
     check(ReadHistory:getIndexByFile(cloud1) and not ReadHistory:getIndexByFile(up),
         "deleted: the cloud entry again, before the reload")
     eq(ReadHistory:getIndexByFile(cloud1), 2, "in the same place")
