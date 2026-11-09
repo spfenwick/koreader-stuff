@@ -199,6 +199,7 @@ function Library.load()
     Search.enabled = s.search ~= false
     if not server or not folder or s.show == false then
         Library.stats = {}
+        Library.catalog = {}
         Library.matched, Library.on_device, Library.not_in_catalog = {}, {}, {}
         Covers.configure(nil)
         showCatalog(folder, {})
@@ -226,6 +227,7 @@ function Library.load()
     for _i, b in ipairs(books) do
         if not matched[b.id] then table.insert(cloud, b) end
     end
+    Library.catalog = books -- every catalog book, in the database's order
     Library.matched = matched
     Library.on_device = {}
     for _id, path in pairs(matched) do Library.on_device[path] = true end
@@ -273,6 +275,50 @@ local function idForPath(path)
     end
 end
 
+--- Shows these deleted files' catalog books as cloud books straight away,
+-- before the file browser lists the folder again, so they don't vanish
+-- until the reload after the delete puts them back. The listing isn't
+-- redrawn here: whoever deleted the files does that. Returns the
+-- { path = id } changed, for undoing with restoreMatched().
+function Library.unmatch(paths)
+    local changed = {}
+    for _i, path in ipairs(paths) do
+        local id = idForPath(path)
+        if id then
+            Library.matched[id] = nil
+            Library.on_device[path] = nil
+            changed[path] = id
+        end
+    end
+    if next(changed) == nil or not Library.catalog then return changed end
+    -- As Library.load() builds it, so the reload finds nothing new to show.
+    local cloud = {}
+    for _i, b in ipairs(Library.catalog) do
+        if not Library.matched[b.id] then cloud[#cloud + 1] = b end
+    end
+    Virtual.setCatalog(Library.folder(), cloud)
+    return changed
+end
+
+--- Undoes unmatch() for files that weren't deleted after all.
+function Library.restoreMatched(changed)
+    local any = false
+    for path, id in pairs(changed) do
+        if require("libs/libkoreader-lfs").attributes(path, "mode") == "file" then
+            Library.matched[id] = path
+            Library.on_device[path] = true
+            any = true
+        end
+    end
+    if any then
+        local cloud = {}
+        for _i, b in ipairs(Library.catalog or {}) do
+            if not Library.matched[b.id] then cloud[#cloud + 1] = b end
+        end
+        Virtual.setCatalog(Library.folder(), cloud)
+    end
+end
+
 --- Where this device has the catalog book with one of these UUIDs (its
 -- file, or its cloud entry), or nil. Used by OmniSync for the history.
 function Library.pathForUuids(uuids)
@@ -290,22 +336,31 @@ end
 
 function Library.installDeleteHooks()
     local FileManager = require("apps/filemanager/filemanager")
+    -- The caller redraws the listing after deleteFile() returns: the book's
+    -- cloud entry is back by then.
     Guard.hook("library", FileManager, "deleteFile", function(orig, self, file, ...)
         if inLibrary(file) then History.deleting(file, idForPath(file)) end
         local ok = orig(self, file, ...)
-        if ok and inLibrary(file) and not Virtual.isVirtual(file) then reloadSoon() end
+        if ok and inLibrary(file) and not Virtual.isVirtual(file) then
+            Library.unmatch({ file })
+            reloadSoon()
+        end
         return ok
     end, "FileManager:deleteFile")
+    -- deleteSelectedFiles() redraws the listing itself, so the cloud entries
+    -- go back first; those for files it couldn't delete are taken out again.
     Guard.hook("library", FileManager, "deleteSelectedFiles", function(orig, self, ...)
-        local any = false
+        local paths = {}
         for path in pairs(self.selected_files or {}) do
             if inLibrary(path) then
-                any = true
+                paths[#paths + 1] = path
                 History.deleting(path, idForPath(path))
             end
         end
+        local changed = #paths > 0 and Library.unmatch(paths) or {}
         local r = orig(self, ...)
-        if any then reloadSoon() end
+        Library.restoreMatched(changed)
+        if #paths > 0 then reloadSoon() end
         return r
     end, "FileManager:deleteSelectedFiles")
 end

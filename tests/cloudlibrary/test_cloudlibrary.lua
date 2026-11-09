@@ -1243,6 +1243,54 @@ do
     eq(#Search.augment(searcher, results), 2, "cached search results get it too")
     eq(#Search.augment(searcher, {}), 2, "new search finds it")
 
+    -- The cloud entry is back as soon as the delete returns (the caller
+    -- redraws then), before the reload; the reload then changes nothing.
+    f = io.open(path, "w"); f:write("x"); f:close()
+    Library.load()
+    check(not Virtual.isVirtual(cloud_path), "downloaded again")
+    local ticks = {}
+    UIManager.nextTick = function(_self, fn) table.insert(ticks, fn) end
+    check(FileManager.deleteFile(FileManager, path, true), "deleted again")
+    check(Virtual.isVirtual(cloud_path), "cloud entry back before the reload")
+    eq(#ticks, 1, "reload still scheduled")
+    local sig = Virtual.catalog_sig
+    local refreshed, real_refresh = 0, Virtual.refresh
+    Virtual.refresh = function() refreshed = refreshed + 1 end
+    for _i, fn in ipairs(ticks) do fn() end
+    eq(Virtual.catalog_sig, sig, "reload finds the same cloud books")
+    eq(refreshed, 0, "so the folder isn't redrawn again")
+
+    -- Several at once: entries back before deleteSelectedFiles redraws;
+    -- files it couldn't delete keep their own entry.
+    f = io.open(path, "w"); f:write("x"); f:close()
+    local stuck = folder .. "/Bo Writer - Other Book.epub"
+    f = io.open(stuck, "w"); f:write("x"); f:close()
+    UIManager.nextTick = function(_self, fn) fn() end
+    Library.load()
+    eq(#Virtual.books, 0, "both downloaded")
+    -- KOReader's deleteSelectedFiles, as a stand-in: one file can't be
+    -- deleted; it redraws (here: looks at the entries) after deleting.
+    local saved_delete, saved_delete_file = FileManager.deleteSelectedFiles, FileManager.deleteFile
+    local seen_during
+    FileManager.deleteSelectedFiles = function(self)
+        os.remove(path)
+        self.selected_files[path] = nil
+        seen_during = Virtual.isVirtual(cloud_path)
+    end
+    Library.installDeleteHooks()
+    ticks = {}
+    UIManager.nextTick = function(_self, fn) table.insert(ticks, fn) end
+    FileManager.deleteSelectedFiles({ selected_files = { [path] = true, [stuck] = true } })
+    check(seen_during, "deleted book's cloud entry there when the list is redrawn")
+    check(not Virtual.isVirtual(folder .. "/cloud-del-2.epub"), "file not deleted: no cloud entry for it")
+    for _i, fn in ipairs(ticks) do fn() end
+    check(Virtual.isVirtual(cloud_path) and not Virtual.isVirtual(folder .. "/cloud-del-2.epub"),
+        "reload agrees")
+    FileManager.deleteSelectedFiles, FileManager.deleteFile = saved_delete, saved_delete_file
+    os.remove(stuck)
+    Virtual.refresh = real_refresh
+    UIManager.nextTick = function(_self, fn) fn() end
+
     -- Deleting a cloud entry or a file elsewhere doesn't reload.
     local loads, real_load = 0, Library.load
     Library.load = function() loads = loads + 1 end
