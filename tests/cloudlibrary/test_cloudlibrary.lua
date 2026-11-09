@@ -1417,12 +1417,32 @@ do
     eq(ReadHistory.hist[ReadHistory:getIndexByFile(up) or 0].time, 100, "at the same time")
     eq(Library.pathForUuids({ U1 }), up, "and OmniSync gets the file")
 
-    -- Deleted: back to the cloud entry.
+    -- Deleted: back to the cloud entry, before the caller redraws (the
+    -- reload after it hasn't run), with the entry in the middle of the
+    -- history and a new first entry (ZenOS's "last read" sort rebuilds its
+    -- index only when the length or first or last entry changes).
+    table.insert(ReadHistory.hist, 1, { time = 300, file = down, text = "Ann Author - Down.epub",
+        dim = false, select_enabled = true })
+    table.insert(ReadHistory.hist, { time = 10, file = folder .. "/old.epub", text = "old.epub",
+        dim = true, select_enabled = false })
+    local first, last, len = ReadHistory.hist[1], ReadHistory.hist[#ReadHistory.hist], #ReadHistory.hist
+    local moved = ReadHistory.hist[2]
     Library.installDeleteHooks()
+    local ticks = {}
+    UIManager.nextTick = function(_self, fn) table.insert(ticks, fn) end
     check(FileManager.deleteFile(FileManager, up, true), "file deleted")
-    check(ReadHistory:getIndexByFile(cloud1) and not ReadHistory:getIndexByFile(up), "deleted: the cloud entry again")
+    check(ReadHistory:getIndexByFile(cloud1) and not ReadHistory:getIndexByFile(up),
+        "deleted: the cloud entry again, before the reload")
+    eq(ReadHistory:getIndexByFile(cloud1), 2, "in the same place")
+    check(ReadHistory.hist[2] ~= moved, "moved entry is a new table")
+    check(ReadHistory.hist[1] ~= first and ReadHistory.hist[1].file == down and ReadHistory.hist[1].time == 300,
+        "first entry replaced by a copy")
+    check(#ReadHistory.hist == len and ReadHistory.hist[#ReadHistory.hist] == last, "length and last unchanged")
+    UIManager.nextTick = function(_self, fn) fn() end
+    for _i, fn in ipairs(ticks) do fn() end
     e = ReadHistory.hist[ReadHistory:getIndexByFile(cloud1) or 0]
     check(e and not e.dim, "shown as a cloud book")
+    eq(e and e.time, 100, "at its read time")
 
     -- Gone from the catalog: greyed out.
     store = Store.open(Library.dbPath(server), false)

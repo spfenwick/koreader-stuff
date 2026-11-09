@@ -377,6 +377,9 @@ function Library.installDeleteHooks()
         if ok and path and not Virtual.isVirtual(path) then
             local changed = Library.unmatch({ path })
             logger.info("CloudLibrary: deleted", path, "catalog book:", changed[path] or "none")
+            -- The history entry moves to the cloud entry before the caller
+            -- redraws, so a "last read" sort keeps the book in its place.
+            Guard.call("history", History.reconcile)
             reloadSoon(true)
         elseif not ok then
             logger.info("CloudLibrary: delete failed or cancelled", file)
