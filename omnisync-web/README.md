@@ -16,6 +16,9 @@ reads them.
 - **Statistics**: per year or all time, with a calendar, time per month,
   time of day, day of the week, and books by time read. Click a day for what
   was read that day.
+- **Versions** (linked from Status and a book's Files): books known in more
+  than one file, with how they were matched: the shared book ID, which
+  files have the same text, which devices reported each file.
 - **Status**: devices, the last import, and files that couldn't be read.
 - **Settings**: book covers and descriptions from a Calibre-Web Automated
   (or Calibre-Web) server (see [Covers](#covers)).

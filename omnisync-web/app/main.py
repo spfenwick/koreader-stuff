@@ -392,12 +392,25 @@ async def collections_page(request: Request):
     return render(request, "collections.html", collections=items)
 
 
-async def status_page(request: Request):
-    devices = []
+def read_devices() -> list[dict]:
+    """What the ingester found in each device folder (devices.json)."""
     try:
-        devices = json.loads((DATA_DIR / "devices.json").read_text())
+        return json.loads((DATA_DIR / "devices.json").read_text())
     except (OSError, ValueError):
-        pass
+        return []
+
+
+async def versions_page(request: Request):
+    books, *_ = library.snapshot()
+    items = sorted((b for b in books.values() if len(b.editions) > 1), key=lambda b: b.title.casefold())
+    names = {d.get("id"): d.get("name") for d in read_devices()}
+    return render(request, "versions.html", books=items, device_names=names,
+                  same=sum(1 for b in items if b.texts <= 1 and not b.unread_texts),
+                  differ=sum(1 for b in items if b.texts > 1))
+
+
+async def status_page(request: Request):
+    devices = read_devices()
     bad, seen = [], {}
     state = DATA_DIR / "state.sqlite3"
     if state.exists():
@@ -561,6 +574,7 @@ app = Starlette(
         Route("/day/{day}", day_page),
         Route("/stats", stats_page),
         Route("/collections", collections_page),
+        Route("/versions", versions_page),
         Route("/status", status_page),
         Route("/sync", sync_now, methods=["POST"]),
         Route("/settings", settings_page),

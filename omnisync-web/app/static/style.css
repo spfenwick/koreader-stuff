@@ -269,3 +269,10 @@ table.month td.today { box-shadow: inset 0 0 0 2px var(--accent); }
   .month-books { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; }
   .month-books .spine { font-size: .5rem; box-shadow: none; }
 }
+
+/* Versions */
+.versions .panel-head h2 a { font-size: inherit; color: inherit; }
+.versions .byline { font-size: .9rem; margin: -4px 0 10px; }
+.versions table { margin-bottom: 8px; }
+.versions td code { word-break: break-all; }
+.s-unknown { background: var(--surface-2); color: var(--text-2); }

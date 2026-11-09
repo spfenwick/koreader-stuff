@@ -135,6 +135,12 @@ class Edition:
     first_read: int | None = None
     last_read: int | None = None
     progress: float | None = None  # furthest page read / total pages
+    # Book identity: what devices said about this file (IDENTITY.md).
+    uuids: set = field(default_factory=set)
+    sig: str | None = None  # body signature, read from the file itself
+    sources: set = field(default_factory=set)  # "file", "sidecar", "link"
+    reported_by: set = field(default_factory=set)  # device IDs that sent a fact
+    text: str | None = None  # "A", "B", …: files with the same text share a letter
 
 
 @dataclass
@@ -238,6 +244,25 @@ class Book:
     @property
     def notes_count(self) -> int:
         return sum(1 for a in self.annotations if a.note and not a.is_bookmark)
+
+    @property
+    def joined_by(self) -> list[str]:
+        """The UUIDs that tie this book's files together: those in two or more."""
+        seen: dict[str, int] = {}
+        for e in self.editions:
+            for u in e.uuids:
+                seen[u] = seen.get(u, 0) + 1
+        return sorted(u for u, n in seen.items() if n > 1)
+
+    @property
+    def texts(self) -> int:
+        """How many different texts its files have (as far as known)."""
+        return len({e.text for e in self.editions if e.text})
+
+    @property
+    def unread_texts(self) -> int:
+        """Files whose text hasn't been read (no signature)."""
+        return sum(1 for e in self.editions if not e.sig)
 
     def search_text(self) -> str:
         return f"{self.title}\n{self.authors}\n{self.series}".casefold()
@@ -368,6 +393,13 @@ class Library:
         for uuid, md5 in state.execute("SELECT uuid, md5 FROM id_uuids"):
             file_uuids.setdefault(md5, set()).add(uuid.lower())
         file_ids: dict[str, set] = {}
+        for md5, src, sig, device in state.execute("SELECT md5, src, sig, device FROM id_facts"):
+            e = editions.get(md5)
+            if e is not None:
+                e.sources.add(src)
+                e.reported_by.add(device)
+                if sig and not e.sig:
+                    e.sig = sig
         for md5, ids in state.execute("SELECT md5, ids FROM id_facts WHERE ids IS NOT NULL"):
             for ident in ids.split("\n"):
                 scheme, _, value = ident.partition(":")
@@ -395,6 +427,11 @@ class Library:
                     if rec.beats(merged.get(prop)):
                         merged[prop] = rec
             book = Book(id=md5s[0], editions=eds, props=merged)
+            letters: dict[str, str] = {}
+            for e in eds:  # the most-read file's text is A
+                e.uuids = file_uuids.get(e.md5, set())
+                if e.sig:
+                    e.text = letters.setdefault(e.sig, chr(ord("A") + len(letters)))
             for e in eds:  # the most-read file's identifiers first
                 book.uuids += sorted(file_uuids.get(e.md5, set()) - set(book.uuids))
                 book.calibre_ids += sorted(file_ids.get(e.md5, set()) - set(book.calibre_ids))
@@ -445,6 +482,7 @@ class Library:
             "bookmarks": sum(1 for a in annotations if a.is_bookmark),
             "readings": stats.execute("SELECT count(*) FROM page_stat_data").fetchone()[0],
             "files": len(editions),
+            "versions": sum(1 for b in books.values() if len(b.editions) > 1),
         }
         return books, by_md5, collections, annotations, daily, counts
 

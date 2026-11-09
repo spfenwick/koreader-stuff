@@ -44,11 +44,18 @@ done
 book=$(curl -sf "$base/books" | grep -o '/book/[0-9a-f]\{32\}' | head -1)
 fail=0
 for path in / /books "$book" "$book/highlights.md" /highlights "/highlights?q=whale" /stats "/stats?year=all" \
-            /collections /status /health; do
+            /collections /versions /status /health; do
     code=$(curl -s -o /dev/null -w '%{http_code}' "$base$path")
     echo "$code $path"
     [ "$code" = 200 ] || fail=1
 done
+# Versions: the two files of Pride and Prejudice, joined by their UUID, with different texts.
+versions=$(curl -sf "$base/versions")
+if echo "$versions" | grep -q '1a2b3c4d-0000-4000-8000-000000000001' && echo "$versions" | grep -q '2 texts'; then
+    echo "200 versions listed"
+else
+    echo "versions: Pride and Prejudice's files not listed" >&2; fail=1
+fi
 # Covers: a stand-in CWA server inside the container, set up through the settings form.
 docker exec -d "$name" python3 /tests/fake_cwa.py 8790
 sleep 1

@@ -87,6 +87,7 @@
         {% endfor %}
         </tbody>
       </table>
+      {% if book.editions | length > 1 %}<p class="small"><a href="/versions#{{ book.id }}">How these files were matched</a></p>{% endif %}
     </details>
   </section>
   {% endif %}
@@ -102,6 +103,7 @@
         {% endfor %}
         </tbody>
       </table>
+      {% if book.editions | length > 1 %}<p class="small"><a href="/versions#{{ book.id }}">How these files were matched</a></p>{% endif %}
     </details>
   </section>
 </article>

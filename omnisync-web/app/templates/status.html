@@ -19,6 +19,7 @@
     <dt>Data loaded</dt><dd>{{ loaded_at.strftime('%-d %b %Y %H:%M') if loaded_at else 'not yet' }}</dd>
     {% if counts %}
     <dt>Holds</dt><dd>{{ counts.books }} books ({{ counts.files }} files), {{ counts.highlights }} highlights, {{ counts.notes }} notes, {{ counts.bookmarks }} bookmarks, {{ "{:,}".format(counts.readings) }} page readings</dd>
+    <dt>Books in more than one version</dt><dd><a href="/versions">{{ counts.versions }}</a></dd>
     {% endif %}
   </dl>
 </section>
