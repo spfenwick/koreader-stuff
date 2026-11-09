@@ -25,6 +25,7 @@ description, and what couldn't be verified. Written against KOReader
 | `omnisync/idformat.lua` | both | Book identity records, identity segment format |
 | `omnisync/idscan.lua` | subprocess | Reading an EPUB's UUIDs and body signature |
 | `omnisync/idstore.lua` | main | Book identity facts, files read, export/import, groups |
+| `omnisync/progresshook.lua` | main | KOReader's progress sync: positions from a book's other versions |
 
 Highlights and bookmarks are designed in ANNOTATIONS.md, book data (status,
 rating, review, custom metadata, handmade TOC) in BOOKDATA.md, book

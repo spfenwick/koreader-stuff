@@ -443,6 +443,25 @@ function IdStore:refreshGroups()
 end
 
 
+--- The other MD5s whose positions match this one's (level 2: same joined
+-- group and same body signature), sorted. Empty when this MD5 has no
+-- signature or isn't in a group.
+function IdStore:positionPeers(md5)
+    return self:_read(function(conn)
+        local stmt = conn:prepare([[
+            SELECT DISTINCT g.md5 FROM id_groups me
+            JOIN id_groups g ON g.grp = me.grp AND g.md5 <> me.md5
+            JOIN id_facts f ON f.md5 = g.md5
+            WHERE me.md5 = ? AND f.sig IN
+                (SELECT sig FROM id_facts WHERE md5 = ? AND sig IS NOT NULL)
+            ORDER BY g.md5;]])
+        stmt:bind(md5, md5)
+        local out = {}
+        for _, r in ipairs(rows(stmt)) do out[#out + 1] = r[1] end
+        return out
+    end)
+end
+
 -- Status --------------------------------------------------------------------------------
 
 --- The UUIDs known for these MD5s (from any device's facts):

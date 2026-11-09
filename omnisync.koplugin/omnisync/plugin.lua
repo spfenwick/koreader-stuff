@@ -376,6 +376,20 @@ function Plugin.idStore()
     return id_store
 end
 
+--- Lets KOReader's progress sync find a book's position under its other
+-- versions (see omnisync/progresshook.lua). Does nothing when the progress
+-- sync plugin isn't enabled. Returns true if the hook is in place.
+function Plugin.installProgressHook()
+    local ok, Client = pcall(require, "KOSyncClient")
+    if not ok or type(Client) ~= "table" or type(Client.get_progress) ~= "function" then return false end
+    require("omnisync/progresshook").install(Client, {
+        peers = function(md5) return Plugin.idStore():positionPeers(md5) end,
+        schedule = function(fn) UIManager:nextTick(fn) end,
+        logger = logger,
+    })
+    return true
+end
+
 --- Book files to read for book identity: the EPUBs book data knows about
 -- (books opened on this device), with the sidecar's MD5.
 function Plugin.identityFiles()

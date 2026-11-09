@@ -1,8 +1,8 @@
 # Book identity across file versions (plan)
 
 Status: steps 1 to 3 built: Cloud library's matcher fix, the identity
-stream (2026-11-06), and book data joining (2026-11-08). Steps 4 onwards
-are a plan. Sections below say where the build
+stream (2026-11-06), and book data joining (2026-11-08); and step 7,
+progress across versions (2026-11-10). Steps 4 to 6 are a plan. Sections below say where the build
 differs from the plan.
 
 ## The problem
@@ -219,14 +219,29 @@ Records from a group member with a *different* signature (another
 edition) are not applied. They could be shown later ("3 highlights from
 another edition of this book"); out of scope here.
 
-### Progress (level 2, optional, last)
+### Progress (level 2)
 
 KOReader's progress sync keys by MD5 too, on its own server, so this is a
-hook into the KOSync plugin rather than OmniSync's data: when opening a
-grouped book, if the server has no progress for this MD5, ask for the
-other MD5s in its level-2 group and take the furthest/newest. Read-only,
-fallback only; a few extra requests on open. Decide after the rest is in
-use.
+hook into the progress sync plugin (kosync.koplugin) rather than OmniSync's
+data. As built (`omnisync/progresshook.lua`, installed at start when that
+plugin is enabled): its client's `get_progress` is wrapped. When the book's
+MD5 has level-2 peers (`IdStore:positionPeers`: same joined group, same body
+signature), their positions are fetched too, one request each after this
+MD5's, and the newest by the server's timestamp is handed back as if the
+server had returned it. With no timestamps, this MD5's own position is
+kept, else the furthest. The progress sync plugin then does what it always
+does: same position, nothing; newer or older, jump or ask, by its settings.
+
+- Not only a fallback, as first planned: once each version has a position
+  of its own, a fallback would never look at the other one again.
+- Read-only: pushes still go to this file's MD5 alone.
+- This MD5's request failing (no network) is reported as before, without
+  asking for the others. A peer's request failing is skipped.
+- Books without peers make the one request they always did. A sidecar's
+  MD5 without a signature of its own (a file replaced in place) has no
+  peers, as for annotations.
+- With "file name" chosen as progress sync's book identity, the key is
+  a hash of the file name, which matches no MD5 here: nothing changes.
 
 ## Cloud library's side
 
@@ -276,7 +291,7 @@ Cloud library then:
 4. Statistics joining, including the late-link move.
 5. Annotations, TOC and flows joining (level 2).
 6. Cloud library: links, `bookState`, badges and details.
-7. Progress fallback, if still wanted.
+7. Progress across versions. **Built** (2026-11-10), before 4 to 6.
 
 Each step is shippable on its own; 2 changes no behaviour.
 

@@ -16,6 +16,10 @@ KOReader's Cloud storage:
   (WebDAV): a book's status, rating, review and custom metadata are shared
   by every version of its file. See
   [STATISTICS.md](STATISTICS.md#book-identity).
+- **Reading progress across versions of a book**: with KOReader's own
+  Progress sync enabled, a book opened in one version of its file gets the
+  newest position saved from any version with the same text. See
+  [IDENTITY.md](IDENTITY.md#progress-level-2).
 
 It was called SuperSync, and takes over SuperSync's data on each device
 (see [Moving from SuperSync](#moving-from-supersync)).

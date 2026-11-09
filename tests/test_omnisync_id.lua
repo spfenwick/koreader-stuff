@@ -307,6 +307,86 @@ do
     check(by.m1 and not by.m1.ok, "oversized group held")
     local c = G:counts()
     check(c.versions == 1 and c.editions == 1 and c.held == 2, "counts by kind")
+
+    -- Position peers (level 2), from the joined groups.
+    G:refreshGroups()
+    local function same(list, want) return table.concat(list, ",") == want end
+    check(same(G:positionPeers("x2"), "x1,x3"), "peers: the other versions with the same body")
+    check(same(G:positionPeers("e1"), ""), "peers: another edition isn't one")
+    check(same(G:positionPeers("u1"), "") and same(G:positionPeers("m1"), ""), "peers: held groups give none")
+    check(same(G:positionPeers("solo"), "") and same(G:positionPeers("nope"), ""), "peers: none for a lone or unknown MD5")
+    -- A sidecar's MD5 (no signature of its own) joins at level 1 only.
+    G:recordScan({ path = "/g/replaced", md5 = "side", size = 1, mtime = 1 },
+        { md5 = "x4", uuids = { U[1] }, sig = "s1", title = "Book", authors = "Ann" }, "devG")
+    G:refreshGroups()
+    check(same(G:positionPeers("side"), ""), "peers: none for an MD5 without a signature")
+    check(same(G:positionPeers("x1"), "x2,x3,x4"), "peers: not the signatureless MD5")
+end
+
+-- Progress sync hook ---------------------------------------------------------------------------
+
+do
+    local ProgressHook = require("omnisync/progresshook")
+    local P = ProgressHook.pick
+    check(P({ percentage = 0.2, timestamp = 10 }, { { percentage = 0.1, timestamp = 20 } }).timestamp == 20,
+        "pick: newest wins, even if behind")
+    check(P({ percentage = 0.2, timestamp = 30 }, { { percentage = 0.5, timestamp = 20 } }).timestamp == 30,
+        "pick: own kept when newest")
+    check(P({}, { { percentage = 0.5, timestamp = 1 } }).percentage == 0.5, "pick: nothing for this MD5, another's")
+    check(P({ percentage = 0.2 }, { { percentage = 0.5 } }).percentage == 0.2, "pick: no timestamps, own kept")
+    check(P(nil, { { percentage = 0.3 }, { percentage = 0.6 } }).percentage == 0.6, "pick: no timestamps, furthest")
+
+    -- A stand-in for KOSyncClient and its server.
+    local server = {
+        own = { percentage = 0.1, progress = "/body/a", timestamp = 100, device_id = "d1" },
+        peer1 = { percentage = 0.4, progress = "/body/b", timestamp = 300, device_id = "d2" },
+        peer2 = { percentage = 0.3, progress = "/body/c", timestamp = 200, device_id = "d3" },
+    }
+    local down, asked = {}, {}
+    local queue = {}
+    local Client = {}
+    function Client:get_progress(_, _, document, callback)
+        asked[#asked + 1] = document
+        if down[document] then return callback(false, nil) end
+        callback(true, server[document] or {})
+    end
+    local peers = { own = { "peer1", "peer2", "gone" } }
+    check(ProgressHook.install(Client, {
+        peers = function(md5) if md5 == "boom" then error("db locked") end return peers[md5] or {} end,
+        schedule = function(fn) queue[#queue + 1] = fn end,
+    }), "hook installed")
+    check(not ProgressHook.install(Client, { peers = function() return {} end, schedule = function() end }),
+        "installed once only")
+    local function run()
+        while #queue > 0 do table.remove(queue, 1)() end
+    end
+    local function get(doc)
+        asked = {}
+        local got
+        Client:get_progress("u", "k", doc, function(ok, body) got = { ok = ok, body = body } end)
+        run()
+        return got
+    end
+
+    local g = get("own")
+    check(g.ok and g.body.progress == "/body/b" and table.concat(asked, ",") == "own,peer1,peer2,gone",
+        "the newest position among the versions")
+    server.own.timestamp = 400
+    g = get("own")
+    check(g.ok and g.body.progress == "/body/a", "this version's own when it's newest")
+    server.own = nil
+    g = get("own")
+    check(g.ok and g.body.progress == "/body/b", "nothing for this MD5: another version's")
+    down.peer1 = true
+    g = get("own")
+    check(g.ok and g.body.progress == "/body/c", "a failed request for another version is skipped")
+    down.own = true
+    g = get("own")
+    check(not g.ok and #asked == 1, "this MD5's request failed: reported, nothing else asked")
+    g = get("lonely")
+    check(g.ok and #asked == 1 and g.body.percentage == nil, "no other versions: one request, as before")
+    g = get("boom")
+    check(g.ok and #asked == 1, "a failed lookup leaves progress sync as it was")
 end
 
 -- Packing ---------------------------------------------------------------------------------
