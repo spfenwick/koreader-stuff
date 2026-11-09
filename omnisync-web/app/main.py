@@ -11,6 +11,7 @@ Configuration (environment):
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
@@ -20,6 +21,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, quote
 
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
@@ -31,7 +33,9 @@ from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
 from . import charts, formatting
+from .cwa import CWA, CWAError
 from .library import STATUS_LABELS, Library
+from .settings import Settings
 from .sync import Syncer
 
 HERE = Path(__file__).resolve().parent
@@ -44,6 +48,8 @@ USERNAME = os.environ.get("WEB_USERNAME", "")
 PASSWORD = os.environ.get("WEB_PASSWORD", "")
 
 library = Library(DATA_DIR)
+settings = Settings(DATA_DIR / "settings.json")
+cwa = CWA(settings, DATA_DIR)
 syncer = Syncer(library, [LUAJIT, INGEST_SCRIPT, str(READING_DIR), str(DATA_DIR)], INTERVAL)
 
 templates = Jinja2Templates(directory=str(HERE / "templates"))
@@ -51,7 +57,13 @@ env = templates.env
 env.filters.update(duration=formatting.duration, when=formatting.when, day=formatting.day,
                    clock=formatting.clock, percent=formatting.percent, stars=formatting.stars,
                    day_iso=formatting.day_iso)
-env.globals.update(STATUS_LABELS=STATUS_LABELS, syncer=syncer)
+
+
+def cover_url(book) -> str | None:
+    return f"/cover/{book.id}" if cwa.cover_href(book.uuids, book.calibre_ids) else None
+
+
+env.globals.update(STATUS_LABELS=STATUS_LABELS, syncer=syncer, cover_url=cover_url)
 
 
 def render(request: Request, name: str, **ctx) -> Response:
@@ -358,11 +370,107 @@ async def sync_now(request: Request):
     return RedirectResponse("/status", 303)
 
 
+async def cover(request: Request):
+    _, by_md5, _, _, _, _ = library.snapshot()
+    book = by_md5.get(request.path_params["id"])
+    href = book and cwa.cover_href(book.uuids, book.calibre_ids)
+    if not href:
+        raise HTTPException(404, "No cover")
+    got = await asyncio.to_thread(cwa.cover, href)
+    if not got:
+        raise HTTPException(404, "No cover")
+    data, ctype = got
+    return Response(data, media_type=ctype, headers={"Cache-Control": "private, max-age=86400"})
+
+
+catalog_wake = asyncio.Event()
+
+
+async def catalog_loop():
+    """Reads the CWA catalog when it's due (daily) or asked for."""
+    while True:
+        if cwa.catalog_due():
+            await asyncio.to_thread(cwa.refresh_catalog)
+        try:
+            await asyncio.wait_for(catalog_wake.wait(), timeout=600)
+        except asyncio.TimeoutError:
+            pass
+        catalog_wake.clear()
+
+
+async def settings_page(request: Request):
+    books, *_ = library.snapshot()
+    notice = request.query_params.get("notice", "")
+    return render(request, "settings.html", cwa=cwa, settings=settings, notice=notice,
+                  error=request.query_params.get("error", ""),
+                  has_password=bool(settings.get("cwa_password")),
+                  matched=cwa.matched(books.values()) if cwa.read_at else 0, total=len(books))
+
+
+async def read_form(request: Request) -> dict[str, str]:
+    """A URL-encoded form's fields (the only kind these pages send)."""
+    body = await request.body()
+    if len(body) > 64 * 1024:
+        raise HTTPException(413, "Form too large")
+    return {k: v[-1] for k, v in parse_qs(body.decode("utf-8", "replace"), keep_blank_values=True).items()}
+
+
+async def settings_save(request: Request):
+    form = await read_form(request)
+    action = form.get("action", "save")
+    if action == "refresh":
+        cwa.read_at = None
+        catalog_wake.set()
+        return RedirectResponse("/settings?notice=Reading+the+catalog%E2%80%A6", 303)
+    if action == "remove":
+        settings.update(cwa_url="", cwa_username="", cwa_password="")
+        await asyncio.to_thread(cwa.forget)
+        return RedirectResponse("/settings?notice=Covers+turned+off.", 303)
+    url = str(form.get("cwa_url", "")).strip()
+    user = str(form.get("cwa_username", "")).strip()
+    password = str(form.get("cwa_password", ""))
+    if url and not url.lower().startswith(("http://", "https://")):
+        return RedirectResponse("/settings?error=" + quote("The address must start with http:// or https://."), 303)
+    changed_server = url != settings.get("cwa_url")
+    changes = {"cwa_url": url, "cwa_username": user}
+    if password or not user or form.get("clear_password"):
+        changes["cwa_password"] = password  # empty keeps the saved one, unless asked
+    settings.update(**changes)
+    if not url:
+        await asyncio.to_thread(cwa.forget)
+        return RedirectResponse("/settings?notice=Covers+turned+off.", 303)
+    if changed_server:
+        await asyncio.to_thread(cwa.forget)
+    try:
+        message = await asyncio.to_thread(cwa.test)
+    except CWAError as e:
+        return RedirectResponse("/settings?error=" + quote(str(e)), 303)
+    cwa.read_at = None if changed_server or not cwa.read_at else cwa.read_at
+    catalog_wake.set()
+    return RedirectResponse("/settings?notice=" + quote(message + " Reading the catalog for covers…"), 303)
+
+
 async def health(request: Request):
     return PlainTextResponse("ok")
 
 
 # Basic auth ------------------------------------------------------------------------------
+
+class SameOrigin:
+    """Refuses form posts from other sites (the browser would send a saved login along)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] == "POST":
+            # Browsers say where a request comes from; a reverse proxy doesn't change this
+            # (it may change Host, so Origin can't be compared with it).
+            site = dict(scope["headers"]).get(b"sec-fetch-site", b"").decode()
+            if site and site not in ("same-origin", "none"):
+                return await PlainTextResponse("Cross-site request refused", 403)(scope, receive, send)
+        return await self.app(scope, receive, send)
+
 
 class BasicAuth:
     def __init__(self, app):
@@ -387,7 +495,9 @@ class BasicAuth:
 async def lifespan(app):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     syncer.start()
+    catalog = asyncio.create_task(catalog_loop())
     yield
+    catalog.cancel()
     await syncer.stop()
 
 
@@ -403,9 +513,12 @@ app = Starlette(
         Route("/collections", collections_page),
         Route("/status", status_page),
         Route("/sync", sync_now, methods=["POST"]),
+        Route("/settings", settings_page),
+        Route("/settings", settings_save, methods=["POST"]),
+        Route("/cover/{id}", cover),
         Route("/health", health),
         Mount("/static", StaticFiles(directory=str(HERE / "static")), name="static"),
     ],
-    middleware=[Middleware(BasicAuth)],
+    middleware=[Middleware(BasicAuth), Middleware(SameOrigin)],
     lifespan=lifespan,
 )

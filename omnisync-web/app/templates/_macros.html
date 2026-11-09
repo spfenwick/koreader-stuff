@@ -8,7 +8,10 @@
 
 {% macro spine(book, size='') -%}
   {%- set h = (book.id[:6] | int(base=16)) % 360 -%}
-  <span class="spine {{ size }}" style="--h: {{ h }}" aria-hidden="true">{{ book.title[:1] }}</span>
+  {%- set src = cover_url(book) -%}
+  <span class="spine {{ size }}" style="--h: {{ h }}" aria-hidden="true">{{ book.title[:1] }}
+    {%- if src %}<img class="cover" src="{{ src }}" alt="" loading="lazy" decoding="async" onerror="this.remove()">{% endif -%}
+  </span>
 {%- endmacro %}
 
 {% macro progress(book) -%}

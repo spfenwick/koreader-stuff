@@ -86,14 +86,22 @@ class Syncer:
                 st.last_result = result
                 errors = result.get("errors") or []
                 if proc.returncode != 0 or errors:
-                    tail = err.decode(errors="replace").strip().splitlines()[-5:]
-                    st.last_error = "; ".join(errors) if errors else "\n".join(tail) or f"exit status {proc.returncode}"
+                    # The message is the first line of stderr; a traceback may follow it.
+                    err_lines = err.decode(errors="replace").strip().splitlines()
+                    if len(err_lines) > 6:
+                        err_lines = err_lines[:1] + ["…"] + err_lines[-5:]
+                    detail = "\n".join(err_lines)
+                    st.last_error = "; ".join(errors) if errors else detail or f"exit status {proc.returncode}"
                     log.warning("import failed: %s", st.last_error)
                 else:
                     st.last_error = ""
                 # A failed run may still have imported some segments first.
                 if result.get("changed") or proc.returncode != 0 or self.library.loaded_at is None:
-                    await asyncio.to_thread(self.library.reload)
+                    try:
+                        await asyncio.to_thread(self.library.reload)
+                    except Exception as e:
+                        log.exception("loading the data failed")
+                        st.last_error = f"Loading the imported data failed: {e!r}"
                     log.info("imported %s", result.get("imported"))
             finally:
                 st.running, st.last_finished = False, time.time()

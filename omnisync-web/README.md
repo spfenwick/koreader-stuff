@@ -17,6 +17,8 @@ reads them.
   time of day, day of the week, and books by time read. Click a day for what
   was read that day.
 - **Status**: devices, the last import, and files that couldn't be read.
+- **Settings**: book covers from a Calibre-Web Automated (or Calibre-Web)
+  server (see [Covers](#covers)).
 
 ## How it works
 
@@ -67,13 +69,35 @@ that OmniSync version's code), `sha-<commit>`.
 | `SYNC_INTERVAL` | `60` | Seconds between checks for new files. "Check for new data" on Status checks right away |
 | `WEB_USERNAME`, `WEB_PASSWORD` | unset | Set both to require a password (HTTP basic auth) |
 
-The container runs as UID 1000, which needs read access to `READING_DIR`.
+The container runs as UID 1000, which needs read access to `READING_DIR`
+and write access to `/cache`. A named volume (as in `compose.yaml`) is set up
+that way; a host folder needs `chown -R 1000:1000` first.
 Without a password, put it behind a reverse proxy that handles sign-in, or
 keep it on your own network. `/health` is open, for monitoring.
 
 The image fetches a few KOReader files (lua-ljsqlite3, FFI headers, sha2,
 the statistics plugin's schema) at the commits the plugin is tested
 against; see the `ARG`s in the `Dockerfile`.
+
+## Covers
+
+Under Settings, enter your CWA server's OPDS address (the one KOReader's
+OPDS catalog uses, e.g. `https://books.example.com/opds`) and its login, then
+"Save and test". The app reads the catalog (all books, page by page) and
+matches books by their Calibre UUID: OPDS entries are identified by it, and
+OmniSync's book identity records it from each EPUB. Files carrying a
+`calibre:<id>` identifier match by ID too. Books without a match keep the
+coloured spine.
+
+- The app fetches covers itself and keeps them in `/cache/covers/`, so the
+  browser never needs the CWA login. Each is checked for changes (by ETag)
+  after a week; the catalog is read again daily, or on "Read the catalog
+  again".
+- Only books a device has sent book identity for can match (OmniSync 0.6 or
+  later, "Highlights and books" on), and PDFs carry no UUID.
+- The login is kept in `/cache/settings.json`, readable only by the app's
+  user. Anyone who can use the web interface can change the server it
+  fetches from, so protect the interface (password or proxy).
 
 ## Publishing the image
 
@@ -96,6 +120,7 @@ K=$PWD/../.cache/koreader-src
 export OMNISYNC_LIB=$PWD/../omnisync.koplugin KOREADER_BASE=$K/koreader-base \
        KOREADER_STATS=$K/koreader/plugins/statistics.koplugin/main.lua
 luajit tests/make_fixture.lua /tmp/osw/Reading      # sample data: 2 devices, 6 files, a year of reading
+python3 tests/fake_cwa.py &                          # a stand-in CWA: http://127.0.0.1:8790/opds, reader / secret
 pip install -r requirements.txt
 OMNISYNC_READING_DIR=/tmp/osw/Reading OMNISYNC_DATA_DIR=/tmp/osw/cache uvicorn app.main:app --reload
 ```

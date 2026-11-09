@@ -67,10 +67,28 @@ if not isDir(reading_dir) then
     finish(1)
 end
 lfs.mkdir(data_dir)
+do
+    -- The usual setup mistake: a host folder for the data that this user can't write.
+    local probe = data_dir .. "/.write-test"
+    local f = io.open(probe, "wb")
+    if f then f:close(); os.remove(probe) end
+    if not f then
+        local p = io.popen("id -u")
+        local uid = p and p:read("*l") or "?"
+        if p then p:close() end
+        summary.ok = false
+        summary.errors[1] = string.format("Can't write to the data folder %s (running as user ID %s). "
+            .. "Make it writable by that user (e.g. chown -R %s on the host folder), or use a named volume.",
+            data_dir, uid, uid)
+        finish(1)
+    end
+end
 
 local stats_path = data_dir .. "/statistics.sqlite3"
 local state_path = data_dir .. "/state.sqlite3"
 local tmp_path = data_dir .. "/segment.tmp"
+
+local function main()
 
 -- Databases ---------------------------------------------------------------------------
 
@@ -198,3 +216,13 @@ local total = 0
 for _, n in pairs(summary.imported) do total = total + n end
 summary.changed = total > 0
 finish(0)
+end
+
+local ok, err = xpcall(main, function(e) io.stderr:write(debug.traceback(tostring(e), 2), "\n"); return e end)
+if not ok then
+    summary.ok = false
+    -- Just the message: its first line, without the "file:line:" it starts with.
+    local msg = tostring(err):match("^[^\n]*"):gsub("^[^:]*%.lua:%d+: ", "")
+    table.insert(summary.errors, msg)
+    finish(1)
+end

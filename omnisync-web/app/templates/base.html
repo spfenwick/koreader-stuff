@@ -33,6 +33,7 @@
       <a class="sync-dot {% if syncer.state.last_error %}err{% elif syncer.state.running %}busy{% endif %}" href="/status"
          title="{% if syncer.state.last_error %}Import problem: see Status{% elif syncer.state.last_finished %}Last checked {{ syncer.state.last_finished | when }}{% else %}Importing…{% endif %}">
         <span aria-hidden="true"></span>Status</a>
+      <a class="settings-link" href="/settings" {% if path.startswith('/settings') %}aria-current="page"{% endif %}>Settings</a>
       <button class="theme" type="button" aria-label="Switch light or dark theme" data-theme-toggle>
         <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
       </button>

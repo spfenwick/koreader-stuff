@@ -144,6 +144,8 @@ class Book:
     props: dict[str, Record]
     annotations: list[Annotation] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)  # collection ids
+    uuids: list[str] = field(default_factory=list)  # from book identity, for matching a catalog
+    calibre_ids: list[int] = field(default_factory=list)
 
     @property
     def md5s(self) -> list[str]:
@@ -361,6 +363,17 @@ class Library:
                 annotations.append(Annotation(md5, kind, key, updated, device, f))
                 edition(md5).kinds.add(kind)
 
+        # Identifiers the files carry (book identity), for finding covers.
+        file_uuids: dict[str, set] = {}
+        for uuid, md5 in state.execute("SELECT uuid, md5 FROM id_uuids"):
+            file_uuids.setdefault(md5, set()).add(uuid.lower())
+        file_ids: dict[str, set] = {}
+        for md5, ids in state.execute("SELECT md5, ids FROM id_facts WHERE ids IS NOT NULL"):
+            for ident in ids.split("\n"):
+                scheme, _, value = ident.partition(":")
+                if scheme.lower() == "calibre" and value.strip().isdigit():
+                    file_ids.setdefault(md5, set()).add(int(value))
+
         # Groups: files the plugin joined as one book.
         group_of: dict[str, str] = {}
         for md5, grp in state.execute("SELECT md5, grp FROM id_groups"):
@@ -382,6 +395,9 @@ class Library:
                     if rec.beats(merged.get(prop)):
                         merged[prop] = rec
             book = Book(id=md5s[0], editions=eds, props=merged)
+            for e in eds:  # the most-read file's identifiers first
+                book.uuids += sorted(file_uuids.get(e.md5, set()) - set(book.uuids))
+                book.calibre_ids += sorted(file_ids.get(e.md5, set()) - set(book.calibre_ids))
             book.collections = sorted(p[5:] for p, r in merged.items() if p.startswith("coll.") and not r.deleted and r.value)
             books[book.id] = book
             for m in md5s:
