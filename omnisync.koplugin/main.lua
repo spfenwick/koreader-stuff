@@ -170,6 +170,34 @@ end
 
 -- Statistics and annotations ----------------------------------------------------
 
+local function syncWhat(run)
+    if run.stats and run.ann then return _("Statistics and highlights") end
+    return run.ann and _("Highlights and bookmarks") or _("Statistics")
+end
+
+--- Shown from when a sync asked for from the menu or a gesture starts until
+--- its result replaces it (a tap dismisses it sooner).
+local progress
+
+local function showProgress(what)
+    if progress then return end
+    progress = InfoMessage:new{
+        text = (what.stats and what.ann and _("Syncing statistics and highlights…"))
+            or (what.ann and _("Syncing highlights and bookmarks…")) or _("Syncing statistics…"),
+        dismiss_callback = function() progress = nil end,
+    }
+    UIManager:show(progress)
+    UIManager:forceRePaint() -- before the sync's own work holds up the screen
+end
+
+local function hideProgress()
+    if progress then
+        local p = progress
+        progress = nil
+        UIManager:close(p)
+    end
+end
+
 --- Asks for a sync of statistics and/or annotations.
 -- what: { stats = bool, ann = bool }; nil for an automatic sync, of what's
 -- set to sync automatically.
@@ -178,6 +206,7 @@ function OmniSync.trigger(reason, what, interactive, scanned, refreshed)
         what = { stats = Plugin.autoStats(), ann = Plugin.autoAnnotations() }
         if not what.stats and not what.ann then return end
     end
+    if interactive and NetworkMgr:isConnected() then showProgress(what) end
     if what.ann and not scanned and Plugin.annotationsNeedScan() then
         -- Before the first sync of highlights and bookmarks: read the
         -- reading history, so books not opened since get sent too.
@@ -200,7 +229,10 @@ function OmniSync.trigger(reason, what, interactive, scanned, refreshed)
     local engine = Plugin.engine()
     if interactive and not engine.running and not NetworkMgr:isConnected() then
         -- Asked for by the user: do what KOReader does for other network actions.
-        NetworkMgr:runWhenConnected(function() engine:request(reason, opts) end)
+        NetworkMgr:runWhenConnected(function()
+            showProgress(what)
+            engine:request(reason, opts)
+        end)
         return
     end
     if not interactive and not engine.running and not NetworkMgr:isConnected() and Plugin.settings().allow_wifi then
@@ -210,13 +242,10 @@ function OmniSync.trigger(reason, what, interactive, scanned, refreshed)
     engine:request(reason, opts)
 end
 
-local function syncWhat(run)
-    if run.stats and run.ann then return _("Statistics and highlights") end
-    return run.ann and _("Highlights and bookmarks") or _("Statistics")
-end
 
 function OmniSync.showResult(status, run)
     if not run.interactive then return end
+    hideProgress()
     if run.missing_own then
         UIManager:show(ConfirmBox:new{
             text = T(_([[This device has synced statistics and highlights before, but its files aren't in the folder on the server:

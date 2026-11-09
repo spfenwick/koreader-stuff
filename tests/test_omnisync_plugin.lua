@@ -22,6 +22,7 @@ end
 
 local loop = S.Loop.new()
 local shown = {}
+local closed = {}
 local connected = true
 
 -- KOReader's settings: readSetting(key, default) stores the default.
@@ -61,7 +62,8 @@ stub("ui/uimanager", {
     nextTick = function(_, fn) loop:schedule(0, fn) end,
     preventStandby = function() end, allowStandby = function() end,
     show = function(_, w) table.insert(shown, w) end,
-    close = function() end,
+    close = function(_, w) closed[w] = true end,
+    forceRePaint = function() end,
 })
 stub("ffi/util", {
     template = function(s, ...)
@@ -266,7 +268,10 @@ stats.page_stat = {}
 local ann_success = P.deviceState().status.ann_last_success
 S.sleep(1.1)
 item("Statistics", "Sync now").callback()
+local syncing = shown[#shown]
+check(syncing and syncing.text == "Syncing statistics…", "manual sync says it's syncing: " .. tostring(syncing and syncing.text))
 loop:run(60)
+check(closed[syncing], "syncing message closed when the result is shown")
 check(shown[#shown] and shown[#shown].text:find("^Statistics synced") and not shown[#shown].text:find("Highlights"),
     "statistics sync reports statistics only: " .. tostring(shown[#shown] and shown[#shown].text))
 check(P.deviceState().status.imported_events == 2, "two events imported")
