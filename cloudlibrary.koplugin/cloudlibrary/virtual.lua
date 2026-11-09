@@ -122,10 +122,11 @@ function Virtual.refresh()
     local FileManager = require("apps/filemanager/filemanager")
     local fc = FileManager.instance and FileManager.instance.file_chooser
     local path = fc and normalize(fc.path)
-    if path and (path == Virtual.folder or path == ""
-            or Virtual.folder:sub(1, #path + 1) == path .. "/") then
-        fc:refreshPath()
-    end
+    local shown = path and (path == Virtual.folder or path == ""
+            or Virtual.folder:sub(1, #path + 1) == path .. "/")
+    logger.info("CloudLibrary: redraw", shown and "yes" or "no", "- showing", path or "nothing",
+        "library", Virtual.folder, "cloud books", #Virtual.books)
+    if shown then fc:refreshPath() end
 end
 
 local function attributes(book)

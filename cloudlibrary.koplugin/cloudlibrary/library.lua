@@ -252,10 +252,26 @@ end
 -- event for deletions, so its two delete functions are wrapped; the catalog
 -- is reloaded (matching looks at the files actually in the folder) after
 -- KOReader's own refresh.
+local function under(path, folder)
+    return path == folder or path:sub(1, #folder + 1) == folder .. "/"
+end
+
 local function inLibrary(path)
     local folder = Library.folder()
-    return type(path) == "string" and folder ~= nil
-        and (path == folder or path:sub(1, #folder + 1) == folder .. "/")
+    return type(path) == "string" and folder ~= nil and under(path, folder)
+end
+
+-- KOReader's delete dialog passes the file's real path, which can be
+-- spelled differently from the library folder setting (a symlink, a
+-- doubled slash). The path spelled as the library has it, or nil.
+local function libraryPath(path)
+    if type(path) ~= "string" then return nil end
+    if inLibrary(path) then return path end
+    local folder = Library.folder()
+    local real = folder and ffiutil.realpath(folder)
+    if real and real ~= folder and under(path, real) then
+        return folder .. path:sub(#real + 1)
+    end
 end
 
 -- After a delete, the library folder is also redrawn once more, after the
@@ -270,6 +286,8 @@ local function reloadSoon(after_delete)
         reload_scheduled = false
         local before = Virtual.catalog_sig
         Guard.call("jobs", Library.load)
+        logger.info("CloudLibrary: reloaded after a delete, cloud books changed:",
+            Virtual.catalog_sig ~= before, "cloud books", #Virtual.books)
         -- Library.load() redraws when the cloud books changed.
         if after_delete and Virtual.catalog_sig == before then
             UIManager:nextTick(function()
@@ -351,12 +369,17 @@ function Library.installDeleteHooks()
     -- The caller redraws the listing after deleteFile() returns: the book's
     -- cloud entry is back by then.
     Guard.hook("library", FileManager, "deleteFile", function(orig, self, file, ...)
-        if inLibrary(file) then History.deleting(file, idForPath(file)) end
+        local path = libraryPath(file)
+        logger.info("CloudLibrary: deleting", file, "library folder:", Library.folder(),
+            "as library path:", path or "not in library", "catalog book:", path and idForPath(path) or "none")
+        if path then History.deleting(path, idForPath(path)) end
         local ok = orig(self, file, ...)
-        if ok and inLibrary(file) and not Virtual.isVirtual(file) then
-            local changed = Library.unmatch({ file })
-            logger.info("CloudLibrary: deleted", file, "catalog book:", changed[file] or "none")
+        if ok and path and not Virtual.isVirtual(path) then
+            local changed = Library.unmatch({ path })
+            logger.info("CloudLibrary: deleted", path, "catalog book:", changed[path] or "none")
             reloadSoon(true)
+        elseif not ok then
+            logger.info("CloudLibrary: delete failed or cancelled", file)
         end
         return ok
     end, "FileManager:deleteFile")

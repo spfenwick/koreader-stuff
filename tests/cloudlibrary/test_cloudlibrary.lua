@@ -1294,6 +1294,23 @@ do
     Virtual.refresh = real_refresh
     UIManager.nextTick = function(_self, fn) fn() end
 
+    -- The library folder setting is a symlink: KOReader's delete dialog
+    -- passes the file's real path, and the cloud entry still comes back.
+    local link = TMP .. "/library-link"
+    os.execute(string.format("ln -s '%s' '%s'", folder, link))
+    Library.save("folder", link)
+    f = io.open(path, "w"); f:write("x"); f:close()
+    Library.load()
+    local link_cloud = link .. "/cloud-del-1.epub"
+    check(not Virtual.isVirtual(link_cloud), "symlinked folder: downloaded")
+    local real_file = require("ffi/util").realpath(path)
+    check(real_file and real_file:sub(1, #link) ~= link, "deleted by its real path")
+    check(FileManager.deleteFile(FileManager, real_file, true), "deleted by real path")
+    check(Virtual.isVirtual(link_cloud), "symlinked folder: cloud entry back")
+    Library.save("folder", folder)
+    os.remove(link)
+    Library.load()
+
     -- Deleting a cloud entry or a file elsewhere doesn't reload.
     local loads, real_load = 0, Library.load
     Library.load = function() loads = loads + 1 end
