@@ -114,13 +114,18 @@ function Virtual.listingKey()
     return Virtual.catalog_sig .. "/" .. extra
 end
 
--- Call after the catalog changes: redraws the library folder if it's shown
--- (ZenOS's cached listing has a new key by then, so it's rebuilt).
+-- Call after the catalog changes: redraws the library folder, or a folder
+-- above it (which counts its books, or lists them in flat view), if it's
+-- shown. ZenOS's cached listing has a new key by then, so it's rebuilt.
 function Virtual.refresh()
     if not Virtual.folder then return end
     local FileManager = require("apps/filemanager/filemanager")
     local fc = FileManager.instance and FileManager.instance.file_chooser
-    if fc and normalize(fc.path) == Virtual.folder then fc:refreshPath() end
+    local path = fc and normalize(fc.path)
+    if path and (path == Virtual.folder or path == ""
+            or Virtual.folder:sub(1, #path + 1) == path .. "/") then
+        fc:refreshPath()
+    end
 end
 
 local function attributes(book)

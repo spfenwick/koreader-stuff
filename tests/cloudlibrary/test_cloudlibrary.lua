@@ -1538,6 +1538,45 @@ do
     check(tags[2] == zen_tags[2], "unchanged tag groups reused")
     check(db.getGroupedByTags() == tags, "de-duplicated once while ZenOS's list is the same")
 
+    -- A download: open views point at the file and are redrawn.
+    local UIManager = require("ui/uimanager")
+    local real_stack = UIManager._window_stack
+    local cloud, file = "/lib/cloud-c2.epub", "/lib/Ann - Cloud Two.epub"
+    local shared_files = { "/lib/a.epub", cloud }
+    local updates, tbr_reloads, home_rebuilds = 0, 0, 0
+    local groups = { item_table = {
+        { text = "Ann", _zen_files = shared_files },
+        { text = "Saga", series_items = { { text = "cloud-c2", path = cloud, filepath = cloud } } },
+    }, updateItems = function() updates = updates + 1 end }
+    local detail = { item_table = { { text = "cloud-c2", path = cloud, filepath = cloud } },
+        updateItems = function() updates = updates + 1 end }
+    local history = { item_table = { { text = "Cloud Two", file = cloud } },
+        updateItems = function() updates = updates + 1 end }
+    local unrelated = { item_table = { { path = "/lib/a.epub" } },
+        updateItems = function() error("redrawn without the book") end }
+    local tbr = { item_table = {}, _zen_tbr_refresh = function() tbr_reloads = tbr_reloads + 1 end }
+    UIManager._window_stack = { { widget = groups }, { widget = detail }, { widget = history },
+        { widget = unrelated }, { widget = tbr } }
+    local FileManager = require("apps/filemanager/filemanager")
+    local real_fm = FileManager.instance
+    local plugin = { _zen_shared = { home = { rebuildActive = function() home_rebuilds = home_rebuilds + 1 end } },
+        _zen_shared_registry = { home = true } }
+    FileManager.instance = { zenos = plugin }
+    package.loaded["common/shared_state"] = { get = function(p, key) return p._zen_shared[key] end }
+    ZenSource.downloaded(cloud, file)
+    eq(shared_files[2], file, "group's file list (shared with its book list) has the file")
+    eq(groups.item_table[2].series_items[1].path, file, "series group's book has the file")
+    check(detail.item_table[1].path == file and detail.item_table[1].filepath == file, "book list item has the file")
+    eq(detail.item_table[1].text, "Ann - Cloud Two", "file name shown as the file browser would")
+    eq(history.item_table[1].file, file, "history item has the file")
+    eq(history.item_table[1].text, "Cloud Two", "other titles kept")
+    eq(updates, 3, "views listing the book redrawn")
+    eq(tbr_reloads, 1, "To Be Read reloaded")
+    eq(home_rebuilds, 1, "Home rebuilt")
+    UIManager._window_stack = real_stack
+    FileManager.instance = real_fm
+    package.loaded["common/shared_state"] = nil
+
     package.loaded["common/db_bookinfo"] = nil
     Virtual.setCatalog(nil, {})
 end

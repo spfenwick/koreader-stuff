@@ -26,6 +26,7 @@ Setting "zenos_groups" (default true): cloud books in the groups.
 ]]
 
 local logger = require("logger")
+local UIManager = require("ui/uimanager")
 local Guard = require("cloudlibrary/guard")
 
 local ZenSource = {
@@ -216,6 +217,65 @@ function ZenSource.install(virtual)
     hookTags()
     logger.info("CloudLibrary: registered as a ZenOS book source")
     return true
+end
+
+-- Redrawing after a download ---------------------------------------------------
+
+local function swapInList(list, old, new)
+    local found = false
+    for i, v in ipairs(list) do
+        if v == old then list[i], found = new, true end
+    end
+    return found
+end
+
+-- Points a list item (and the series groups and file lists in it) at the
+-- downloaded file. True if anything changed.
+local function swapInItem(item, old, new)
+    if type(item) ~= "table" then return false end
+    local found = false
+    for _i, key in ipairs({ "path", "filepath", "file" }) do
+        if item[key] == old then item[key], found = new, true end
+    end
+    if found and item.text == (old:match("([^/]+)$") or ""):gsub("%.[^%.]+$", "") then
+        item.text = (new:match("([^/]+)$") or new):gsub("%.[^%.]+$", "")
+    end
+    -- ZenOS group items share their file list with the book list opened
+    -- from them, so a later rebuild of that list sees the file too.
+    if type(item._zen_files) == "table" and swapInList(item._zen_files, old, new) then found = true end
+    if type(item.series_items) == "table" then
+        for _i, sub in ipairs(item.series_items) do
+            if swapInItem(sub, old, new) then found = true end
+        end
+    end
+    return found
+end
+
+--- A cloud book was downloaded: every open ZenOS view that lists it (Home,
+-- Authors/Series/Languages/Tags and their book lists, To Be Read,
+-- history and search lists) now shows the file, and is redrawn. The
+-- library folder itself is redrawn by Virtual.refresh().
+function ZenSource.downloaded(old_path, new_path)
+    for _i, entry in ipairs(UIManager._window_stack or {}) do
+        local w = entry.widget
+        if type(w) == "table" and type(w.item_table) == "table" then
+            if type(w._zen_tbr_refresh) == "function" then
+                -- To Be Read reloads its list itself.
+                w._zen_tbr_refresh()
+            else
+                local found = false
+                for _j, item in ipairs(w.item_table) do
+                    if swapInItem(item, old_path, new_path) then found = true end
+                end
+                if found and type(w.updateItems) == "function" then w:updateItems() end
+            end
+        end
+    end
+    -- Home rebuilds now if it's on top, else when it's next shown.
+    local FileManager = require("apps/filemanager/filemanager")
+    local plugin = FileManager.instance and FileManager.instance.zenos
+    local home = plugin and require("common/shared_state").get(plugin, "home")
+    if type(home) == "table" and type(home.rebuildActive) == "function" then home.rebuildActive() end
 end
 
 --- Tells ZenOS the cloud books changed; with paths, also that their covers

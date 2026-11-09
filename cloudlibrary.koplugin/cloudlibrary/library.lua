@@ -750,7 +750,16 @@ function Library.downloaded(book, result, opts)
         })
         store:close()
     end
-    Library.load()
+    local cloud_path
+    for _i, b in ipairs(Virtual.books) do
+        if b.id == book.id then cloud_path = b.path; break end
+    end
+    Library.load() -- redraws the library folder if it's shown
+    if cloud_path then
+        -- Other views listing the book (Home, Authors, Series, ...) show the file.
+        local ok, err = pcall(ZenSource.downloaded, cloud_path, result.path)
+        if not ok then logger.warn("CloudLibrary: redrawing views after a download:", err) end
+    end
     notify(T(_("Downloaded %1."), book.title or book.id))
     if opts.open then
         local FileManager = require("apps/filemanager/filemanager")
