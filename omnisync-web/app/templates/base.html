@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}OmniSync{% endblock %} · OmniSync</title>
+<link rel="icon" href="{{ url_for('static', path='icon.svg') }}" type="image/svg+xml">
+<link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+<script>
+  try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+<script src="{{ url_for('static', path='app.js') }}" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="/">
+      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v15H5.5C4.7 19 4 18.3 4 17.5zM13 4h5.5c.8 0 1.5.7 1.5 1.5v12c0 .8-.7 1.5-1.5 1.5H13z" fill="currentColor"/></svg>
+      OmniSync
+    </a>
+    {% set path = request.url.path %}
+    <nav aria-label="Main">
+      <a href="/" {% if path == '/' %}aria-current="page"{% endif %}>Home</a>
+      <a href="/books" {% if path.startswith('/book') %}aria-current="page"{% endif %}>Books</a>
+      <a href="/highlights" {% if path.startswith('/highlights') %}aria-current="page"{% endif %}>Highlights</a>
+      <a href="/stats" {% if path.startswith('/stats') or path.startswith('/day') %}aria-current="page"{% endif %}>Statistics</a>
+      <a href="/collections" {% if path.startswith('/collections') %}aria-current="page"{% endif %}>Collections</a>
+    </nav>
+    <form class="search" action="/highlights" role="search">
+      <input type="search" name="q" placeholder="Search highlights" aria-label="Search highlights" value="{{ q if q is defined and path.startswith('/highlights') else '' }}">
+    </form>
+    <div class="top-end">
+      <a class="sync-dot {% if syncer.state.last_error %}err{% elif syncer.state.running %}busy{% endif %}" href="/status"
+         title="{% if syncer.state.last_error %}Import problem: see Status{% elif syncer.state.last_finished %}Last checked {{ syncer.state.last_finished | when }}{% else %}Importing…{% endif %}">
+        <span aria-hidden="true"></span>Status</a>
+      <button class="theme" type="button" aria-label="Switch light or dark theme" data-theme-toggle>
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+<main class="page">
+{% block content %}{% endblock %}
+</main>
+<div class="tip" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

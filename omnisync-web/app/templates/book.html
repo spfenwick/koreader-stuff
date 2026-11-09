@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_badge, rating, spine, progress, highlight %}
+{% block title %}{{ book.title }}{% endblock %}
+{% block content %}
+<article class="book">
+  <header class="book-head">
+    {{ spine(book, 'large') }}
+    <div>
+      <h1>{{ book.title }}</h1>
+      {% if book.authors %}<p class="byline">{{ book.author_list | join(', ') }}</p>{% endif %}
+      <p class="book-meta">
+        {{ status_badge(book) }} {{ rating(book) }}
+        {% if book.series %}<span>{{ book.series }}</span>{% endif %}
+        {% for cid in book.collections %}<a class="chip" href="/books?coll={{ cid }}">{{ collections[cid].name if cid in collections else cid }}</a>{% endfor %}
+      </p>
+      {{ progress(book) }}
+    </div>
+  </header>
+
+  {% if book.review %}
+  <section class="review"><h2>Review</h2><p>{{ book.review }}</p></section>
+  {% endif %}
+  {% if book.description %}
+  <details class="description"><summary>Description</summary><div>{{ book.description | striptags }}</div></details>
+  {% endif %}
+
+  <section class="tiles small" aria-label="Reading">
+    <div class="tile"><div class="tile-label">Time read</div><div class="tile-value">{{ book.read_time | duration }}</div></div>
+    <div class="tile"><div class="tile-label">Sessions</div><div class="tile-value">{{ sessions | length }}</div></div>
+    <div class="tile"><div class="tile-label">First read</div><div class="tile-value">{{ book.first_read | day or '—' }}</div></div>
+    <div class="tile"><div class="tile-label">Last read</div><div class="tile-value">{{ book.last_read | day or '—' }}</div></div>
+    <div class="tile"><div class="tile-label">Highlights</div><div class="tile-value">{{ book.highlights | length }}</div></div>
+    <div class="tile"><div class="tile-label">Notes</div><div class="tile-value">{{ book.notes_count }}</div></div>
+  </section>
+
+  {% if chart %}
+  <section class="panel">
+    <div class="panel-head"><h2>Reading time {{ chart_scope }}</h2></div>
+    <div class="chart-wrap">{{ chart }}</div>
+  </section>
+  {% endif %}
+
+  <section class="highlights">
+    <div class="panel-head">
+      <h2>Highlights</h2>
+      {% if book.highlights %}<a href="/book/{{ book.id }}/highlights.md">Download as Markdown</a>{% endif %}
+    </div>
+    {% set ns = namespace(md5=None) %}
+    {% for md5, chapter, items in chapters %}
+      {% if multi and md5 != ns.md5 %}
+        {% set ns.md5 = md5 %}
+        {% for e in book.editions if e.md5 == md5 %}<h3 class="edition">Edition: {{ e.title }}</h3>{% endfor %}
+      {% endif %}
+      {% if chapter %}<h3 class="chapter">{{ chapter }}</h3>{% endif %}
+      {% for a in items %}{{ highlight(a, show_book=false, show_chapter=false) }}{% endfor %}
+    {% else %}
+      <p class="muted">No highlights in this book.</p>
+    {% endfor %}
+  </section>
+
+  {% if book.bookmarks %}
+  <section>
+    <h2>Bookmarks</h2>
+    <ul class="plain-list">
+      {% for a in book.bookmarks %}
+      <li>{{ a.chapter or a.text or 'Bookmark' }}{% if a.page_label %} · {{ a.page_label }}{% endif %} <span class="muted">{{ a.created | when }}</span></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if sessions %}
+  <section>
+    <details class="sessions" {% if sessions | length <= 10 %}open{% endif %}>
+      <summary><h2>Reading sessions <span class="count">{{ sessions | length }}</span></h2></summary>
+      <table>
+        <thead><tr><th scope="col">Date</th><th scope="col">Time</th><th scope="col" class="num">Duration</th><th scope="col" class="num">Pages</th><th scope="col" class="num">Reached</th></tr></thead>
+        <tbody>
+        {% for s in sessions %}
+        <tr>
+          <td><a href="/day/{{ s.start | day_iso }}">{{ s.start | day }}</a></td>
+          <td>{{ s.start | clock }}–{{ s.end | clock }}</td>
+          <td class="num">{{ s.time | duration }}</td>
+          <td class="num">{{ s.pages }}</td>
+          <td class="num">{% if s.total %}{{ ((s.last / s.total) * 100) | round | int }}%{% endif %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  </section>
+  {% endif %}
+
+  <section>
+    <details class="editions">
+      <summary><h2>Files <span class="count">{{ book.editions | length }}</span></h2></summary>
+      <table>
+        <thead><tr><th scope="col">Title</th><th scope="col">Partial MD5</th><th scope="col" class="num">Read</th><th scope="col" class="num">Pages</th></tr></thead>
+        <tbody>
+        {% for e in book.editions %}
+        <tr><td>{{ e.title or '—' }}</td><td><code>{{ e.md5 }}</code></td><td class="num">{{ e.read_time | duration if e.read_time else '' }}</td><td class="num">{{ e.pages or '' }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  </section>
+</article>
+{% endblock %}

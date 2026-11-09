@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% from "_macros.html" import book_card, highlight %}
+{% block title %}Home{% endblock %}
+{% block content %}
+{% if not counts %}
+<section class="empty">
+  <h1>Nothing imported yet</h1>
+  <p>The first import is running, or OmniSync's folder wasn't found. See <a href="/status">Status</a>.</p>
+</section>
+{% else %}
+<section class="tiles" aria-label="Reading time">
+  {% for label, value in tiles %}
+  <div class="tile"><div class="tile-label">{{ label }}</div><div class="tile-value">{{ value }}</div></div>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Last 12 months</h2><a href="/stats">All statistics</a></div>
+  <div class="chart-wrap">{{ calendar }}</div>
+  {{ legend }}
+</section>
+
+{% if reading %}
+<section>
+  <div class="panel-head"><h2>Reading now</h2><a href="/books?status=reading">All</a></div>
+  <div class="card-grid">{% for b in reading %}{{ book_card(b) }}{% endfor %}</div>
+</section>
+{% endif %}
+
+<div class="two-col">
+  <section>
+    <div class="panel-head"><h2>Recent highlights</h2><a href="/highlights">All {{ counts.highlights }}</a></div>
+    {% for a in highlights %}{{ highlight(a) }}{% else %}<p class="muted">No highlights yet.</p>{% endfor %}
+  </section>
+  <section>
+    <div class="panel-head"><h2>Recently opened</h2><a href="/books">All {{ counts.books }} books</a></div>
+    <ol class="plain-list">
+      {% for b in recent %}
+      <li><a href="/book/{{ b.id }}">{{ b.title }}</a> <span class="muted">{{ b.last_opened | when }}</span></li>
+      {% endfor %}
+    </ol>
+  </section>
+</div>
+{% endif %}
+{% endblock %}

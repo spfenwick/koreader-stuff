@@ -1,0 +1,48 @@
+{% macro status_badge(book) -%}
+  {%- if book.status -%}<span class="badge s-{{ book.status }}">{{ book.status_label }}</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro rating(book) -%}
+  {%- if book.rating -%}<span class="stars" aria-label="Rated {{ book.rating }} out of 5">{{ book.rating | stars }}</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro spine(book, size='') -%}
+  {%- set h = (book.id[:6] | int(base=16)) % 360 -%}
+  <span class="spine {{ size }}" style="--h: {{ h }}" aria-hidden="true">{{ book.title[:1] }}</span>
+{%- endmacro %}
+
+{% macro progress(book) -%}
+  {%- if book.progress is not none -%}
+  <span class="progress" title="Furthest read: {{ book.progress | percent }}">
+    <span class="progress-bar"><span style="width: {{ (book.progress * 100) | round }}%"></span></span>
+    <span class="progress-num">{{ book.progress | percent }}</span>
+  </span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro book_card(book) -%}
+<a class="book-card" href="/book/{{ book.id }}">
+  {{ spine(book) }}
+  <span class="book-card-body">
+    <span class="book-title">{{ book.title }}</span>
+    <span class="book-author">{{ book.authors }}</span>
+    <span class="book-meta">{{ status_badge(book) }} {% if book.last_opened %}<span class="muted">{{ book.last_opened | when }}</span>{% endif %}</span>
+    {{ progress(book) }}
+  </span>
+</a>
+{%- endmacro %}
+
+{% macro highlight(a, show_book=true, show_chapter=true) -%}
+<figure class="hl c-{{ a.color }}{% if a.drawer == 'underscore' %} under{% endif %}">
+  <blockquote>{{ a.text }}</blockquote>
+  {% if a.note %}<p class="note"><span class="note-label">Note</span> {{ a.note }}</p>{% endif %}
+  <figcaption>
+    {%- set parts = [] -%}
+    {%- if show_chapter and a.chapter %}{% set _ = parts.append(a.chapter) %}{% endif -%}
+    {%- if a.page_label %}{% set _ = parts.append(a.page_label) %}{% endif -%}
+    {% if show_book and a.book %}<a href="/book/{{ a.book.id }}">{{ a.book.title }}</a>{% if parts %} · {% endif %}{% endif %}
+    {{- parts | join(' · ') -}}
+    {% if a.created %}<span class="muted">{% if parts or show_book %} · {% endif %}{{ a.created | when }}</span>{% endif %}
+  </figcaption>
+</figure>
+{%- endmacro %}

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% from "_macros.html" import highlight, spine %}
+{% block title %}{{ day.strftime('%-d %B %Y') }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ day.strftime('%A %-d %B %Y') }}</h1>
+  <nav class="pager" aria-label="Days">
+    <a href="/day/{{ prev.isoformat() }}">← {{ prev.strftime('%-d %b') }}</a>
+    <a href="/day/{{ next.isoformat() }}">{{ next.strftime('%-d %b') }} →</a>
+  </nav>
+</div>
+<section class="tiles small">
+  <div class="tile"><div class="tile-label">Time read</div><div class="tile-value">{{ total | duration }}</div></div>
+  <div class="tile"><div class="tile-label">Books</div><div class="tile-value">{{ rows | length }}</div></div>
+  <div class="tile"><div class="tile-label">Highlights made</div><div class="tile-value">{{ highlights | length }}</div></div>
+</section>
+{% if total %}
+<section class="panel">
+  <div class="panel-head"><h2>By hour</h2></div>
+  <div class="chart-wrap">{{ hours }}</div>
+</section>
+<table class="books">
+  <thead><tr><th scope="col">Book</th><th scope="col" class="num">Time</th><th scope="col" class="num">Pages</th></tr></thead>
+  <tbody>
+  {% for b, t, p in rows %}
+  <tr><td><a class="book-line" href="/book/{{ b.id }}">{{ spine(b, 'small') }}<span><span class="book-title">{{ b.title }}</span><span class="book-author">{{ b.authors }}</span></span></a></td>
+      <td class="num">{{ t | duration }}</td><td class="num">{{ p }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No reading on this day.</p>
+{% endif %}
+{% if highlights %}
+<section><h2>Highlights made</h2>{% for a in highlights %}{{ highlight(a) }}{% endfor %}</section>
+{% endif %}
+{% endblock %}

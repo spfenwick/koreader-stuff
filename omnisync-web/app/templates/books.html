@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_badge, rating, spine, progress %}
+{% block title %}Books{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Books <span class="count">{{ books | length }}{% if books | length != total %} of {{ total }}{% endif %}</span></h1>
+</div>
+<form class="filters" method="get" action="/books">
+  <input type="search" name="q" value="{{ q }}" placeholder="Title, author or series" aria-label="Filter books">
+  <select name="status" aria-label="Status">
+    <option value="">Any status</option>
+    {% for key, label in STATUS_LABELS.items() %}<option value="{{ key }}" {% if status == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+    <option value="none" {% if status == 'none' %}selected{% endif %}>No status</option>
+  </select>
+  {% if collections %}
+  <select name="coll" aria-label="Collection">
+    <option value="">Any collection</option>
+    {% for c in collections %}<option value="{{ c.id }}" {% if coll == c.id %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+  </select>
+  {% endif %}
+  <select name="sort" aria-label="Sort by">
+    {% for key, (label, _) in sorts.items() %}<option value="{{ key }}" {% if sort == key %}selected{% endif %}>Sort: {{ label }}</option>{% endfor %}
+  </select>
+  <button type="submit">Apply</button>
+  {% if q or status or coll %}<a href="/books" class="clear">Clear</a>{% endif %}
+</form>
+
+<table class="books">
+  <thead><tr><th scope="col">Book</th><th scope="col">Status</th><th scope="col" class="num">Read</th><th scope="col" class="num">Highlights</th><th scope="col" class="num">Last opened</th></tr></thead>
+  <tbody>
+  {% for b in books %}
+  <tr>
+    <td>
+      <a class="book-line" href="/book/{{ b.id }}">
+        {{ spine(b, 'small') }}
+        <span><span class="book-title">{{ b.title }}</span>
+        <span class="book-author">{{ b.authors }}{% if b.series %} · {{ b.series }}{% endif %}{% if b.editions | length > 1 %} · {{ b.editions | length }} editions{% endif %}</span></span>
+      </a>
+    </td>
+    <td>{{ status_badge(b) }} {{ rating(b) }}{{ progress(b) if b.status != 'complete' }}</td>
+    <td class="num">{{ b.read_time | duration if b.read_time else '' }}</td>
+    <td class="num">{{ b.highlights | length or '' }}</td>
+    <td class="num muted">{{ b.last_opened | when }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">No books match.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

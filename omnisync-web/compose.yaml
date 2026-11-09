@@ -1,0 +1,27 @@
+# From this folder:
+#   docker compose pull && docker compose up -d    the published image (ghcr.io)
+#   docker compose up -d --build                   or build it here
+#
+# Set READING_DIR to the folder on this host that holds OmniSync's Reading/
+# folder: the WebDAV server's copy of <folder on server>/Reading, by default
+# .../KOReader/Reading. It's mounted read-only.
+services:
+  omnisync-web:
+    build:
+      context: ..
+      dockerfile: omnisync-web/Dockerfile
+    image: ghcr.io/spfenwick/omnisync-web:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: ${TZ:-Pacific/Auckland}         # dates and "today" follow this
+      SYNC_INTERVAL: "60"                  # seconds between checks for new data
+      WEB_USERNAME: ${WEB_USERNAME:-}      # set both for basic auth (or use a proxy's auth)
+      WEB_PASSWORD: ${WEB_PASSWORD:-}
+    volumes:
+      - ${READING_DIR:?set READING_DIR to the WebDAV folder's KOReader/Reading}:/data/reading:ro
+      - omnisync-web-cache:/cache
+
+volumes:
+  omnisync-web-cache:

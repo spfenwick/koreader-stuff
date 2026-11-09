@@ -1,0 +1,107 @@
+# Builds the OmniSync web image (omnisync-web/) and pushes it to the GitHub
+# Container Registry:
+#
+#   ghcr.io/<owner>/omnisync-web:latest            the newest build from main
+#   ghcr.io/<owner>/omnisync-web:omnisync-X.Y.Z    built with OmniSync X.Y.Z's code
+#   ghcr.io/<owner>/omnisync-web:sha-<commit>      every build
+#
+# Runs on pushes to main that change the web app or the plugin modules it
+# imports with, and by hand (Actions → OmniSync web image → Run workflow).
+# Pull requests build and smoke-test the image without pushing it.
+#
+# The image is tested (omnisync-web/tests/smoke.sh: sample data, every page)
+# before anything is pushed, and built for amd64 and arm64.
+#
+# No git tags are made: release.yml treats tags named <name>-vX.Y.Z as plugin
+# releases.
+name: OmniSync web image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "omnisync-web/**"
+      - "omnisync.koplugin/omnisync/**"
+      - "omnisync.koplugin/_meta.lua"
+      - ".github/workflows/web-image.yml"
+  pull_request:
+    paths:
+      - "omnisync-web/**"
+      - "omnisync.koplugin/omnisync/**"
+      - ".github/workflows/web-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: web-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/omnisync-web
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: OmniSync version
+        id: version
+        run: |
+          v=$(sed -n 's/^ *version = "\([0-9][0-9.]*\)".*/\1/p' omnisync.koplugin/_meta.lua)
+          test -n "$v"
+          echo "omnisync=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=omnisync-${{ steps.version.outputs.omnisync }},enable={{is_default_branch}}
+            type=sha,format=long
+          labels: |
+            org.opencontainers.image.title=OmniSync web
+            org.opencontainers.image.description=Browse the books, highlights and reading statistics OmniSync keeps on a WebDAV server
+
+      - name: Build for testing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: omnisync-web/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: omnisync-web:test
+          cache-from: type=gha,scope=web-image
+          cache-to: type=gha,scope=web-image,mode=max
+
+      - name: Smoke test
+        run: omnisync-web/tests/smoke.sh omnisync-web:test
+
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: omnisync-web/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=web-image
+          cache-to: type=gha,scope=web-image,mode=max

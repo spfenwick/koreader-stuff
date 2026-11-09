@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Status{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Status</h1>
+  <form method="post" action="/sync"><button type="submit" {% if state.running %}disabled{% endif %}>{% if state.running %}Importing…{% else %}Check for new data{% endif %}</button></form>
+</div>
+
+{% if state.last_error %}
+<div class="alert" role="alert"><strong>The last import had a problem.</strong><pre>{{ state.last_error }}</pre></div>
+{% endif %}
+
+<section class="panel">
+  <dl class="facts">
+    <dt>Reading folder</dt><dd><code>{{ reading_dir }}</code></dd>
+    <dt>Checks for new data</dt><dd>every {{ interval }} s</dd>
+    <dt>Last check</dt><dd>{{ state.last_finished | when if state.last_finished else 'not yet' }}</dd>
+    <dt>Last import</dt><dd>{% set r = state.last_result %}{% if r.imported %}{% for k, v in r.imported.items() if v %}{{ v }} {{ {'stats': 'statistics', 'ann': 'highlight', 'book': 'book data', 'id': 'identity'}[k] }} file{{ 's' if v != 1 }}{{ ', ' if not loop.last }}{% else %}nothing new{% endfor %}{% else %}—{% endif %}</dd>
+    <dt>Data loaded</dt><dd>{{ loaded_at.strftime('%-d %b %Y %H:%M') if loaded_at else 'not yet' }}</dd>
+    {% if counts %}
+    <dt>Holds</dt><dd>{{ counts.books }} books ({{ counts.files }} files), {{ counts.highlights }} highlights, {{ counts.notes }} notes, {{ counts.bookmarks }} bookmarks, {{ "{:,}".format(counts.readings) }} page readings</dd>
+    {% endif %}
+  </dl>
+</section>
+
+<section>
+  <h2>Devices</h2>
+  <table>
+    <thead><tr><th scope="col">Device</th><th scope="col">ID</th><th scope="col" class="num">Statistics</th><th scope="col" class="num">Highlights</th><th scope="col" class="num">Book data</th><th scope="col" class="num">Identity</th><th scope="col" class="num">Imported</th><th scope="col" class="num">Newest file</th></tr></thead>
+    <tbody>
+    {% for d in devices %}
+    <tr>
+      <td>{{ d.name or '—' }}</td><td><code>{{ d.id }}</code></td>
+      <td class="num">{{ d.counts.stats or 0 }}</td><td class="num">{{ d.counts.ann or 0 }}</td>
+      <td class="num">{{ d.counts.book or 0 }}</td><td class="num">{{ d.counts.id or 0 }}</td>
+      <td class="num">{{ seen.get(d.id, 0) }}</td>
+      <td class="num muted">{{ d.newest | when if d.newest else '' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="muted">No device folders found in <code>{{ reading_dir }}/devices</code>.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Counts are files on the server. A device's packs replace its small files a week after they're made, so these go down as well as up.</p>
+</section>
+
+{% if bad %}
+<section>
+  <h2>Files that couldn't be read <span class="count">{{ bad | length }}</span></h2>
+  <p class="muted small">Skipped until they change. Devices skip them too.</p>
+  <table>
+    <thead><tr><th scope="col">Device</th><th scope="col">File</th><th scope="col">Why</th></tr></thead>
+    <tbody>{% for dev, name, reason in bad %}<tr><td><code>{{ dev }}</code></td><td><code>{{ name }}</code></td><td>{{ reason }}</td></tr>{% endfor %}</tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

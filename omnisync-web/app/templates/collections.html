@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% from "_macros.html" import book_card %}
+{% block title %}Collections{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Collections <span class="count">{{ collections | length }}</span></h1></div>
+{% for c in collections %}
+<section>
+  <div class="panel-head"><h2>{{ c.name }} <span class="count">{{ c.books | length }}</span></h2><a href="/books?coll={{ c.id }}">As a list</a></div>
+  <div class="card-grid">{% for b in c.books %}{{ book_card(b) }}{% else %}<p class="muted">Empty.</p>{% endfor %}</div>
+</section>
+{% else %}
+<p class="muted">No collections synced yet. Collections and favorites sync with "Highlights and books".</p>
+{% endfor %}
+{% endblock %}

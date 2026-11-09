@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% from "_macros.html" import spine %}
+{% block title %}Statistics {{ label }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Statistics</h1>
+  <nav class="segmented" aria-label="Period">
+    {% for y in years %}<a href="/stats?year={{ y }}" {% if sel == y | string %}aria-current="page"{% endif %}>{{ y }}</a>{% endfor %}
+    <a href="/stats?year=all" {% if sel == 'all' %}aria-current="page"{% endif %}>All time</a>
+  </nav>
+</div>
+
+<section class="tiles" aria-label="Totals for {{ label }}">
+  {% for l, v in tiles %}<div class="tile"><div class="tile-label">{{ l }}</div><div class="tile-value">{{ v }}</div></div>{% endfor %}
+</section>
+
+{% if calendar %}
+<section class="panel">
+  <div class="panel-head"><h2>Every day in {{ label }}</h2></div>
+  <div class="chart-wrap">{{ calendar }}</div>
+  {{ legend }}
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>{{ bars_title }}</h2></div>
+  <div class="chart-wrap">{{ bars }}</div>
+</section>
+
+<div class="two-col">
+  <section class="panel"><div class="panel-head"><h2>Time of day</h2></div><div class="chart-wrap">{{ hours }}</div></section>
+  <section class="panel"><div class="panel-head"><h2>Day of the week</h2></div><div class="chart-wrap">{{ weekdays }}</div></section>
+</div>
+
+<section>
+  <h2>Books read in {{ label }}</h2>
+  <table class="books">
+    <thead><tr><th scope="col">Book</th><th scope="col" class="num">Time</th><th scope="col" class="num">Pages</th><th scope="col" class="num">Share</th></tr></thead>
+    <tbody>
+    {% set total = top | sum(attribute=1) %}
+    {% for b, t, p in top %}
+    <tr>
+      <td><a class="book-line" href="/book/{{ b.id }}">{{ spine(b, 'small') }}<span><span class="book-title">{{ b.title }}</span><span class="book-author">{{ b.authors }}</span></span></a></td>
+      <td class="num">{{ t | duration }}</td>
+      <td class="num">{{ p }}</td>
+      <td class="num share"><span class="share-bar" style="width: {{ (t / total * 100) | round(1) if total else 0 }}%"></span>{{ ((t / total * 100) | round | int) if total else 0 }}%</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">No reading in {{ label }}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% if finished %}
+<section>
+  <h2>Marked finished in {{ label }}</h2>
+  <ul class="plain-list">
+    {% for b in finished | sort(attribute='title') %}<li><a href="/book/{{ b.id }}">{{ b.title }}</a> <span class="muted">{{ b.authors }}</span></li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<p class="muted small">Pages are counted on each device's own layout, so the same book can have different page counts on different devices. Times are in the server's time zone.</p>
+{% endblock %}

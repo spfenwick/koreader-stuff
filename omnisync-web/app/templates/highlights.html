@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% from "_macros.html" import highlight %}
+{% block title %}Highlights{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Highlights <span class="count">{{ total }}</span></h1>
+</div>
+<form class="filters" method="get" action="/highlights">
+  <input type="search" name="q" value="{{ q }}" placeholder="Words in highlights, notes, chapters or titles" aria-label="Search highlights">
+  {% if colors | length > 1 %}
+  <select name="color" aria-label="Color">
+    <option value="">Any color</option>
+    {% for c in colors %}<option value="{{ c }}" {% if color == c %}selected{% endif %}>{{ c | capitalize }}</option>{% endfor %}
+  </select>
+  {% endif %}
+  <label class="check"><input type="checkbox" name="notes" value="1" {% if notes %}checked{% endif %}> With notes</label>
+  <button type="submit">Apply</button>
+  {% if q or color or notes %}<a href="/highlights" class="clear">Clear</a>{% endif %}
+</form>
+
+<div class="hl-list">
+{% for a in items %}{{ highlight(a) }}{% else %}<p class="muted">No highlights match.</p>{% endfor %}
+</div>
+
+{% if pages > 1 %}
+<nav class="pager" aria-label="Pages">
+  {% set base = '/highlights?q=' ~ (q | urlencode) ~ '&color=' ~ color ~ '&notes=' ~ notes ~ '&page=' %}
+  {% if page > 1 %}<a href="{{ base }}{{ page - 1 }}">← Newer</a>{% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a href="{{ base }}{{ page + 1 }}">Older →</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}
