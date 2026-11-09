@@ -497,6 +497,25 @@ class Library:
         finally:
             conn.close()
 
+    def daily_books(self, start: int, end: int) -> dict[date, dict[str, tuple[int, int]]]:
+        """For readings starting in [start, end): {day: {md5: (seconds, pages)}}.
+        Pages are the distinct pages of that file seen that day."""
+        conn = self.stats()
+        if conn is None:
+            return {}
+        out: dict[date, dict[str, tuple[int, int]]] = {}
+        try:
+            for day, md5, secs, pages in conn.execute("""
+                    SELECT date(p.start_time, 'unixepoch', 'localtime'), b.md5, sum(p.duration),
+                           count(DISTINCT p.page)
+                    FROM page_stat_data p JOIN book b ON b.id = p.id_book
+                    WHERE p.start_time >= ? AND p.start_time < ? AND b.md5 IS NOT NULL
+                    GROUP BY 1, 2""", (start, end)):
+                out.setdefault(date.fromisoformat(day), {})[md5] = (secs or 0, pages or 0)
+        finally:
+            conn.close()
+        return out
+
     def period_stats(self, start: int, end: int) -> dict:
         """Totals for readings starting in [start, end): by book, hour and weekday."""
         conn = self.stats()

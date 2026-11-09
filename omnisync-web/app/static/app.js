@@ -28,9 +28,9 @@
     t.remove();
   });
 
-  // Calendars open on the latest weeks when they don't fit.
+  // Calendars and recent-days charts open on the latest days when they don't fit.
   document.querySelectorAll(".chart-wrap").forEach((w) => {
-    if (w.querySelector(".calendar")) w.scrollLeft = w.scrollWidth;
+    if (w.querySelector(".calendar") || w.hasAttribute("data-scroll-end")) w.scrollLeft = w.scrollWidth;
   });
 
   const toggle = document.querySelector("[data-theme-toggle]");

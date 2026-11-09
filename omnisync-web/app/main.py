@@ -91,11 +91,57 @@ def streaks(daily: dict[date, int], today: date) -> tuple[int, int]:
     return current, longest
 
 
+def books_by_day(by_md5, start: date, end: date) -> dict[date, list[tuple]]:
+    """{day: [(book, seconds, pages)], longest first} for days in [start, end]."""
+    out = {}
+    for d, per_md5 in library.daily_books(ts(start), ts(end + timedelta(days=1))).items():
+        merged: dict[str, list] = {}
+        for md5, (secs, pages) in per_md5.items():
+            b = by_md5.get(md5)
+            if b:
+                row = merged.setdefault(b.id, [b, 0, 0])
+                row[1] += secs
+                row[2] += pages
+        out[d] = sorted((tuple(r) for r in merged.values()), key=lambda r: -r[1])
+    return out
+
+
+def month_calendar(by_md5, month: date, today: date) -> dict:
+    """A Monday-first month grid: weeks of (day, [(book, seconds, pages)]); None pads the edges."""
+    last = (month.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    read = books_by_day(by_md5, month, min(last, today))
+    cells: list = [None] * month.weekday()
+    cells += [(month + timedelta(days=i), read.get(month + timedelta(days=i), []))
+              for i in range(last.day)]
+    cells += [None] * (-len(cells) % 7)
+    prev = (month - timedelta(days=1)).replace(day=1)
+    nxt = last + timedelta(days=1)
+    return {"month": month, "weeks": [cells[i:i + 7] for i in range(0, len(cells), 7)],
+            "prev": prev, "next": nxt if nxt <= today else None}
+
+
 # Pages ---------------------------------------------------------------------------------
 
 async def home(request: Request):
-    books, _, _, annotations, daily, counts = library.snapshot()
+    books, by_md5, _, annotations, daily, counts = library.snapshot()
     today = date.today()
+    try:
+        month = date.fromisoformat(request.query_params.get("month", "") + "-01")
+    except ValueError:
+        month = today.replace(day=1)
+    if month > today:
+        month = today.replace(day=1)
+
+    # Pages per day over the last two weeks.
+    first = today - timedelta(days=13)
+    recent_days = books_by_day(by_md5, first, today)
+    page_items = []
+    for i in range(14):
+        d = first + timedelta(days=i)
+        pages = sum(p for _, _, p in recent_days.get(d, []))
+        page_items.append((f"{d:%a %-d}", pages, f"{d:%a %-d %b}"))
+    pages_chart = charts.bars(page_items, aria="Pages read per day, last two weeks", unit=("page", "pages"),
+                              width=960, height=180)
     week = today - timedelta(days=today.weekday())
 
     def since(d0: date) -> int:
@@ -114,7 +160,9 @@ async def home(request: Request):
     reading = [b for b in recent if b.status not in ("complete", "abandoned")][:6]
     return render(request, "home.html", tiles=tiles, reading=reading, recent=recent[:12],
                   highlights=[a for a in annotations if not a.is_bookmark][:8], counts=counts,
-                  calendar=charts.calendar(daily, today, link="/day/"), legend=charts.calendar_legend())
+                  calendar=charts.calendar(daily, today, link="/day/"), legend=charts.calendar_legend(),
+                  pages_chart=pages_chart, pages_total=sum(v for _, v, _ in page_items),
+                  month_cal=month_calendar(by_md5, month, today), today=today)
 
 
 SORTS = {

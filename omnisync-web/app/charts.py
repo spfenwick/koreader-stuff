@@ -86,9 +86,24 @@ def _nice_max(v: float) -> float:
     return v
 
 
+def _nice_count(v: float) -> int:
+    """The smallest of 1, 2, 5, 10, 20, 50… that is at least v."""
+    m = 1
+    while True:
+        for k in (1, 2, 5):
+            if v <= k * m:
+                return k * m
+        m *= 10
+
+
+def _plural(n: int, unit: tuple[str, str]) -> str:
+    return f"{n:,} {unit[0] if n == 1 else unit[1]}"
+
+
 def bars(items: list[tuple[str, int, str]], height: int = 160, label_every: int = 1,
-         aria: str = "Reading time", width: int = 640) -> Markup:
-    """Vertical bars of seconds. items: (axis label, seconds, tooltip label)."""
+         aria: str = "Reading time", width: int = 640, unit: tuple[str, str] | None = None) -> Markup:
+    """Vertical bars. items: (axis label, value, tooltip label). Values are seconds,
+    or counts of `unit` (singular, plural), e.g. ("page", "pages")."""
     n = len(items)
     if not n:
         return Markup("")
@@ -97,18 +112,27 @@ def bars(items: list[tuple[str, int, str]], height: int = 160, label_every: int 
     slot = (width - left - 4) / n
     bar_w = max(3, min(slot - 2, 44))  # at least a 2px gap between bars
     plot_h = height - bottom - top
-    vmax = _nice_max(max(v for _, v, _ in items))
+    peak = max(v for _, v, _ in items)
+    if unit:
+        vmax = _nice_count(peak) if peak > 0 else 1
+        tick = lambda v: f"{v:,}"  # noqa: E731
+        value = lambda v: _plural(v, unit) if v else "no reading"  # noqa: E731
+    else:
+        vmax = _nice_max(peak)
+        tick = lambda v: duration(v, short=True)  # noqa: E731
+        value = lambda v: duration(v) if v else "no reading"  # noqa: E731
     cls = "chart bars wide" if width > 640 else "chart bars"
     out = [f'<svg class="{cls}" viewBox="0 0 {width} {height}" role="img" aria-label="{escape(aria)}">']
-    for frac in (0.5, 1.0):
+    # A half-way gridline only where it lands on a whole number.
+    for frac in ((0.5, 1.0) if not unit or vmax % 2 == 0 else (1.0,)):
         y = top + plot_h * (1 - frac)
         out.append(f'<line class="grid" x1="{left}" x2="{width}" y1="{y:.1f}" y2="{y:.1f}"/>')
-        out.append(f'<text class="axis" x="{left - 6}" y="{y + 4:.1f}" text-anchor="end">{duration(int(vmax * frac), short=True)}</text>')
+        out.append(f'<text class="axis" x="{left - 6}" y="{y + 4:.1f}" text-anchor="end">{tick(int(vmax * frac))}</text>')
     base = top + plot_h
     out.append(f'<line class="baseline" x1="{left}" x2="{width}" y1="{base}" y2="{base}"/>')
     for i, (label, v, tip_label) in enumerate(items):
         x = left + i * slot + (slot - bar_w) / 2
-        tip = escape(f"{tip_label}: {duration(v) if v else 'no reading'}")
+        tip = escape(f"{tip_label}: {value(v)}")
         h = plot_h * v / vmax if v else 0
         # Hit target: the whole column, so short bars are easy to hover.
         out.append(f'<g data-tip="{tip}"><title>{tip}</title>'
