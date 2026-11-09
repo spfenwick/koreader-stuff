@@ -87,7 +87,7 @@ local function newDev(name)
         schedule = function(_, fn) table.insert(d.scheduled, fn) end,
         lfs = lfs, realpath = function(p) return p end,
         idle = function() return d.idle end,
-        refresh_ui = function() end,
+        refresh_ui = function(paths) d.refreshed = paths end,
     }
     local coll = {}
     for k, v in pairs(common) do coll[k] = v end
@@ -173,8 +173,14 @@ do
     A.rh:open(a1, clock); tick(10)
     B.rh:open(b2, clock); tick(10)
     A.rh:open(a3, clock); tick(10)
+    local A_first = A.rh.hist[1]
     round(A, B)
     check(A.rh:files() == "three,two,one", "A has B's book in time order: " .. A.rh:files())
+    -- ZenOS caches the "last read" order while hist[1] is the same table.
+    check(A.rh.hist[1] ~= A_first and A.rh.hist[1].file == A_first.file
+        and A.rh.hist[1].time == A_first.time, "A's first entry replaced by a copy")
+    check(A.refreshed and #A.refreshed == 1 and A.refreshed[1] == a2,
+        "views refreshed for the book put into the history")
     check(B.rh:files() == "three,two,one", "B has A's books in time order: " .. B.rh:files())
     check(B.rh:timeOf(b1) == A.rh:timeOf(a1), "at the time it was read")
     check(B.rh:entry(b3).select_enabled and not B.rh:entry(b3).dim, "an ordinary entry")

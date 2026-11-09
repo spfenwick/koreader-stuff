@@ -327,6 +327,26 @@ local function cloudPath(uuids)
     return ok and path or nil
 end
 
+--- After books read elsewhere went into the history: the file browser and,
+-- under ZenOS, Home show the new order (Home rebuilds now if it's shown,
+-- else when it's next opened).
+local function refreshAfterHistory(paths)
+    local FileManager = package.loaded["apps/filemanager/filemanager"]
+    local fm = type(FileManager) == "table" and FileManager.instance
+    if not fm then return end
+    if fm.file_chooser then fm.file_chooser:refreshPath() end
+    local SharedState = package.loaded["common/shared_state"]
+    local home = fm.zenos and type(SharedState) == "table" and type(SharedState.get) == "function"
+        and SharedState.get(fm.zenos, "home")
+    if type(home) == "table" and type(home.rebuildActive) == "function" then
+        if type(home.invalidateBookCache) == "function" then
+            for _, path in ipairs(paths or {}) do pcall(home.invalidateBookCache, path, true) end
+        end
+        local ok, err = pcall(home.rebuildActive)
+        if not ok then logger.warn("OmniSync: rebuilding ZenOS Home failed:", err) end
+    end
+end
+
 --- The process-wide reading history sync (synced with book data).
 function Plugin.histSync()
     if hist_sync then return hist_sync end
@@ -342,6 +362,7 @@ function Plugin.histSync()
         end,
         uuids = function(md5s) return Plugin.idStore():uuids(md5s) end,
         resolve = cloudPath,
+        refresh_ui = refreshAfterHistory,
     }
     return hist_sync
 end

@@ -42,7 +42,7 @@ local HIST = BookFormat.HISTORY
 -- getDeviceId(), now(), logger, schedule(delay, fn), enabled(), and
 -- optionally readhistory, lfs, realpath(path), uuids(md5s) -> { [md5] =
 -- { uuid, … } }, resolve(uuids) -> path or nil, idle(), open_book() ->
--- path or nil, refresh_ui()
+-- path or nil, refresh_ui(paths) (paths: books put into the history)
 function HistSync.new(deps)
     local self = setmetatable({ deps = deps }, HistSync)
     self.log = deps.logger
@@ -218,7 +218,7 @@ function HistSync:apply(force)
     local top = rh.hist[1]
     local cap = open and top and top.file == open and top.time or nil
     local lfs = self:_lfs()
-    local n, seen = 0, {}
+    local n, seen, moved = 0, {}, {}
     for _, w in ipairs(order) do
         local idx = rh.getIndexByFile and rh:getIndexByFile(w.path)
         if not idx then
@@ -238,6 +238,7 @@ function HistSync:apply(force)
                 while rh.hist[at] and (tonumber(rh.hist[at].time) or 0) >= w.time do at = at + 1 end
             end
             table.insert(rh.hist, at, entryFor(w.path, w.time, exists))
+            moved[#moved + 1] = w.path
             if exists then
                 -- The access time, for sorting by last read (as KOReader does).
                 local a = lfs.attributes(w.path)
@@ -254,8 +255,17 @@ function HistSync:apply(force)
     if n > 0 then
         if rh.updateDateTimeString then rh:updateDateTimeString() end
         if rh._reduce then rh:_reduce() end
+        -- ZenOS's "last read" order is cached while the history's length and
+        -- first and last entries (the tables) stay the same, so a book put
+        -- in the middle went unnoticed. A new first entry (same contents)
+        -- makes it sort again.
+        if rh.hist[1] then
+            local first = {}
+            for k, v in pairs(rh.hist[1]) do first[k] = v end
+            rh.hist[1] = first
+        end
         if rh._flush then rh:_flush() end
-        pcall(self.deps.refresh_ui or function() self.deps.finder:_refreshUI() end)
+        pcall(self.deps.refresh_ui or function() self.deps.finder:_refreshUI() end, moved)
         self.log.info("OmniSync: put", n, "books read elsewhere into the history")
     end
     store:appliedMany(seen)
