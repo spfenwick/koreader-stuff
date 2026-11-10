@@ -222,6 +222,9 @@ end
 converge("interleaved reading")
 check(allRemoteSegmentsValid(), "every remote segment is complete and valid")
 check(C.status.devices == 3, "three devices seen")
+local names = A.status.device_names or {}
+check(names[B.id] == "Simulated " .. B.name and names[C.id] == "Simulated " .. C.name and names[A.id] == nil,
+    "other devices' names learnt from their meta.json")
 
 -- Same book, different title on one device (edited metadata)
 C:read({ md5 = BOOKS[5].md5, title = "My own title", authors = "Me", pages = 90 }, { { 3, clock + 50, 60 } })

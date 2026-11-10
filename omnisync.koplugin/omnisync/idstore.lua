@@ -168,15 +168,16 @@ end
 
 -- Scanning ------------------------------------------------------------------------------
 
---- Which of these files to read: files = { { path, md5 (the sidecar's),
--- size, mtime }, … }; those not read before, or changed since.
+--- Which of these files to read: files = { { path, md5 (the sidecar's,
+-- nil for a file never opened), size, mtime }, … }; those not read
+-- before, or changed since.
 function IdStore:toScan(files)
     return self:_read(function(conn)
         local q = conn:prepare("SELECT md5, size, mtime FROM id_scanned WHERE path = ?;")
         local out = {}
         for _, f in ipairs(files) do
             local r = q:reset():bind(f.path):step()
-            if not r or r[1] ~= f.md5 or num(r[2]) ~= f.size or num(r[3]) ~= f.mtime then
+            if not r or r[1] ~= (f.md5 or "") or num(r[2]) ~= f.size or num(r[3]) ~= f.mtime then
                 out[#out + 1] = f
             end
         end
@@ -210,14 +211,49 @@ function IdStore:recordScan(item, info, device)
             -- KOReader keeps a book's MD5 when its file is replaced: the
             -- sidecar's MD5 then names the old file, whose positions this
             -- file can't vouch for.
-            if item.md5 and item.md5 ~= info.md5 then
+            if item.md5 and item.md5 ~= "" and item.md5 ~= info.md5 then
                 add{ md5 = item.md5, src = "sidecar", uuids = base.uuids, title = base.title,
                      authors = base.authors, ids = base.ids }
             end
         end
         local s = conn:prepare("INSERT OR REPLACE INTO id_scanned (path, md5, size, mtime) VALUES (?, ?, ?, ?);")
-        s:bind(item.path, item.md5, item.size, item.mtime):step()
+        s:bind(item.path, item.md5 or "", item.size, item.mtime):step()
         s:close()
+        return added
+    end)
+end
+
+--- Records matches made outside the file (src "link"): another plugin
+-- (Cloud library) found which catalog book a file is, by its title.
+-- list = { { md5, uuids, title, authors }, … }. Only facts not known yet
+-- are written and sent. Returns the number of new facts.
+function IdStore:link(list, device)
+    local new = self:_read(function(conn)
+        local out = {}
+        local q = conn:prepare("SELECT 1 FROM id_facts WHERE md5 = ? AND fact = ?;")
+        for _, l in ipairs(list) do
+            local uuids = {}
+            for _, u in ipairs(l.uuids or {}) do uuids[#uuids + 1] = IdFormat.normalizeUuid(u) end
+            local r = { md5 = l.md5, src = "link", uuids = uuids, title = l.title, authors = l.authors }
+            if IdFormat.validRecord(r) and not q:reset():bind(r.md5, IdFormat.factKey(r)):step() then
+                out[#out + 1] = r
+            end
+        end
+        q:close()
+        return out
+    end)
+    if #new == 0 then return 0 end
+    return self:_tx(function(conn)
+        local added = 0
+        local o = conn:prepare("INSERT OR IGNORE INTO id_outbox (md5, fact) VALUES (?, ?);")
+        for _, r in ipairs(new) do
+            local isnew, key = addFact(conn, r, device)
+            if isnew then
+                o:reset():bind(r.md5, key):step()
+                added = added + 1
+            end
+        end
+        o:close()
         return added
     end)
 end
@@ -333,6 +369,34 @@ local function normTitle(s)
     return (s:lower():gsub("[%p%c]", " "):gsub("%s+", " "):gsub("^ ", ""):gsub(" $", ""))
 end
 
+--- The facts that count, per MD5: { [md5] = { { uuids, sig, title,
+-- authors }, … } }. A link (a match made outside the file, by another
+-- plugin) only counts for an MD5 with no fact read from a file, and only
+-- when all its links name the same UUIDs: links that disagree leave the
+-- MD5 out.
+local function usedFacts(conn)
+    local by_md5 = {}
+    for _, r in ipairs(rows(conn:prepare("SELECT md5, src, uuids, sig, title, authors FROM id_facts;"))) do
+        local e = by_md5[r[1]] or { files = {}, links = {} }
+        by_md5[r[1]] = e
+        local f = { uuids = r[3], sig = r[4], title = r[5], authors = r[6] }
+        if r[2] == "link" then table.insert(e.links, f) else table.insert(e.files, f) end
+    end
+    local out = {}
+    for md5, e in pairs(by_md5) do
+        if #e.files > 0 then
+            out[md5] = e.files
+        else
+            local same = true
+            for i = 2, #e.links do
+                if e.links[i].uuids ~= e.links[1].uuids then same = false end
+            end
+            if same then out[md5] = e.links end
+        end
+    end
+    return out
+end
+
 --- MD5s that belong together: those sharing a UUID, transitively. Returns
 -- { { md5s = { … }, uuids = { … }, sigs = n (distinct signatures known),
 -- title, ok (false when a guard stops it being joined), why }, … } for
@@ -350,9 +414,20 @@ local function computeGroups(conn)
         local ra, rb = find(a), find(b)
         if ra ~= rb then if ra < rb then parent[rb] = ra else parent[ra] = rb end end
     end
+    local used = usedFacts(conn)
+    local pairs_list = {}
+    for md5, facts in pairs(used) do
+        for _, f in ipairs(facts) do
+            for _, uuid in ipairs(split(f.uuids)) do pairs_list[#pairs_list + 1] = { uuid, md5 } end
+        end
+    end
+    table.sort(pairs_list, function(a, b)
+        if a[1] ~= b[1] then return a[1] < b[1] end
+        return a[2] < b[2]
+    end)
     local by_uuid = {}
-    for _, r in ipairs(rows(conn:prepare("SELECT uuid, md5 FROM id_uuids ORDER BY uuid, md5;"))) do
-        local uuid, md5 = r[1], r[2]
+    for _, p in ipairs(pairs_list) do
+        local uuid, md5 = p[1], p[2]
         parent[md5] = parent[md5] or md5
         if by_uuid[uuid] then union(by_uuid[uuid], md5) else by_uuid[uuid] = md5 end
     end
@@ -365,13 +440,13 @@ local function computeGroups(conn)
     for uuid, md5 in pairs(by_uuid) do
         table.insert(groups[find(md5)].uuids, uuid)
     end
-    for _, r in ipairs(rows(conn:prepare("SELECT md5, sig, title, authors FROM id_facts;"))) do
-        local g = parent[r[1]] and groups[find(r[1])]
-        if g then
-            if r[2] then g.sig_set[r[2]] = true end
-            if r[3] then
-                local first_author = (r[4] or ""):match("^[^\n]*")
-                g.titles[normTitle(r[3]) .. "\0" .. normTitle(first_author)] = r[3]
+    for md5, facts in pairs(used) do
+        local g = groups[find(md5)]
+        for _, f in ipairs(facts) do
+            if f.sig then g.sig_set[f.sig] = true end
+            if f.title then
+                local first_author = (f.authors or ""):match("^[^\n]*")
+                g.titles[normTitle(f.title) .. "\0" .. normTitle(first_author)] = f.title
             end
         end
     end
@@ -408,6 +483,8 @@ local function computeGroups(conn)
     end)
     return out
 end
+
+IdStore.usedFacts = usedFacts
 
 function IdStore:groups()
     return self:_read(computeGroups)

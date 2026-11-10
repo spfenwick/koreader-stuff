@@ -426,4 +426,126 @@ do
     check(facts(P) == facts(Q), "a pack gives the same facts as its segments")
 end
 
+-- Cloud library's side: links, files never opened, book states ---------------------------------
+
+do
+    local BookStore = require("omnisync/bookstore")
+    local AnnFormat = require("omnisync/annformat")
+    local Identity = require("omnisync/identity")
+    local L = newStore("L")
+    local U = {}
+    for i = 1, 9 do U[i] = string.format("00000000-0000-4000-8000-%012d", i) end
+    local function fact(md5, uuids, sig, title)
+        L:recordScan({ path = "/l/" .. md5, md5 = md5, size = 1, mtime = 1 },
+            { md5 = md5, uuids = uuids, sig = sig, title = title or "Book", authors = "Ann" }, "devA")
+    end
+    fact("e1", { U[1], U[4] }, "s1")
+    fact("e2", { U[1] }, "s1")
+    fact("e3", { U[4] }, "s1")
+    fact("z", { U[9] }, "s9", "Other")
+    fact("r", { U[2] }, "s2", "Third")
+
+    -- A PDF Cloud library matched by title joins its book (level 1 only).
+    check(L:link({ { md5 = "p1", uuids = { U[1]:upper() }, title = "Book", authors = "Ann" } }, "devA") == 1,
+        "link recorded")
+    check(L:link({ { md5 = "p1", uuids = { U[1] }, title = "Book", authors = "Ann" } }, "devA") == 0,
+        "the same link again: nothing new")
+    -- A file's own facts win over a link for its MD5.
+    L:link({ { md5 = "e1", uuids = { U[9] } } }, "devA")
+    -- Links that disagree leave the MD5 out.
+    L:link({ { md5 = "q", uuids = { U[2] } }, { md5 = "q", uuids = { U[3] } } }, "devA")
+    L:refreshGroups()
+    local groups = L:groups()
+    local of = {}
+    for _, g in ipairs(groups) do for _, m in ipairs(g.md5s) do of[m] = table.concat(g.md5s, ",") end end
+    check(of.p1 == "e1,e2,e3,p1", "linked PDF in the book's group (" .. tostring(of.p1) .. ")")
+    check(of.z == nil, "a link doesn't override the file's own UUIDs")
+    check(of.q == nil and of.r == nil, "conflicting links: the MD5 isn't joined")
+    check(#L:positionPeers("p1") == 0 and #L:positionPeers("e1") == 2, "a link has no positions")
+    local exp = L:export{ device_id = "devA", out_path = TMP .. "/L.jsonl", now = 1, max_records = 100 }
+    check(exp and S.readFile(TMP .. "/L.jsonl"):find('"src":"link"', 1, true), "links are sent")
+
+    -- A file never opened (no sidecar MD5): read once, again once opened.
+    local item = { path = "/l/new.epub", size = 5, mtime = 5 }
+    check(L:recordScan(item, { md5 = "n1", uuids = { U[5] }, sig = "s5", title = "New", authors = "N" }, "devA") == 1,
+        "unopened file: its own fact")
+    check(#L:toScan{ item } == 0, "unopened file not read again")
+    check(#L:toScan{ { path = item.path, md5 = "n1", size = 5, mtime = 5 } } == 1, "read again once opened")
+
+    -- Book states by UUID, from every version's book data.
+    local B = BookStore.new{ sq3 = S.SQ3, state_path = TMP .. "/L.sqlite3" }
+    local conn = B:open()
+    local put = conn:prepare([[INSERT INTO book_merged (md5, prop, updated, device, deleted, hash, value)
+        VALUES (?, ?, ?, ?, ?, ?, ?);]])
+    local function merged(md5, prop, upd, dev, v)
+        put:reset():bind(md5, prop, upd, dev, v == nil and 1 or 0, v == nil and "" or "h" .. upd,
+            v ~= nil and AnnFormat.encodeValue(v) or nil):step()
+    end
+    merged("e1", "status", 10, "devA", "reading")
+    merged("e2", "status", 20, "devB", "complete")
+    merged("p1", "rating", 5, "devA", 4)
+    merged("e2", "hist", 30, "devB", 1700000000)
+    merged("z", "rating", 9, "devA", 2)
+    put:close()
+    conn:close()
+    local states = B:statesByUuid(IdStore.usedFacts)
+    local s1 = states[U[1]]
+    check(s1 and s1.status == "complete" and s1.rating == 4 and s1.last_read == 1700000000 and s1.last_device == "devB",
+        "state: newest status, the linked PDF's rating, last read")
+    check(states[U[4]] and states[U[4]].status == "complete", "state through the joined group (another UUID)")
+    check(states[U[9]] and states[U[9]].rating == 2 and states[U[9]].status == nil, "a book on its own")
+    check(states[U[5]] == nil, "nothing known: no state")
+    conn = B:open()
+    conn:exec("INSERT OR REPLACE INTO book_merged (md5, prop, updated, device, deleted, hash) VALUES ('e3', 'rating', 50, 'devC', 1, '');")
+    conn:close()
+    check(B:statesByUuid(IdStore.usedFacts)[U[1]].rating == nil, "a later clear on another version wins")
+
+    -- The interface other plugins use.
+    check(not Identity.available() and Identity.bookState({ U[1] }) == nil, "not set up: nothing")
+    local refreshed, this_device, names = 0, "devB", {}
+    local scanned = {}
+    Identity.setup{
+        id_store = function() return L end, book_store = function() return B end,
+        device_id = function() return this_device end,
+        device_names = function() return names end,
+        files = function() return { ["/l/opened.pdf"] = { md5 = "sidecarmd5" } } end,
+        handles = IdScan.handles,
+        scan = function(path)
+            scanned[#scanned + 1] = path
+            return { md5 = "fresh", uuids = { U[6] }, sig = "s6", title = "Fresh", authors = "F" }
+        end,
+        refresh = function() refreshed = refreshed + 1 end,
+        logger = { warn = function() end },
+    }
+    local st = Identity.bookState({ U[1]:upper() })
+    check(st and st.status == "complete" and st.last_device == Identity.THIS_DEVICE, "last read on this device")
+    this_device = "devC"
+    local rev = Identity.revision()
+    local told = 0
+    Identity.onChanged("test", function() told = told + 1 end)
+    Identity.changed()
+    check(Identity.revision() ~= rev and told == 1, "changes: revision moves, listeners told")
+    check(Identity.bookState({ U[1] }).last_device == nil, "unnamed device: no name")
+    names.devB = "Kobo Forma"
+    check(Identity.bookState({ U[1] }).last_device == "Kobo Forma", "named device")
+    check(Identity.bookState({ U[7] }) == nil and Identity.bookState("junk") == nil, "unknown book: nil")
+
+    check(Identity.recordLinks({ { path = "/l/opened.pdf", md5 = "filemd5", uuids = { U[7] } },
+        { path = "/l/none.pdf", uuids = { U[7] } } }) == 1, "links: those with an MD5 recorded")
+    conn = L:open()
+    check(conn:rowexec("SELECT count(*) FROM id_facts WHERE src = 'link' AND md5 = 'sidecarmd5'") == 1,
+        "a book opened here is linked under its sidecar's MD5")
+    conn:close()
+
+    local real_lfs = package.loaded["libs/libkoreader-lfs"]
+    package.loaded["libs/libkoreader-lfs"] = { attributes = function(path)
+        if path:match("%.epub$") or path:match("%.pdf$") then return { mode = "file", size = 9, modification = 9 } end
+    end }
+    check(Identity.fileAdded("/l/fresh.epub") == 1 and refreshed == 1 and scanned[1] == "/l/fresh.epub",
+        "a download read at once, groups refreshed")
+    check(Identity.fileAdded("/l/fresh.epub") == 0 and #scanned == 1, "not read twice")
+    check(Identity.fileAdded("/l/fresh.pdf") == 0 and #scanned == 1, "files the scanner doesn't read are skipped")
+    package.loaded["libs/libkoreader-lfs"] = real_lfs
+end
+
 S.finish("omnisync identity tests")

@@ -1,10 +1,10 @@
-# Book identity across file versions (plan)
+# Book identity across file versions
 
-Status: steps 1 to 5 built: Cloud library's matcher fix, the identity
-stream (2026-11-06), book data joining (2026-11-08), statistics joining
-(2026-11-10) and annotations, TOC and flows joining (2026-11-10); and
-step 7, progress across versions (2026-11-10). Step 6 is a plan.
-Sections below say where the build differs from the plan.
+Status: every step built: Cloud library's matcher fix, the identity
+stream (2026-11-06), book data joining (2026-11-08), statistics joining,
+annotations, TOC and flows joining, progress across versions and Cloud
+library's side (all 2026-11-10). Sections below say where the build
+differs from the plan.
 
 ## The problem
 
@@ -98,7 +98,7 @@ major version rejected):
   idempotent by construction.
 - `src`: `file` (read from the file with that MD5), `sidecar` (see below)
   or `link` (supplied by another plugin, e.g. Cloud library matching a
-  PDF by title; reserved, not built). For one MD5, `file` wins over
+  PDF by title; built with step 6). For one MD5, `file` wins over
   `link`; two different `file` records for one MD5 can't happen (same
   bytes); two `link`s naming different catalog books leave the MD5
   unjoined.
@@ -111,7 +111,11 @@ major version rejected):
 - Each device sends a record for every book it has an MD5 for, the first
   time it sees that MD5. A few hundred bytes per book, once. As built:
   the EPUBs book data knows about (books opened on this device, from
-  `book_files`); files Cloud library reports come with step 6.
+  `book_files`), and since step 6 the catalog books' files in Cloud
+  library's folder, opened or not (`Library.localFiles`). A file never
+  opened has no sidecar MD5: its fact is under its own partial MD5, which
+  is the one KOReader gives it when it's first opened (then it's read once
+  more, finding nothing new).
 - As built, reading files: the main process lists them and picks those not
   read before or changed since (path, size, time or sidecar MD5); the
   sync's subprocess reads them after the network step, for up to 60 s (5 s
@@ -221,6 +225,19 @@ As built (`Store.joinVersionsIn`, "Versions of a book" in
   before the link.
 - The web app's ingester keeps a row per file (`join_versions = false`):
   it gathers versions itself, and shows each file's time.
+- Files no device has an identity record for are joined by title instead
+  (added 2026-11-10, `Store.titleKey`, `loadGroups`): such a file joins
+  the one book whose statistics carry exactly its title and authors
+  (lowercased, punctuation dropped); files without records sharing a
+  title, with no such book, join each other. Two books with that title,
+  or a missing or placeholder title or author ("N/A", "Unknown"), and it
+  stays apart. Files with records are only joined by identity. Statistics
+  only: book data, annotations and progress still need a record. In the
+  data checked (2026-11-10), 432 of 571 files with readings had no record
+  (deleted before identity existed, PDFs, test files). The web app does
+  the same (`title_groups` in library.py, for statistics only: the file's
+  book data stays its own). `Store.JOIN_RULES` makes each device join
+  once more after an update that changes these rules.
 
 Caveat: `page` numbers are only comparable if the two files paginate
 alike; KOReader rescales by `book.pages` anyway, and statistics are
@@ -319,6 +336,44 @@ Cloud library then:
    normal paths (annotations at level 2 once its signature is computed;
    compute it right after the download, before first open).
 
+As built (2026-11-10). The two plugins find each other through
+`package.loaded`, both ways, so neither needs the other, and the order
+they load in doesn't matter:
+
+- OmniSync's side is `omnisync/identity.lua`
+  (`package.loaded["omnisync/identity"]`): `available()`,
+  `bookState(uuids)` -> `{ status, rating, last_read, last_device }`,
+  `fileAdded(path)`, `onChanged(key, fn)` and `revision()`. There's no
+  `groupFor`: nothing needed it. `last_device` is the device's name, or
+  `Identity.THIS_DEVICE`.
+- Links go the other way from the plan: OmniSync asks Cloud library for
+  them at the start of each sync (`Library.links()`, recorded by
+  `Identity.recordLinks` before the facts are sent), as it asks for the
+  folder's files (`Library.localFiles()`). A link is made for a matched
+  file that doesn't name the book's UUID itself: matched by title, or not
+  an EPUB (a downloaded PDF). Its MD5 is the sidecar's when the book was
+  opened here, else the file's partial MD5, which Cloud library's matcher
+  now keeps in `local_files` (catalog schema 8). In `IdStore`, links count
+  as planned (`usedFacts`): only for an MD5 with no `file` or `sidecar`
+  fact, and only when its links agree. A link has no signature, so it
+  joins at level 1 only (book data, statistics), never annotations.
+- `bookState`: every file whose used facts name the UUID, plus their
+  joined versions; each of status, rating and last opened (`hist`) is
+  the winning record across them (`BookStore:statesByUuid`). Cached until
+  the next change: after a sync that brought book data or identity facts
+  (or changed the groups), `Identity.changed()` tells Cloud library,
+  which redraws what's on screen.
+- Device names: each device's `meta.json` already held its name; the
+  network step now reads it once for each device not named yet (up to 4
+  a sync, `params.named`, kept in the status as `device_names`).
+- Shown on cloud books: the badge is the cloud with a check, play or pause
+  mark cut out (finished, reading, on hold); the details sheet has a line
+  such as "Finished · ★★★★☆ · Last read 5 Oct 2026 on Kobo Forma".
+- Downloads: after a download, Cloud library calls `fileAdded`, which
+  reads the file in the main process (0.25 to 1 s on the Forma) and
+  refreshes the groups, so "Download & read" opens the book with its other
+  versions' status, highlights and position already applying.
+
 ## Order of work
 
 1. Matcher prefix fix in Cloud library (independent, small). **Done** (Cloud library 0.2.3).
@@ -331,7 +386,9 @@ Cloud library then:
 3. Book data joining (level 1). **Built** (2026-11-08).
 4. Statistics joining, including the late-link move. **Built** (2026-11-10).
 5. Annotations, TOC and flows joining (level 2). **Built** (2026-11-10).
-6. Cloud library: links, `bookState`, badges and details.
+6. Cloud library: links, `bookState`, badges and details. **Built**
+   (2026-11-10; see "As built" in
+   "Cloud library's side").
 7. Progress across versions. **Built** (2026-11-10), before 4 to 6.
 
 Each step is shippable on its own; 2 changes no behaviour.

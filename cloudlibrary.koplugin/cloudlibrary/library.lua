@@ -203,6 +203,7 @@ function Library.load()
         Library.stats = {}
         Library.catalog = {}
         Library.matched, Library.on_device, Library.not_in_catalog = {}, {}, {}
+        Library.by_title, Library.file_info = {}, {}
         Covers.configure(nil)
         showCatalog(folder, {})
         Guard.call("history", History.reconcile)
@@ -223,7 +224,7 @@ function Library.load()
     store:close()
     Timing.record("catalog: read database", Timing.since(t0), #books .. " books")
     t0 = Timing.start()
-    local matched, unmatched = Matcher.match(folder, files, books)
+    local matched, unmatched, by_title = Matcher.match(folder, files, books)
     Timing.record("catalog: match local files", Timing.since(t0))
     local cloud = {}
     for _i, b in ipairs(books) do
@@ -231,6 +232,8 @@ function Library.load()
     end
     Library.catalog = books -- every catalog book, in the database's order
     Library.matched = matched
+    Library.by_title = by_title
+    Library.file_info = files
     Library.on_device = {}
     for _id, path in pairs(matched) do Library.on_device[path] = true end
     Library.not_in_catalog = {}
@@ -390,6 +393,113 @@ end
 -- file, or its cloud entry), or nil. Used by OmniSync for the history.
 function Library.pathForUuids(uuids)
     return History.pathForUuids(uuids)
+end
+
+-- OmniSync ------------------------------------------------------------------------
+--
+-- When OmniSync is installed, it tells us what other devices know about
+-- catalog books (status, rating, last read: shown for cloud books), and we
+-- tell it which files here are which catalog book. See OmniSync's
+-- IDENTITY.md and omnisync/identity.lua.
+
+local identity_listening = false
+
+--- OmniSync's identity module, once OmniSync has set it up, else nil.
+function Library.identity()
+    local Identity = package.loaded["omnisync/identity"]
+    if type(Identity) ~= "table" or type(Identity.available) ~= "function" or not Identity.available() then
+        return nil
+    end
+    if not identity_listening and type(Identity.onChanged) == "function" then
+        identity_listening = true
+        Identity.onChanged("cloudlibrary", function() UIManager:nextTick(Library.redrawStates) end)
+    end
+    return Identity
+end
+
+--- Book states changed: redraw what's shown (the badges and the details
+-- are drawn from them; nothing is laid out again).
+function Library.redrawStates()
+    if not next(Virtual.by_path) then return end
+    for _i, w in ipairs(UIManager._window_stack or {}) do
+        if w.widget then UIManager:setDirty(w.widget, "ui") end
+    end
+end
+
+--- A cloud book's state from OmniSync: { status, rating, last_read,
+-- last_device }, or nil.
+function Library.bookState(id)
+    local Identity = type(id) == "string" and Library.identity()
+    if not Identity or type(Identity.bookState) ~= "function" then return nil end
+    return Identity.bookState({ id })
+end
+
+--- The catalog books' files in the library folder (for OmniSync to read
+-- their identity, opened or not): { path, … }, sorted.
+function Library.localFiles()
+    local out = {}
+    for path in pairs(Library.on_device or {}) do out[#out + 1] = path end
+    table.sort(out)
+    return out
+end
+
+--- Files matched to a catalog book without naming its UUID themselves (by
+-- title, or not an EPUB): { { path, md5, uuids = { id }, title, authors }, … }.
+-- Files whose partial MD5 isn't known yet are left out until it is.
+function Library.links()
+    local by_id = {}
+    for _i, b in ipairs(Library.catalog or {}) do by_id[b.id] = b end
+    local out = {}
+    for id, path in pairs(Library.matched or {}) do
+        local info = Library.file_info and Library.file_info[path]
+        local book = by_id[id]
+        if book and info and info.md5 and ((Library.by_title or {})[id] or not path:lower():match("%.epub$")) then
+            out[#out + 1] = {
+                path = path, md5 = info.md5, uuids = { id:lower() }, title = book.title,
+                authors = book.authors and #book.authors > 0 and table.concat(book.authors, "\n") or nil,
+            }
+        end
+    end
+    table.sort(out, function(a, b) return a.path < b.path end)
+    return out
+end
+
+local STATUS_TEXT = { complete = _("Finished"), reading = _("Reading"), abandoned = _("On hold") }
+
+--- A line for a cloud book's details sheet: "Finished · ★★★★☆ · Last read
+-- 12 Oct 2026 on Kobo Forma", or nil when OmniSync knows nothing of it.
+function Library.stateText(id)
+    local st = Library.bookState(id)
+    if not st then return nil end
+    local parts = {}
+    if st.status and STATUS_TEXT[st.status] then parts[#parts + 1] = STATUS_TEXT[st.status] end
+    local rating = tonumber(st.rating)
+    if rating and rating >= 1 and rating <= 5 then
+        rating = math.floor(rating)
+        parts[#parts + 1] = string.rep("★", rating) .. string.rep("☆", 5 - rating)
+    end
+    if st.last_read then
+        local when = os.date("%d %b %Y", st.last_read):gsub("^0", "")
+        local Identity = Library.identity()
+        if Identity and st.last_device == Identity.THIS_DEVICE then
+            parts[#parts + 1] = T(_("Last read %1 on this device"), when)
+        elseif type(st.last_device) == "string" then
+            parts[#parts + 1] = T(_("Last read %1 on %2"), when, st.last_device)
+        else
+            parts[#parts + 1] = T(_("Last read %1"), when)
+        end
+    end
+    return #parts > 0 and table.concat(parts, " · ") or nil
+end
+Virtual.stateText = function(id)
+    local ok, text = pcall(Library.stateText, id)
+    if not ok then logger.warn("CloudLibrary: reading the book's state from OmniSync:", text) end
+    return ok and text or nil
+end
+Badge.cloudState = function(path)
+    local book = Virtual.by_path[path]
+    local st = book and Library.bookState(book.id)
+    return st and st.status
 end
 
 function Library.installHistory()
@@ -772,6 +882,7 @@ local scheduledCheck = Guard.task("jobs", backgroundCheck)
 --- The file browser opened: at startup, and again each time a book is closed.
 function Library.onFileManagerReady()
     local t_start = Timing.start()
+    Library.identity() -- listens for OmniSync's changes, once it's there
     local server, folder = Library.server(), Library.folder()
     -- Reopened (after reading): the cloud books are still loaded. The
     -- background check below reloads them if files changed.
@@ -845,7 +956,7 @@ function Library.downloaded(book, result, opts)
         local store = openStore(server)
         store:setLocalFile(result.path, {
             mtime = attr.modification, size = attr.size, uuids = { book.id:lower() },
-            title = book.title, authors = book.authors,
+            title = book.title, authors = book.authors, md5 = Matcher.partialMD5(result.path),
         })
         -- The file has the server's current cover; the cover kept for the
         -- cloud entry (shown again if the book is deleted) may be older.
@@ -867,6 +978,14 @@ function Library.downloaded(book, result, opts)
         -- Other views listing the book (Home, Authors, Series, ...) show the file.
         local ok, err = pcall(ZenSource.downloaded, cloud_path, result.path)
         if not ok then logger.warn("CloudLibrary: redrawing views after a download:", err) end
+    end
+    -- OmniSync reads the new file's identity before it's first opened, so
+    -- other versions' highlights, status... apply at once.
+    local Identity = Library.identity()
+    if Identity and type(Identity.fileAdded) == "function" then
+        local t0 = Timing.start()
+        Identity.fileAdded(result.path)
+        Timing.record("download: book identity", Timing.since(t0), result.path:match("[^/]+$"))
     end
     notify(T(_("Downloaded %1."), book.title or book.id))
     if opts.open then

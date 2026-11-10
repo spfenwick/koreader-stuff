@@ -2,6 +2,6 @@ local _ = require("gettext")
 
 return {
     fullname = _("OmniSync"),
-    version = "0.7.2",
+    version = "0.7.3",
     description = _([[Keeps settings, reading statistics, highlights and bookmarks, book status and details, collections and reading history the same on several devices, through a Dropbox or WebDAV server from Cloud storage (statistics and highlights need WebDAV).]]),
 }

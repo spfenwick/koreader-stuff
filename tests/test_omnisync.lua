@@ -934,4 +934,25 @@ do
     check(r.dates_unreliable and t.requests > 1, "own folder's date unchanged after an upload: dates not trusted, nothing skipped")
 end
 
+-- Other devices' names, from their meta.json -------------------------------------------------
+
+do
+    local tmp = TMP .. "/names"
+    S.mkdirp(tmp)
+    local t = memTransport{
+        devices = true, ["devices/dev1"] = true, ["devices/dev2"] = true, ["devices/dev3"] = true,
+        ["devices/dev2/meta.json"] = '{"deviceId":"dev2","deviceName":"Kobo Forma"}',
+    }
+    local r = NetJob.run({ device_id = "dev1", seen = {}, tmp_dir = tmp, named = {} }, t)
+    check(r.ok and r.device_names and r.device_names.dev2 == "Kobo Forma", "a device's name read")
+    check(r.device_names.dev3 == nil and r.device_names.dev1 == nil, "no meta.json: no name, and not our own")
+    t.log = {}
+    r = NetJob.run({ device_id = "dev1", seen = {}, tmp_dir = tmp, named = { dev2 = "Kobo Forma" } }, t)
+    local asked = {}
+    for _, l in ipairs(t.log) do if l:find("meta.json", 1, true) then asked[#asked + 1] = l end end
+    check(#asked == 1 and asked[1]:find("dev3", 1, true), "named devices aren't asked again")
+    r = NetJob.run({ device_id = "dev1", seen = {}, tmp_dir = tmp }, t)
+    check(r.device_names == nil, "names only read when asked for")
+end
+
 S.finish("omnisync unit tests")

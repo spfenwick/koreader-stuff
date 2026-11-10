@@ -58,6 +58,11 @@ if echo "$versions" | grep -q '1a2b3c4d-0000-4000-8000-000000000001' && echo "$v
     else
         echo "versions: Frankenstein's older copy not joined by title" >&2; fail=1
     fi
+    if echo "$versions" | grep -q 'Matched to its catalog book by Cloud library'; then
+        echo "200 file linked by Cloud library listed"
+    else
+        echo "versions: Moby-Dick's PDF not joined through its link" >&2; fail=1
+    fi
 else
     echo "versions: Pride and Prejudice's files not listed" >&2; fail=1
 fi

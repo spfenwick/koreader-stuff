@@ -268,17 +268,29 @@ the two files as one book.
   of the file they have. Reading statistics too: other devices' reading
   of any version counts towards the book on this device (one book in
   KOReader's statistics, not one per file). If you've opened two versions
-  on one device, each keeps its own statistics there. Highlights,
+  on one device, each keeps its own statistics there. A file no device
+  can read the book ID of (deleted before book identity read it, or a PDF)
+  is joined by its exact title and authors instead, for statistics only,
+  when only one book has them. Highlights,
   bookmarks, the handmade table of contents and hidden flows are joined
   between versions with the same text (a copy rewritten after a new cover
   or tags), not between editions, where their positions wouldn't match.
 - **What isn't**: files whose titles and authors both differ, or a book
   in more than 8 files, are left apart (a UUID shared by mistake).
 
-- **What's read**: EPUBs opened on the device, once each (again if the file
-  changes), in the background after a sync's network step: a few tenths of
-  a second per book on a Kobo, for up to a minute per sync, so the first
-  sync or two after updating finish the job.
+- **What's read**: EPUBs opened on the device, and with Cloud library the
+  catalog books in its folder (opened or not), once each (again if the
+  file changes), in the background after a sync's network step: a few
+  tenths of a second per book on a Kobo, for up to a minute per sync, so
+  the first sync or two after updating finish the job. A book Cloud
+  library has just downloaded is read at once, so it opens with its other
+  versions' status and highlights.
+- **With Cloud library**: books it matched to the catalog by title, and
+  PDFs, are joined to that catalog book's other files (status, rating,
+  statistics; not highlights). Its cloud books show what your devices know:
+  the cloud badge gets a check, play or pause mark (finished, reading, on
+  hold), and the book's details say its status, rating, and when and on
+  which device it was last opened.
 - **What's sent**: per file, its fingerprint, its UUIDs, a fingerprint of
   its text (to tell a rewritten copy from another edition), and its title,
   authors and other identifiers such as the ISBN.

@@ -565,6 +565,72 @@ function BookStore:history()
     end)
 end
 
+--- The state of every book known by a UUID, as another plugin shows it
+-- for a book that may not be on this device (Cloud library's cloud books):
+-- { [uuid] = { status, rating, last_read, last_device } }. A UUID's book is
+-- every file whose identity facts name it, with their joined versions; each
+-- property is the winner across them. used = IdStore.usedFacts(conn).
+-- Only UUIDs with a status, rating or last read time are listed.
+function BookStore:statesByUuid(usedFacts)
+    local HIST = BookFormat.HISTORY
+    return self:_read(function(conn)
+        local carriers = {}
+        for md5, facts in pairs(usedFacts(conn)) do
+            for _, f in ipairs(facts) do
+                for uuid in (f.uuids or ""):gmatch("[^\n]+") do
+                    carriers[uuid] = carriers[uuid] or {}
+                    carriers[uuid][md5] = true
+                end
+            end
+        end
+        local members = {}
+        for _, r in ipairs(rows(conn:prepare("SELECT md5, grp FROM id_groups;"))) do
+            members[r[2]] = members[r[2]] or {}
+            table.insert(members[r[2]], r[1])
+        end
+        local grp = {}
+        for g, list in pairs(members) do for _, md5 in ipairs(list) do grp[md5] = g end end
+        local recs = {}
+        local stmt = conn:prepare([[
+            SELECT md5, prop, updated, device, deleted, hash, value FROM book_merged
+            WHERE prop IN ('status', 'rating', ?);]])
+        stmt:bind(HIST)
+        for _, r in ipairs(rows(stmt)) do
+            recs[r[1]] = recs[r[1]] or {}
+            recs[r[1]][r[2]] = { updated = num(r[3]), device = r[4], deleted = num(r[5]) == 1,
+                                 hash = r[6], value = r[7] }
+        end
+        local out = {}
+        for uuid, direct in pairs(carriers) do
+            local all = {}
+            for md5 in pairs(direct) do
+                all[md5] = true
+                for _, m in ipairs(grp[md5] and members[grp[md5]] or {}) do all[m] = true end
+            end
+            local best = {}
+            for md5 in pairs(all) do
+                for prop, m in pairs(recs[md5] or {}) do
+                    if BookStore.wins(m, best[prop]) then best[prop] = m end
+                end
+            end
+            local function value(prop)
+                local m = best[prop]
+                if not m or m.deleted then return nil end
+                return AnnFormat.decodeValue(m.value)
+            end
+            local st = {
+                status = value("status"),
+                rating = tonumber(value("rating")),
+                last_read = tonumber(value(HIST)),
+            }
+            if st.last_read then st.last_device = best[HIST].device end
+            if type(st.status) ~= "string" or not BookFormat.STATUSES[st.status] then st.status = nil end
+            if st.status or st.rating or st.last_read then out[uuid] = st end
+        end
+        return out
+    end)
+end
+
 --- path -> { md5, sig } for books whose MD5 was found for collections or
 -- the reading history.
 function BookStore:collFiles()

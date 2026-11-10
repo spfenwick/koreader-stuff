@@ -3,7 +3,8 @@ The catalog cache: one SQLite database per library (server and account).
 
 books        one row per catalog entry, keyed by the entry's UUID
 meta         key/value: server key, sync times and results
-local_files  what's known about files in the library folder (see matcher)
+local_files  what's known about files in the library folder (see matcher),
+             with the file's partial MD5 (KOReader's book ID, for OmniSync)
 
 Lists are stored as text joined with "\n" (authors, tags), as CoverBrowser
 does. formats is "type\tsize\thref" lines. match_title and match_author
@@ -14,7 +15,7 @@ so loading doesn't redo it for every book.
 local SQ3 = require("lua-ljsqlite3/init")
 local logger = require("logger")
 
-local SCHEMA_VERSION = 7
+local SCHEMA_VERSION = 8
 
 local SCHEMA = [[
 CREATE TABLE IF NOT EXISTS books (
@@ -57,7 +58,8 @@ CREATE TABLE IF NOT EXISTS local_files (
     size INTEGER,
     uuids TEXT,
     title TEXT,
-    authors TEXT
+    authors TEXT,
+    md5 TEXT
 );
 ]]
 
@@ -110,6 +112,8 @@ function Store.open(path, wal)
         -- 5 -> 6: cover_stale (a cover to download again, see upsertBooks).
         -- 6 -> 7: the cover's ETag and Last-Modified, and when it was last
         -- checked against the server (see coversToCheck).
+        -- 7 -> 8: local files' partial MD5 (for OmniSync; files without
+        -- one are read again by the next scan).
         local have = {}
         local stmt = conn:prepare("PRAGMA table_info(books);")
         for row in stmt:rows() do have[row[2]] = true end
@@ -118,6 +122,11 @@ function Store.open(path, wal)
                 { "cover_etag", "TEXT" }, { "cover_modified", "TEXT" }, { "cover_checked", "INTEGER" } }) do
             if not have[col[1]] then conn:exec("ALTER TABLE books ADD COLUMN " .. col[1] .. " " .. col[2] .. ";") end
         end
+        have = {}
+        stmt = conn:prepare("PRAGMA table_info(local_files);")
+        for row in stmt:rows() do have[row[2]] = true end
+        stmt:close()
+        if not have.md5 then conn:exec("ALTER TABLE local_files ADD COLUMN md5 TEXT;") end
     elseif version ~= 0 and version ~= SCHEMA_VERSION then
         -- A cache: start again rather than migrate.
         logger.info("CloudLibrary: catalog schema", version, "-> rebuilding")
@@ -452,11 +461,11 @@ end
 
 function Store:localFiles()
     local out = {}
-    local stmt = self.conn:prepare("SELECT path, mtime, size, uuids, title, authors FROM local_files;")
+    local stmt = self.conn:prepare("SELECT path, mtime, size, uuids, title, authors, md5 FROM local_files;")
     for row in stmt:rows() do
         out[row[1]] = {
             mtime = num(row[2]), size = num(row[3]), uuids = split(row[4]),
-            title = row[5], authors = split(row[6]),
+            title = row[5], authors = split(row[6]), md5 = row[7],
         }
     end
     stmt:close()
@@ -465,8 +474,8 @@ end
 
 function Store:setLocalFile(path, info)
     local stmt = self.conn:prepare([[INSERT OR REPLACE INTO local_files
-        (path, mtime, size, uuids, title, authors) VALUES (?, ?, ?, ?, ?, ?);]])
-    stmt:bind(path, info.mtime, info.size, join(info.uuids), info.title, join(info.authors)):step()
+        (path, mtime, size, uuids, title, authors, md5) VALUES (?, ?, ?, ?, ?, ?, ?);]])
+    stmt:bind(path, info.mtime, info.size, join(info.uuids), info.title, join(info.authors), info.md5):step()
     stmt:close()
 end
 

@@ -145,6 +145,7 @@ Virtual.canFetchCovers = nil -- function() -> true if covers can be downloaded n
 Virtual.requestCovers = nil  -- function(books) -> true if they'll be downloaded
 Virtual.coversBusy = nil     -- function() -> true while downloading
 Virtual.detailsButtons = nil -- function(id, full_book, close) -> ButtonDialog rows
+Virtual.stateText = nil      -- function(id) -> a line on the book's status from other devices, or nil
 
 --- "ready", "pending" (can be downloaded now) or "none".
 function Virtual.coverState(book)
@@ -308,6 +309,8 @@ function Virtual.showDetails(path)
         table.insert(lines, summary)
     end
     table.insert(lines, "")
+    local state = Virtual.stateText and Virtual.stateText(book.id)
+    if state then table.insert(lines, state) end
     table.insert(lines, _("In your cloud library, not on this device."))
     local dialog
     local function close() UIManager:close(dialog) end

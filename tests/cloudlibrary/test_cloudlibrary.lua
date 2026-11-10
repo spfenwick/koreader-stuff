@@ -499,7 +499,12 @@ do
     local store = Store.open(TMP .. "/db/m.sqlite3", false)
     eq(Matcher.scan(folder, store), 7, "scan reads every book file")
     eq(Matcher.scan(folder, store), 0, "unchanged files aren't read again")
-    local matched, unmatched = Matcher.match(folder, store:localFiles(), catalog)
+    local matched, unmatched, by_title = Matcher.match(folder, store:localFiles(), catalog)
+    local scanned = store:localFiles()
+    check(scanned[folder .. "/u.epub"].md5 and #scanned[folder .. "/u.epub"].md5 == 32
+        and scanned[folder .. "/Stranger.pdf"].md5, "each file's partial MD5 kept")
+    check(not by_title[catalog[1].id] and not by_title[catalog[7].id] and by_title[catalog[2].id]
+        and by_title[catalog[3].id] and by_title[catalog[5].id], "which books matched by title")
     eq(matched[catalog[1].id], folder .. "/renamed.epub", "matched by UUID")
     eq(matched[catalog[7].id], folder .. "/calibre9.epub", "matched by uuid:-prefixed UUID")
     eq(matched[catalog[2].id], folder .. "/John Roe, Ann Poe - Second_ A Story.pdf", "matched by file name")
@@ -605,7 +610,21 @@ do
     eq(store6:markCoversStale(), 1, "cover_stale column added")
     store6:setCoverUnchanged("old-1", 0)
     eq(#store6:coversToCheck(10, 1), 1, "6 -> 7: check columns added")
+    store6:setLocalFile("/k.epub", { mtime = 1, size = 2, uuids = { "u" } })
     store6:close()
+
+    -- 7 -> 8 adds local files' MD5; files without one are read again.
+    local conn7 = SQ3.open(path)
+    conn7:exec([[CREATE TABLE lf2 AS SELECT path, mtime, size, uuids, title, authors FROM local_files;
+        DROP TABLE local_files; ALTER TABLE lf2 RENAME TO local_files; PRAGMA user_version=7;]])
+    conn7:close()
+    local store8 = Store.open(path, false)
+    local kept = store8:localFiles()["/k.epub"]
+    eq(kept and kept.md5, nil, "7 -> 8: files kept, no MD5 yet")
+    store8:setLocalFile("/k.epub", { mtime = 1, size = 2, uuids = { "u" }, md5 = "abc" })
+    eq(store8:localFiles()["/k.epub"].md5, "abc", "7 -> 8: MD5 column added")
+    eq(store8:count(), 1, "7 -> 8 keeps books")
+    store8:close()
 end
 
 -- Covers ------------------------------------------------------------------------------
@@ -1130,6 +1149,32 @@ do
         end
     end
     check(dark > 10, "crossed-out cloud icon drawn")
+
+    -- Cloud books OmniSync knows a status for: the cloud with a mark cut out.
+    Badge.noncloud_enabled = false
+    menu.item_group[2].entry.path = "/lib/cloud-x.epub"
+    local state
+    Badge.cloudState = function(path) return path == "/lib/cloud-x.epub" and state or nil end
+    local function light()
+        bb:fill(Blitbuffer.COLOR_GRAY)
+        Badge.paintOn(menu, bb)
+        local n = 0
+        for yy = cy + math.floor(csize * 0.4), cy + math.floor(csize * 0.75) do
+            for xx = cx + math.floor(csize * 0.35), cx + math.floor(csize * 0.65) do
+                if bb:getPixel(xx, yy):getColor8().a > 200 then n = n + 1 end
+            end
+        end
+        return n
+    end
+    local plain = light()
+    for status, kind in pairs({ complete = "cloud-complete", reading = "cloud-reading", abandoned = "cloud-abandoned" }) do
+        state = status
+        check(Badge.kind("/lib/cloud-x.epub") == kind, "badge kind for " .. status)
+        check(light() > plain + 3, "mark cut out of the cloud for " .. status)
+    end
+    state = "something else"
+    check(Badge.kind("/lib/cloud-x.epub") == "cloud", "unknown status: plain cloud")
+    Badge.cloudState = nil
 
     -- ZenOS Home covers (cover_common.make_cover_widget): badged when built
     -- for Home, painted after the cover.
@@ -1778,6 +1823,63 @@ do
 
     package.loaded["common/db_bookinfo"] = nil
     Virtual.setCatalog(nil, {})
+end
+
+-- OmniSync: what it's told, and the state it gives back -------------------------------------
+
+do
+    local Library = require("cloudlibrary/library")
+    local Virtual = require("cloudlibrary/virtual")
+    local saved = { Library.catalog, Library.matched, Library.by_title, Library.file_info, Library.on_device }
+    local A_ID, B_ID, C_ID = "AAAAAAAA-0000-4000-8000-0000000000a1", "00000000-0000-4000-8000-0000000000b2",
+        "00000000-0000-4000-8000-0000000000c3"
+    Library.catalog = {
+        { id = A_ID, title = "By UUID", authors = { "Ann" } },
+        { id = B_ID, title = "By Title", authors = { "Bo", "Cy" } },
+        { id = C_ID, title = "A PDF", authors = {} },
+    }
+    Library.matched = { [A_ID] = "/lib/a.epub", [B_ID] = "/lib/b.epub", [C_ID] = "/lib/c.pdf" }
+    Library.by_title = { [B_ID] = true }
+    Library.file_info = { ["/lib/a.epub"] = { md5 = "ma" }, ["/lib/b.epub"] = { md5 = "mb" }, ["/lib/c.pdf"] = { md5 = "mc" } }
+    Library.on_device = { ["/lib/b.epub"] = true, ["/lib/a.epub"] = true, ["/lib/c.pdf"] = true }
+    eq(table.concat(Library.localFiles(), ","), "/lib/a.epub,/lib/b.epub,/lib/c.pdf", "local files for OmniSync")
+    local links = Library.links()
+    eq(#links, 2, "links: files that don't name the book's UUID")
+    eq(links[1].path .. " " .. links[1].md5 .. " " .. links[1].uuids[1] .. " " .. links[1].authors,
+        "/lib/b.epub mb " .. B_ID .. " Bo\nCy", "link: matched by title")
+    eq(links[2].path .. " " .. links[2].uuids[1], "/lib/c.pdf " .. C_ID, "link: a PDF")
+    Library.file_info["/lib/c.pdf"].md5 = nil
+    eq(#Library.links(), 1, "links: not until the file's MD5 is known")
+
+    -- Without OmniSync: no state.
+    package.loaded["omnisync/identity"] = nil
+    eq(Library.stateText(A_ID), nil, "no OmniSync: no state")
+    local listener
+    local states = {}
+    local THIS = {}
+    package.loaded["omnisync/identity"] = {
+        THIS_DEVICE = THIS,
+        available = function() return true end,
+        bookState = function(uuids) return states[uuids[1]] end,
+        onChanged = function(key, fn) listener = { key, fn } end,
+    }
+    eq(Library.stateText(A_ID), nil, "OmniSync knows nothing: no state")
+    check(listener and listener[1] == "cloudlibrary", "listens for OmniSync's changes")
+    local t = os.time{ year = 2026, month = 10, day = 5, hour = 12 }
+    states[A_ID] = { status = "complete", rating = 4, last_read = t, last_device = "Kobo Forma" }
+    eq(Library.stateText(A_ID), "Finished · ★★★★☆ · Last read 5 Oct 2026 on Kobo Forma", "state line")
+    states[A_ID] = { status = "abandoned", last_read = t, last_device = THIS }
+    eq(Library.stateText(A_ID), "On hold · Last read 5 Oct 2026 on this device", "on hold, on this device")
+    states[A_ID] = { status = "reading", last_read = t }
+    eq(Library.stateText(A_ID), "Reading · Last read 5 Oct 2026", "device not named")
+    states[A_ID] = { rating = 9 }
+    eq(Library.stateText(A_ID), nil, "nonsense rating: nothing to say")
+    states[A_ID] = { status = "reading" }
+    eq(Virtual.stateText(A_ID), "Reading", "the details sheet asks the library")
+    package.loaded["omnisync/identity"].bookState = function() error("boom") end
+    eq(Virtual.stateText(A_ID), nil, "an OmniSync error leaves the line out")
+    package.loaded["omnisync/identity"] = nil
+    Library.catalog, Library.matched, Library.by_title, Library.file_info, Library.on_device = unpack(saved)
 end
 
 -- The menu: groups in order, every entry explained.

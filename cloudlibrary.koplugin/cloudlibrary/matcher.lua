@@ -9,8 +9,9 @@ Matcher.scan(folder, store)     reads what it needs from new or changed
 Matcher.match(folder, files, books)
                                 cheap: uses scanned info, or the file name
                                 for files not scanned yet. Returns
-                                { [uuid] = path } and a list of local files
-                                that matched nothing.
+                                { [uuid] = path }, a list of local files
+                                that matched nothing, and { [uuid] = true }
+                                for books matched by title (2 and 3 below).
 
 How a file matches a book, in order:
 1. a UUID in the EPUB's identifiers equals the book's ID (Calibre writes
@@ -104,7 +105,7 @@ function Matcher.scan(folder, store)
     eachBookFile(folder, function(path, name, ext, attr)
         present[path] = true
         local cached = known[path]
-        if cached and cached.mtime == attr.modification and cached.size == attr.size then return end
+        if cached and cached.mtime == attr.modification and cached.size == attr.size and cached.md5 then return end
         local info
         if ext == "epub" or ext == "kepub" then
             local ok, res = pcall(readEpub, path)
@@ -112,6 +113,7 @@ function Matcher.scan(folder, store)
         end
         info = info or Matcher.fromFilename(name)
         info.mtime, info.size = attr.modification, attr.size
+        info.md5 = Matcher.partialMD5(path)
         store:setLocalFile(path, info)
         read = read + 1
     end)
@@ -125,7 +127,14 @@ function Matcher.scan(folder, store)
     return read, removed
 end
 
---- Returns { [uuid] = path }, { unmatched local paths }.
+--- KOReader's ID for a book file (util.partialMD5: a few KB read), or nil.
+function Matcher.partialMD5(path)
+    local ok, md5 = pcall(function() return require("util").partialMD5(path) end)
+    return ok and type(md5) == "string" and md5 or nil
+end
+
+--- Returns { [uuid] = path }, { unmatched local paths }, { [uuid] = true }
+-- for those matched by title.
 function Matcher.match(folder, files, books)
     local by_uuid, by_title_author, by_title = {}, {}, {}
     for _i, b in ipairs(books) do
@@ -138,19 +147,20 @@ function Matcher.match(folder, files, books)
             if by_title[t] == nil then by_title[t] = b.id else by_title[t] = false end
         end
     end
-    local matched, unmatched = {}, {}
+    local matched, unmatched, titled_ids = {}, {}, {}
     eachBookFile(folder, function(path, name, _ext, attr)
         local info = files and files[path]
         if not (info and info.mtime == attr.modification and info.size == attr.size) then
             info = Matcher.fromFilename(name)
         end
-        local id
+        local id, titled
         for _j, u in ipairs(info.uuids or {}) do
             id = by_uuid[u:lower()]
             if id then break end
         end
         local t = normalize(info.title)
         if not id and t ~= "" then
+            titled = true
             for _j, author in ipairs(info.authors or {}) do
                 id = by_title_author[t .. "\0" .. normalize(author)]
                 if id then break end
@@ -161,11 +171,12 @@ function Matcher.match(folder, files, books)
         end
         if id and not matched[id] then
             matched[id] = path
+            if titled then titled_ids[id] = true end
         else
             table.insert(unmatched, path)
         end
     end)
-    return matched, unmatched
+    return matched, unmatched, titled_ids
 end
 
 return Matcher

@@ -141,6 +141,7 @@ function OmniSync:init()
     end
     Plugin.onDone = function(status, run) self.showResult(status, run) end
     Plugin.installProgressHook()
+    Plugin.setupIdentity()
     if not started then
         started = true
         UIManager:scheduleIn(STARTUP_DELAY, function() self.trigger("start") end)

@@ -47,6 +47,10 @@ local BOOKS = {
     -- joined by title and authors.
     { key = "frank_old", title = "Frankenstein", authors = "Mary Wollstonecraft Shelley", pages = 300,
       kind = "rolling", uuid = nil },
+    -- A PDF of Moby-Dick, which Cloud library matched to the catalog book:
+    -- joined through a link record.
+    { key = "moby_pdf", title = "Moby Dick", authors = "Herman Melville", pages = 600, kind = "paging",
+      uuid = nil, link = "1a2b3c4d-0000-4000-8000-000000000002" },
 }
 for _, b in ipairs(BOOKS) do b.md5 = md5(b.key) end
 local by = {}
@@ -117,6 +121,7 @@ local plan = {
     { dev = 2, book = "origin", from = 70, to = 30 },
     { dev = 1, book = "dune", from = 25, to = 0 },
     { dev = 2, book = "frank_old", from = 110, to = 95 },
+    { dev = 2, book = "moby_pdf", from = 600, to = 590 },
 }
 local events = { {}, {} } -- per device: list of lines
 local books_used = { {}, {} }
@@ -287,6 +292,11 @@ for i, dev in ipairs(DEVICES) do
         local mine = (i == 1 and b.key ~= "pride2" and b.key ~= "origin") or (i == 2 and (b.key == "pride2" or b.key == "origin" or b.key == "moby"))
         if mine and b.uuid then
             body[#body + 1] = IdFormat.recordLine{ md5 = b.md5, src = "file", uuids = { b.uuid }, sig = md5(b.key .. "sig"),
+                title = b.title, authors = b.authors }
+            n = n + 1
+        end
+        if i == 2 and b.link then
+            body[#body + 1] = IdFormat.recordLine{ md5 = b.md5, src = "link", uuids = { b.link },
                 title = b.title, authors = b.authors }
             n = n + 1
         end

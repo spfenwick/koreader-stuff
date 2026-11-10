@@ -23,6 +23,7 @@ local CollSync = require("omnisync/collsync")
 local HistSync = require("omnisync/histsync")
 local Engine = require("omnisync/engine")
 local IdScan = require("omnisync/idscan")
+local Identity = require("omnisync/identity")
 local IdStore = require("omnisync/idstore")
 local Store = require("omnisync/store")
 
@@ -397,18 +398,43 @@ function Plugin.installProgressHook()
     return true
 end
 
+--- Book files in Cloud library's folder that are catalog books, when
+-- Cloud library is installed: { path, … }.
+local function cloudFiles()
+    local CloudLibrary = package.loaded["cloudlibrary/library"]
+    if type(CloudLibrary) ~= "table" or type(CloudLibrary.localFiles) ~= "function" then return {} end
+    local ok, list = pcall(CloudLibrary.localFiles)
+    if not ok then logger.warn("OmniSync: asking Cloud library failed:", list) end
+    return ok and type(list) == "table" and list or {}
+end
+
+--- Files Cloud library matched to a catalog book without the file naming
+-- the book's UUID (see omnisync/identity.lua).
+local function cloudLinks()
+    local CloudLibrary = package.loaded["cloudlibrary/library"]
+    if type(CloudLibrary) ~= "table" or type(CloudLibrary.links) ~= "function" then return {} end
+    local ok, list = pcall(CloudLibrary.links)
+    if not ok then logger.warn("OmniSync: asking Cloud library failed:", list) end
+    return ok and type(list) == "table" and list or {}
+end
+
 --- Book files to read for book identity: the EPUBs book data knows about
--- (books opened on this device), with the sidecar's MD5.
+-- (books opened on this device), with the sidecar's MD5, and those in
+-- Cloud library's folder (downloaded, maybe never opened: no MD5 yet).
 function Plugin.identityFiles()
     local lfs = require("libs/libkoreader-lfs")
-    local out = {}
-    for path, f in pairs(Plugin.bookStore():files()) do
-        if IdScan.handles(path) then
-            local attr = lfs.attributes(path)
-            if attr and attr.mode == "file" then
-                out[#out + 1] = { path = path, md5 = f.md5, size = attr.size, mtime = attr.modification }
-            end
+    local out, seen = {}, {}
+    local function add(path, md5)
+        if seen[path] or not IdScan.handles(path) then return end
+        seen[path] = true
+        local attr = lfs.attributes(path)
+        if attr and attr.mode == "file" then
+            out[#out + 1] = { path = path, md5 = md5, size = attr.size, mtime = attr.modification }
         end
+    end
+    for path, f in pairs(Plugin.bookStore():files()) do add(path, f.md5) end
+    for _, path in ipairs(cloudFiles()) do
+        if type(path) == "string" then add(path, nil) end
     end
     table.sort(out, function(a, b) return a.path < b.path end)
     return out
@@ -535,6 +561,7 @@ function Plugin.engine()
         id = {
             store = Plugin.idStore(),
             files = Plugin.identityFiles,
+            collect = function() Identity.recordLinks(cloudLinks()) end,
             scan = function(item)
                 -- In the subprocess.
                 return IdScan.scan(item.path, {
@@ -548,10 +575,36 @@ function Plugin.engine()
             Plugin.saveDeviceState()
         end,
         onDone = function(status, run)
+            if run and ((run.book_segments_imported or 0) > 0 or next(run.book_affected or {})
+                    or (run.id_segments_imported or 0) > 0 or (run.id_new_facts or 0) > 0
+                    or run.id_regrouped) then
+                Identity.changed()
+            end
             if Plugin.onDone then Plugin.onDone(status, run) end
         end,
     }
     return controller
+end
+
+--- Sets up what other plugins (Cloud library) are told about books, and
+-- can tell OmniSync (see omnisync/identity.lua).
+function Plugin.setupIdentity()
+    Identity.setup{
+        id_store = Plugin.idStore,
+        book_store = Plugin.bookStore,
+        device_id = Plugin.deviceId,
+        device_names = function() return Plugin.engine().status.device_names end,
+        files = function() return Plugin.bookStore():files() end,
+        handles = IdScan.handles,
+        scan = function(path)
+            return IdScan.scan(path, { md5 = require("ffi/sha2").md5, partialMD5 = require("util").partialMD5 })
+        end,
+        refresh = function()
+            Plugin.engine():refreshIdentity()
+            Identity.changed()
+        end,
+        logger = logger,
+    }
 end
 
 --- Clears the import record so the next sync imports every segment again.

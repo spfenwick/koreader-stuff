@@ -488,6 +488,28 @@ check(#reader.annotation.annotations == 6, "restored in the open book")
 check(not item("Removed highlights waiting"), "nothing held any more")
 package.loaded["apps/reader/readerui"].instance = { statistics = stats }
 
+-- Cloud library's files and matches.
+S.writeFile(TMP .. "/cloud-book.epub", "not really an epub")
+S.writeFile(TMP .. "/cloud-book.pdf", "%PDF")
+local U = "00000000-0000-4000-8000-0000000000aa"
+package.loaded["cloudlibrary/library"] = {
+    localFiles = function() return { TMP .. "/cloud-book.epub", TMP .. "/cloud-book.pdf", TMP .. "/gone.epub" } end,
+    links = function() return { { path = TMP .. "/cloud-book.pdf", md5 = "pdfmd5", uuids = { U }, title = "A PDF" } } end,
+}
+local files = {}
+for _, f in ipairs(P.identityFiles()) do files[f.path] = f end
+check(files[TMP .. "/cloud-book.epub"] and files[TMP .. "/cloud-book.epub"].md5 == nil
+    and not files[TMP .. "/cloud-book.pdf"] and not files[TMP .. "/gone.epub"],
+    "Cloud library's EPUBs read for their identity, not yet opened")
+P.engine().deps.id.collect()
+local Identity = require("omnisync/identity")
+check(Identity.available(), "identity set up for other plugins")
+local iconn = P.idStore():open()
+check(iconn:rowexec("SELECT count(*) FROM id_facts WHERE md5 = 'pdfmd5' AND src = 'link'") == 1,
+    "Cloud library's matches recorded as links")
+iconn:close()
+package.loaded["cloudlibrary/library"] = nil
+
 server.stop()
 -- Reset device ID
 item("Troubleshooting", "Reset device ID").callback()

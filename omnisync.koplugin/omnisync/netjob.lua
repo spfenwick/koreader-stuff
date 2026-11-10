@@ -48,6 +48,10 @@ rely on: a few seconds older than the server's clock) and the streams gone
 through completely, for the caller to record once the downloads are
 imported.
 
+params.named: { [device id] = name } of the devices already named. Up to
+MAX_NAME_FETCHES others have their meta.json read for their name
+(result.device_names).
+
 Downloads go to tmp_dir, each to a .part file renamed when complete.
 `report(result)` is called after each step that changes the result, so the
 caller can save it: if the subprocess is killed for taking too long, what
@@ -74,6 +78,7 @@ Result: { ok, error, stage, full_listed, uploaded = { name, size, etag,
           deleted = { [pack name] = segments deleted }, left = { [pack name]
           = its segments still there },
           folders = { [id] = { modified, reliable, complete = { [stream] = true } } },
+          device_names = { [id] = name } (devices not in params.named),
           own_modified, own_reliable, dates_confirmed, dates_unreliable,
           bytes_up, bytes_down, requests }
 (stream is "stats", "ann", "book" or "id").
@@ -88,6 +93,8 @@ local Pack = require("omnisync/pack")
 local NetJob = {}
 
 NetJob.DEVICES = "devices"
+--- Other devices' meta.json read per sync for their names.
+NetJob.MAX_NAME_FETCHES = 4
 
 --- A folder date is relied on only when it's at least this many seconds
 -- older than the server's clock: a segment moved in during the same second
@@ -245,6 +252,27 @@ function NetJob.run(params, transport, report)
     end
     table.sort(ids)
     result.devices = ids
+
+    -- Names of devices not named yet, from their meta.json (once each, a
+    -- few per sync): to say where a book was last read.
+    if params.named then
+        local asked = 0
+        for _, id in ipairs(ids) do
+            if id ~= own_id and not params.named[id] and asked < NetJob.MAX_NAME_FETCHES then
+                asked = asked + 1
+                local path = params.tmp_dir .. "/name-meta.json.part"
+                local ok = transport:get(NetJob.DEVICES .. "/" .. id .. "/meta.json", path)
+                local f = ok and io.open(path, "rb")
+                local meta = f and Codec.decode(f:read("*a"))
+                if f then f:close() end
+                os.remove(path)
+                if type(meta) == "table" and type(meta.deviceName) == "string" then
+                    result.device_names = result.device_names or {}
+                    result.device_names[id] = meta.deviceName:sub(1, 64)
+                end
+            end
+        end
+    end
 
     -- This device's own folder kept its date across the upload last time:
     -- dates on this server don't follow changes.

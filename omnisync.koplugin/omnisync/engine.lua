@@ -41,7 +41,8 @@ Everything KOReader-specific is passed in (`deps`), so tests can drive it:
                           { store (omnisync/idstore), files() -> { { path, md5,
                           size, mtime }, … } (book files to read, main process),
                           scan(item) -> info | nil, why (reads one, in the
-                          subprocess), max_records }
+                          subprocess), collect() (optional: record facts from
+                          elsewhere before sending), max_records }
     id_scan_seconds       seconds the subprocess may spend reading book files
                           after the network step (id_scan_seconds_interactive
                           when a user asked)
@@ -88,6 +89,35 @@ function Engine.new(deps)
 end
 
 --- Which streams opts asks for: stats, ann (booleans).
+
+--- Versions of a book joined or parted (new identity facts): brings the
+-- groups up to date, and book data and annotations apply anew. For a sync,
+-- and for a file read outside one (a fresh download). which = { book, ann }
+-- (false to leave that stream out). Returns the MD5s whose group changed,
+-- the book data MD5s affected and the annotations made pending (as
+-- AnnStore:regroup), or nil when the groups couldn't be updated.
+function Engine:refreshIdentity(which)
+    local d = self.deps
+    which = which or {}
+    local ok, changed = pcall(d.id.store.refreshGroups, d.id.store)
+    if not ok then
+        self.log.warn("StatSync: updating book versions failed:", changed)
+        return nil
+    end
+    local book_affected, ann_pending = {}, {}
+    if not next(changed) then return changed, book_affected, ann_pending end
+    if which.book ~= false and d.book and d.book.store.regroup then
+        local rok, all = pcall(d.book.store.regroup, d.book.store, changed)
+        if rok then book_affected = all
+        else self.log.warn("StatSync: applying book data to new versions failed:", all) end
+    end
+    if which.ann ~= false and d.ann and d.ann.store.regroup then
+        local aok, pending = pcall(d.ann.store.regroup, d.ann.store, changed)
+        if aok then ann_pending = pending
+        else self.log.warn("StatSync: applying annotations to new versions failed:", pending) end
+    end
+    return changed, book_affected, ann_pending
+end
 function Engine:_wants(opts)
     local a = self.deps.ann
     return opts.stats ~= false,
@@ -290,6 +320,11 @@ function Engine:_export(run)
     local id_params, scan_items, scan_seconds
     if run.ann and d.id then
         run.id = true
+        if d.id.collect then
+            -- Facts other plugins have for us (Cloud library's matches).
+            local cok, cerr = pcall(d.id.collect)
+            if not cok then self.log.warn("StatSync: book identity: collecting matches failed:", cerr) end
+        end
         run.id_pending_path = d.work_dir .. "/id-pending.jsonl"
         run.id_packed_path = run.id_pending_path .. ".zst"
         os.remove(run.id_pending_path)
@@ -380,6 +415,7 @@ function Engine:_export(run)
         rewrite_meta = run.meta_key ~= nil and self.status.meta_key ~= run.meta_key,
         folders = dates_known and self.status.folders or nil,
         own_check = dates_ok and self.status.own_check or nil,
+        named = self.status.device_names or {},
     }
     local result_path = run.result_path
     local makeTransport = d.makeTransport
@@ -449,6 +485,13 @@ function Engine:_collect(run)
         run.error = result.error or "network step failed"
     end
     run.devices = result.devices and #result.devices or nil
+    if type(result.device_names) == "table" and next(result.device_names) then
+        local names = self.status.device_names or {}
+        for id, name in pairs(result.device_names) do
+            if type(id) == "string" and type(name) == "string" then names[id] = name end
+        end
+        self.status.device_names = names
+    end
     run.missing_own = result.missing_own
     if result.full_listed and not run.killed then run.full_listed = d.now() end
     for _, e in ipairs(result.segment_errors or {}) do self.log.warn("StatSync:", e) end
@@ -720,29 +763,13 @@ function Engine:_finish(run)
         if not ok then self.log.warn("StatSync: refreshing statistics failed:", err) end
     end
     if run.id and d.id.store.refreshGroups then
-        -- Versions of a book joined or parted: their book data applies anew.
-        local ok, changed = pcall(d.id.store.refreshGroups, d.id.store)
-        if not ok then
-            self.log.warn("StatSync: updating book versions failed:", changed)
-        elseif next(changed) then
+        local changed, book_affected, ann_pending = self:refreshIdentity{
+            book = run.book and true or false, ann = run.ann and true or false }
+        if changed and next(changed) then
             run.id_regrouped = 0
             for _ in pairs(changed) do run.id_regrouped = run.id_regrouped + 1 end
-            if run.book and d.book.store.regroup then
-                local rok, all = pcall(d.book.store.regroup, d.book.store, changed)
-                if rok then
-                    for md5 in pairs(all) do run.book_affected[md5] = true end
-                else
-                    self.log.warn("StatSync: applying book data to new versions failed:", all)
-                end
-            end
-            if run.ann and d.ann.store.regroup then
-                local aok, pending = pcall(d.ann.store.regroup, d.ann.store, changed)
-                if aok then
-                    for id, a in pairs(pending) do run.ann_affected[id] = a end
-                else
-                    self.log.warn("StatSync: applying annotations to new versions failed:", pending)
-                end
-            end
+            for md5 in pairs(book_affected) do run.book_affected[md5] = true end
+            for id, a in pairs(ann_pending) do run.ann_affected[id] = a end
         end
     end
     local join_rules = d.store.JOIN_RULES or 1

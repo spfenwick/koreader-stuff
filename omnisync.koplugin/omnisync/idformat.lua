@@ -13,7 +13,10 @@ A record is a fact about a file, identified by its partial MD5:
     src      where the fact comes from: "file" (read from the file with
              this MD5), "sidecar" (this MD5 is a sidecar's, and the file now
              at its path is another one: UUIDs from that file, no sig),
-             "link" (from another plugin; reserved)
+             "link" (from another plugin: Cloud library matching a file
+             without the catalog book's UUID by its title). A link only
+             counts for an MD5 no file fact names, and when every link for
+             it names the same UUIDs (see idstore.lua)
     title, authors, ids (other identifiers: ISBN, calibre:<n>…): for
              display only
 
