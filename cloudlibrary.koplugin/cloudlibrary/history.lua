@@ -1,7 +1,7 @@
 --[[
 Cloud books in KOReader's reading history.
 
-OmniSync puts books read on other devices into the history. For a book
+Concordance puts books read on other devices into the history. For a book
 that isn't on this device it asks Library.pathForUuids, which gives the
 downloaded file or the book's cloud entry (its virtual path). This module
 keeps those entries working:
@@ -82,7 +82,7 @@ end
 
 --- Where this device has the catalog book with one of these UUIDs: its
 -- downloaded file, or its cloud entry. nil if none (or the catalog isn't
--- loaded). For OmniSync.
+-- loaded). For Concordance.
 function History.pathForUuids(uuids)
     if type(uuids) ~= "table" or not History.installed or not Guard.ok("history") then return nil end
     local ids = catalogIds()

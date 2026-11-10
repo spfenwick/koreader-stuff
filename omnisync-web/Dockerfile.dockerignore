@@ -1,6 +1,0 @@
-*
-!omnisync.koplugin/omnisync/
-!omnisync-web/requirements.txt
-!omnisync-web/ingest/
-!omnisync-web/app/
-**/__pycache__

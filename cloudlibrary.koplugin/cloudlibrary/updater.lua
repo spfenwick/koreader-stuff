@@ -3,9 +3,9 @@ Updates the plugin from its GitHub releases, with the updater shared by
 this repository's plugins (cloudlibrary/updatecore.lua, a copy of
 shared/updatecore.lua; see RELEASING.md).
 
-With OmniSync running, updates for both plugins are checked together
-there (omnisync/updates.lua): "Check for updates" runs that combined
-check, and the automatic check is left to OmniSync's.
+With Concordance running, updates for both plugins are checked together
+there (concordance/updates.lua): "Check for updates" runs that combined
+check, and the automatic check is left to Concordance's.
 --]]
 
 local _ = require("gettext")
@@ -19,13 +19,13 @@ local Updater = require("cloudlibrary/updatecore").new{
     log_prefix = "CloudLibrary:",
 }
 
---- Tells OmniSync it may run this plugin's automatic check.
-Updater.defers_to_omnisync = true
+--- Tells Concordance it may run this plugin's automatic check.
+Updater.defers_to_concordance = true
 
 local own_check = Updater.check
 
 function Updater.check(plugin, interactive)
-    local combined = package.loaded["omnisync/updates"]
+    local combined = package.loaded["concordance/updates"]
     if type(combined) == "table" and combined.active and combined.active() then
         if interactive then combined.check(true) end
         return

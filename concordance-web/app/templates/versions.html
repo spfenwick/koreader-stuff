@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Versions{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Books in more than one version <span class="count">{{ books | length }}</span></h1>
+</div>
+
+<p class="muted">
+  Files Concordance's book identity joined as one book, because they carry the same book ID (a UUID in the EPUB).
+  Status, rating, review and custom metadata are shared by every version.
+  A file no device has read (gone before book identity read it, or without a book ID, such as a PDF) joins the book with exactly its title and authors, for reading statistics only.
+  Files with the same text (the same letter below) also share their reading position, through KOReader's progress sync.
+</p>
+{% set unread = books | length - same - differ %}
+{% set parts = [] %}
+{% if same %}{% set _ = parts.append(same ~ ' with the same text in every file') %}{% endif %}
+{% if differ %}{% set _ = parts.append(differ ~ ' with different texts (other editions)') %}{% endif %}
+{% if unread %}{% set _ = parts.append(unread ~ " with a file whose text hasn't been read yet") %}{% endif %}
+{% if parts %}<p class="small muted">{{ parts | join(', ') | capitalize }}.</p>{% endif %}
+
+{% for book in books %}
+<section class="panel versions" id="{{ book.id }}">
+  <div class="panel-head">
+    <h2><a href="/book/{{ book.id }}">{{ book.title }}</a></h2>
+    {% if book.texts > 1 %}<span class="badge s-abandoned">{{ book.texts }} texts</span>
+    {% elif book.unread_texts %}<span class="badge s-unknown">Text not read</span>
+    {% else %}<span class="badge s-complete">Same text</span>{% endif %}
+  </div>
+  {% if book.authors %}<p class="byline small">{{ book.author_list | join(', ') }}</p>{% endif %}
+  <table>
+    <thead><tr>
+      <th scope="col">Title in the file</th><th scope="col">Partial MD5</th><th scope="col">Text</th>
+      <th scope="col">Reported by</th><th scope="col" class="num">Read</th><th scope="col" class="num">Highlights</th>
+    </tr></thead>
+    <tbody>
+    {% for e in book.editions %}
+    <tr>
+      <td>{{ e.title or '—' }}{% if 'sidecar' in e.sources and 'file' not in e.sources %}<div class="small muted">Kept by a book's settings after its file was replaced</div>{% endif %}{% if 'link' in e.sources and 'file' not in e.sources and 'sidecar' not in e.sources %}<div class="small muted">Matched to its catalog book by Cloud library (by title, or not an EPUB)</div>{% endif %}{% if e.by_title %}<div class="small muted">No device has read this file: joined by its title and authors, for reading statistics</div>{% endif %}</td>
+      <td><code>{{ e.md5 }}</code></td>
+      <td>{% if e.text %}<span class="chip" title="Body signature {{ e.sig[:12] }}…">{{ e.text }}</span>{% else %}<span class="muted" title="No device has read this file's text">—</span>{% endif %}</td>
+      <td>{% for d in e.reported_by | sort %}{{ device_names.get(d) or d }}{{ ', ' if not loop.last }}{% else %}<span class="muted">—</span>{% endfor %}</td>
+      <td class="num">{{ e.read_time | duration if e.read_time else '' }}</td>
+      <td class="num">{{ book.highlights | selectattr('md5', 'equalto', e.md5) | list | length or '' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted">Joined by {% for u in book.joined_by %}<code>{{ u }}</code>{{ ', ' if not loop.last }}{% else %}a chain of shared IDs{% endfor %}</p>
+</section>
+{% else %}
+<p class="empty">No book is known in more than one version yet. Versions appear here when devices that have a book's different files have synced highlights and books.</p>
+{% endfor %}
+{% endblock %}

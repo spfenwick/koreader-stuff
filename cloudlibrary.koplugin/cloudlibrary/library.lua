@@ -390,23 +390,23 @@ function Library.restoreMatched(changed)
 end
 
 --- Where this device has the catalog book with one of these UUIDs (its
--- file, or its cloud entry), or nil. Used by OmniSync for the history.
+-- file, or its cloud entry), or nil. Used by Concordance for the history.
 function Library.pathForUuids(uuids)
     return History.pathForUuids(uuids)
 end
 
--- OmniSync ------------------------------------------------------------------------
+-- Concordance ------------------------------------------------------------------------
 --
--- When OmniSync is installed, it tells us what other devices know about
+-- When Concordance is installed, it tells us what other devices know about
 -- catalog books (status, rating, last read: shown for cloud books), and we
--- tell it which files here are which catalog book. See OmniSync's
--- IDENTITY.md and omnisync/identity.lua.
+-- tell it which files here are which catalog book. See Concordance's
+-- IDENTITY.md and concordance/identity.lua.
 
 local identity_listening = false
 
---- OmniSync's identity module, once OmniSync has set it up, else nil.
+--- Concordance's identity module, once Concordance has set it up, else nil.
 function Library.identity()
-    local Identity = package.loaded["omnisync/identity"]
+    local Identity = package.loaded["concordance/identity"]
     if type(Identity) ~= "table" or type(Identity.available) ~= "function" or not Identity.available() then
         return nil
     end
@@ -426,7 +426,7 @@ function Library.redrawStates()
     end
 end
 
---- A cloud book's state from OmniSync: { status, rating, last_read,
+--- A cloud book's state from Concordance: { status, rating, last_read,
 -- last_device }, or nil.
 function Library.bookState(id)
     local Identity = type(id) == "string" and Library.identity()
@@ -434,7 +434,7 @@ function Library.bookState(id)
     return Identity.bookState({ id })
 end
 
---- The catalog books' files in the library folder (for OmniSync to read
+--- The catalog books' files in the library folder (for Concordance to read
 -- their identity, opened or not): { path, … }, sorted.
 function Library.localFiles()
     local out = {}
@@ -467,7 +467,7 @@ end
 local STATUS_TEXT = { complete = _("Finished"), reading = _("Reading"), abandoned = _("On hold") }
 
 --- A line for a cloud book's details sheet: "Finished · ★★★★☆ · Last read
--- 12 Oct 2026 on Kobo Forma", or nil when OmniSync knows nothing of it.
+-- 12 Oct 2026 on Kobo Forma", or nil when Concordance knows nothing of it.
 function Library.stateText(id)
     local st = Library.bookState(id)
     if not st then return nil end
@@ -493,7 +493,7 @@ function Library.stateText(id)
 end
 Virtual.stateText = function(id)
     local ok, text = pcall(Library.stateText, id)
-    if not ok then logger.warn("CloudLibrary: reading the book's state from OmniSync:", text) end
+    if not ok then logger.warn("CloudLibrary: reading the book's state from Concordance:", text) end
     return ok and text or nil
 end
 Badge.cloudState = function(path)
@@ -882,7 +882,7 @@ local scheduledCheck = Guard.task("jobs", backgroundCheck)
 --- The file browser opened: at startup, and again each time a book is closed.
 function Library.onFileManagerReady()
     local t_start = Timing.start()
-    Library.identity() -- listens for OmniSync's changes, once it's there
+    Library.identity() -- listens for Concordance's changes, once it's there
     local server, folder = Library.server(), Library.folder()
     -- Reopened (after reading): the cloud books are still loaded. The
     -- background check below reloads them if files changed.
@@ -979,7 +979,7 @@ function Library.downloaded(book, result, opts)
         local ok, err = pcall(ZenSource.downloaded, cloud_path, result.path)
         if not ok then logger.warn("CloudLibrary: redrawing views after a download:", err) end
     end
-    -- OmniSync reads the new file's identity before it's first opened, so
+    -- Concordance reads the new file's identity before it's first opened, so
     -- other versions' highlights, status... apply at once.
     local Identity = Library.identity()
     if Identity and type(Identity.fileAdded) == "function" then
@@ -1330,9 +1330,9 @@ function Library.menuEntry(plugin)
                 items[#items].separator = true
                 local Updater = require("cloudlibrary/updater")
                 local updates = Updater.menuItems(plugin)
-                local combined = package.loaded["omnisync/updates"]
+                local combined = package.loaded["concordance/updates"]
                 if type(combined) == "table" and combined.active and combined.active() then
-                    updates[1].help_text = _("Checks OmniSync too, with OmniSync's updater.")
+                    updates[1].help_text = _("Checks Concordance too, with Concordance's updater.")
                 end
                 for _i, item in ipairs(updates) do table.insert(items, item) end
             end

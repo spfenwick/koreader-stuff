@@ -4,7 +4,7 @@ The catalog cache: one SQLite database per library (server and account).
 books        one row per catalog entry, keyed by the entry's UUID
 meta         key/value: server key, sync times and results
 local_files  what's known about files in the library folder (see matcher),
-             with the file's partial MD5 (KOReader's book ID, for OmniSync)
+             with the file's partial MD5 (KOReader's book ID, for Concordance)
 
 Lists are stored as text joined with "\n" (authors, tags), as CoverBrowser
 does. formats is "type\tsize\thref" lines. match_title and match_author
@@ -112,7 +112,7 @@ function Store.open(path, wal)
         -- 5 -> 6: cover_stale (a cover to download again, see upsertBooks).
         -- 6 -> 7: the cover's ETag and Last-Modified, and when it was last
         -- checked against the server (see coversToCheck).
-        -- 7 -> 8: local files' partial MD5 (for OmniSync; files without
+        -- 7 -> 8: local files' partial MD5 (for Concordance; files without
         -- one are read again by the next scan).
         local have = {}
         local stmt = conn:prepare("PRAGMA table_info(books);")

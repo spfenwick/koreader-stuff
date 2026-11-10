@@ -1,33 +1,33 @@
-# Builds the OmniSync web image (omnisync-web/) and pushes it to the GitHub
+# Builds the Concordance web image (concordance-web/) and pushes it to the GitHub
 # Container Registry:
 #
-#   ghcr.io/<owner>/omnisync-web:latest            the newest build from main
-#   ghcr.io/<owner>/omnisync-web:omnisync-X.Y.Z    built with OmniSync X.Y.Z's code
-#   ghcr.io/<owner>/omnisync-web:sha-<commit>      every build
+#   ghcr.io/<owner>/concordance-web:latest            the newest build from main
+#   ghcr.io/<owner>/concordance-web:concordance-X.Y.Z    built with Concordance X.Y.Z's code
+#   ghcr.io/<owner>/concordance-web:sha-<commit>      every build
 #
 # Runs on pushes to main that change the web app or the plugin modules it
-# imports with, and by hand (Actions → OmniSync web image → Run workflow).
+# imports with, and by hand (Actions → Concordance web image → Run workflow).
 # Pull requests build and smoke-test the image without pushing it.
 #
-# The image is tested (omnisync-web/tests/smoke.sh: sample data, every page)
+# The image is tested (concordance-web/tests/smoke.sh: sample data, every page)
 # before anything is pushed, and built for amd64 and arm64.
 #
 # No git tags are made: release.yml treats tags named <name>-vX.Y.Z as plugin
 # releases.
-name: OmniSync web image
+name: Concordance web image
 
 on:
   push:
     branches: [main]
     paths:
-      - "omnisync-web/**"
-      - "omnisync.koplugin/omnisync/**"
-      - "omnisync.koplugin/_meta.lua"
+      - "concordance-web/**"
+      - "concordance.koplugin/concordance/**"
+      - "concordance.koplugin/_meta.lua"
       - ".github/workflows/web-image.yml"
   pull_request:
     paths:
-      - "omnisync-web/**"
-      - "omnisync.koplugin/omnisync/**"
+      - "concordance-web/**"
+      - "concordance.koplugin/concordance/**"
       - ".github/workflows/web-image.yml"
   workflow_dispatch:
 
@@ -40,7 +40,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/omnisync-web
+  IMAGE: ghcr.io/${{ github.repository_owner }}/concordance-web
 
 jobs:
   image:
@@ -48,12 +48,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: OmniSync version
+      - name: Concordance version
         id: version
         run: |
-          v=$(sed -n 's/^ *version = "\([0-9][0-9.]*\)".*/\1/p' omnisync.koplugin/_meta.lua)
+          v=$(sed -n 's/^ *version = "\([0-9][0-9.]*\)".*/\1/p' concordance.koplugin/_meta.lua)
           test -n "$v"
-          echo "omnisync=$v" >> "$GITHUB_OUTPUT"
+          echo "concordance=$v" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -65,25 +65,25 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=omnisync-${{ steps.version.outputs.omnisync }},enable={{is_default_branch}}
+            type=raw,value=concordance-${{ steps.version.outputs.concordance }},enable={{is_default_branch}}
             type=sha,format=long
           labels: |
-            org.opencontainers.image.title=OmniSync web
-            org.opencontainers.image.description=Browse the books, highlights and reading statistics OmniSync keeps on a WebDAV server
+            org.opencontainers.image.title=Concordance web
+            org.opencontainers.image.description=Browse the books, highlights and reading statistics Concordance keeps on a WebDAV server
 
       - name: Build for testing
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: omnisync-web/Dockerfile
+          file: concordance-web/Dockerfile
           platforms: linux/amd64
           load: true
-          tags: omnisync-web:test
+          tags: concordance-web:test
           cache-from: type=gha,scope=web-image
           cache-to: type=gha,scope=web-image,mode=max
 
       - name: Smoke test
-        run: omnisync-web/tests/smoke.sh omnisync-web:test
+        run: concordance-web/tests/smoke.sh concordance-web:test
 
       - name: Log in to ghcr.io
         if: github.event_name != 'pull_request'
@@ -98,7 +98,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: omnisync-web/Dockerfile
+          file: concordance-web/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

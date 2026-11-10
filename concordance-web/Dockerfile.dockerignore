@@ -1,0 +1,6 @@
+*
+!concordance.koplugin/concordance/
+!concordance-web/requirements.txt
+!concordance-web/ingest/
+!concordance-web/app/
+**/__pycache__

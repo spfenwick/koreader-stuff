@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% from "_macros.html" import book_card, highlight, spine %}
+{% block title %}Home{% endblock %}
+{% block content %}
+{% if not counts %}
+<section class="empty">
+  <h1>Nothing imported yet</h1>
+  <p>The first import is running, or Concordance's folder wasn't found. See <a href="/status">Status</a>.</p>
+</section>
+{% else %}
+<section class="tiles" aria-label="Reading time">
+  {% for label, value in tiles %}
+  <div class="tile"><div class="tile-label">{{ label }}</div><div class="tile-value">{{ value }}</div></div>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Last 12 months</h2><a href="/stats">All statistics</a></div>
+  <div class="chart-wrap">{{ calendar }}</div>
+  {{ legend }}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Pages per day</h2><span class="muted small">Last 2 weeks · {{ "{:,}".format(pages_total) }} pages</span></div>
+  <div class="chart-wrap" data-scroll-end>{{ pages_chart }}</div>
+</section>
+
+{% set mc = month_cal %}
+<section class="panel" id="month">
+  <div class="panel-head">
+    <h2>{{ mc.month.strftime("%B %Y") }}</h2>
+    <nav class="month-nav" aria-label="Month">
+      <a href="/?month={{ mc.prev.strftime('%Y-%m') }}#month">← {{ mc.prev.strftime("%b") }}</a>
+      {% if mc.next %}<a href="/?month={{ mc.next.strftime('%Y-%m') }}#month">{{ mc.next.strftime("%b") }} →</a>{% endif %}
+    </nav>
+  </div>
+  <table class="month">
+    <thead><tr>{% for n in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun") %}<th scope="col">{{ n }}</th>{% endfor %}</tr></thead>
+    <tbody>
+    {% for week in mc.weeks %}
+    <tr>
+      {% for cell in week %}
+      {% if cell %}{% set d, read = cell %}
+      <td class="{% if d == today %}today{% elif d > today %}future{% endif %}{% if read %} has-reading{% endif %}">
+        <div class="month-day">
+          {% if read %}<a href="/day/{{ d.isoformat() }}" aria-label="{{ d.strftime('%-d %B') }}: {{ read | length }} book{{ 's' if read | length != 1 }}">{{ d.day }}</a>{% else %}{{ d.day }}{% endif %}
+          {% if read %}<span class="month-pages">{{ read | sum(attribute=2) }}p</span>{% endif %}
+        </div>
+        {% if read %}
+        <ul class="month-books">
+          {% for b, t, p in read %}
+          <li><a href="/book/{{ b.id }}" data-tip="{{ b.title }} · {{ t | duration }}, {{ p }} page{{ 's' if p != 1 }}" aria-label="{{ b.title }}: {{ t | duration }}, {{ p }} pages">{{ spine(b) }}</a></li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </td>
+      {% else %}<td class="pad"></td>{% endif %}
+      {% endfor %}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% if reading %}
+<section>
+  <div class="panel-head"><h2>Reading now</h2><a href="/books?status=reading">All</a></div>
+  <div class="card-grid">{% for b in reading %}{{ book_card(b) }}{% endfor %}</div>
+</section>
+{% endif %}
+
+<div class="two-col">
+  <section>
+    <div class="panel-head"><h2>Recent highlights</h2><a href="/highlights">All {{ counts.highlights }}</a></div>
+    {% for a in highlights %}{{ highlight(a) }}{% else %}<p class="muted">No highlights yet.</p>{% endfor %}
+  </section>
+  <section>
+    <div class="panel-head"><h2>Recently opened</h2><a href="/books">All {{ counts.books }} books</a></div>
+    <ol class="plain-list">
+      {% for b in recent %}
+      <li><a href="/book/{{ b.id }}">{{ b.title }}</a> <span class="muted">{{ b.last_opened | when }}</span></li>
+      {% endfor %}
+    </ol>
+  </section>
+</div>
+{% endif %}
+{% endblock %}

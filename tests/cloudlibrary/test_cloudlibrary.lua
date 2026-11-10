@@ -1150,7 +1150,7 @@ do
     end
     check(dark > 10, "crossed-out cloud icon drawn")
 
-    -- Cloud books OmniSync knows a status for: the cloud with a mark cut out.
+    -- Cloud books Concordance knows a status for: the cloud with a mark cut out.
     Badge.noncloud_enabled = false
     menu.item_group[2].entry.path = "/lib/cloud-x.epub"
     local state
@@ -1536,7 +1536,7 @@ do
     eq(Library.pathForUuids({ "11111111-0000-4000-8000-000000000000", U2 }), down, "a downloaded book: its file")
     eq(Library.pathForUuids({ "11111111-0000-4000-8000-000000000000" }), nil, "not in the catalog")
 
-    -- A cloud entry, as OmniSync puts one in.
+    -- A cloud entry, as Concordance puts one in.
     ReadHistory.hist = {
         { time = 200, file = down, text = "Ann Author - Down.epub", dim = false, select_enabled = true },
         { time = 100, file = cloud1, text = "cloud.epub", dim = false, select_enabled = false },
@@ -1592,7 +1592,7 @@ do
     Library.load()
     check(ReadHistory:getIndexByFile(up) and not ReadHistory:getIndexByFile(cloud1), "downloaded: the file's entry")
     eq(ReadHistory.hist[ReadHistory:getIndexByFile(up) or 0].time, 100, "at the same time")
-    eq(Library.pathForUuids({ U1 }), up, "and OmniSync gets the file")
+    eq(Library.pathForUuids({ U1 }), up, "and Concordance gets the file")
 
     -- Deleted: back to the cloud entry, before the caller redraws (the
     -- reload after it hasn't run), with the entry in the middle of the
@@ -1825,7 +1825,7 @@ do
     Virtual.setCatalog(nil, {})
 end
 
--- OmniSync: what it's told, and the state it gives back -------------------------------------
+-- Concordance: what it's told, and the state it gives back -------------------------------------
 
 do
     local Library = require("cloudlibrary/library")
@@ -1842,7 +1842,7 @@ do
     Library.by_title = { [B_ID] = true }
     Library.file_info = { ["/lib/a.epub"] = { md5 = "ma" }, ["/lib/b.epub"] = { md5 = "mb" }, ["/lib/c.pdf"] = { md5 = "mc" } }
     Library.on_device = { ["/lib/b.epub"] = true, ["/lib/a.epub"] = true, ["/lib/c.pdf"] = true }
-    eq(table.concat(Library.localFiles(), ","), "/lib/a.epub,/lib/b.epub,/lib/c.pdf", "local files for OmniSync")
+    eq(table.concat(Library.localFiles(), ","), "/lib/a.epub,/lib/b.epub,/lib/c.pdf", "local files for Concordance")
     local links = Library.links()
     eq(#links, 2, "links: files that don't name the book's UUID")
     eq(links[1].path .. " " .. links[1].md5 .. " " .. links[1].uuids[1] .. " " .. links[1].authors,
@@ -1851,20 +1851,20 @@ do
     Library.file_info["/lib/c.pdf"].md5 = nil
     eq(#Library.links(), 1, "links: not until the file's MD5 is known")
 
-    -- Without OmniSync: no state.
-    package.loaded["omnisync/identity"] = nil
-    eq(Library.stateText(A_ID), nil, "no OmniSync: no state")
+    -- Without Concordance: no state.
+    package.loaded["concordance/identity"] = nil
+    eq(Library.stateText(A_ID), nil, "no Concordance: no state")
     local listener
     local states = {}
     local THIS = {}
-    package.loaded["omnisync/identity"] = {
+    package.loaded["concordance/identity"] = {
         THIS_DEVICE = THIS,
         available = function() return true end,
         bookState = function(uuids) return states[uuids[1]] end,
         onChanged = function(key, fn) listener = { key, fn } end,
     }
-    eq(Library.stateText(A_ID), nil, "OmniSync knows nothing: no state")
-    check(listener and listener[1] == "cloudlibrary", "listens for OmniSync's changes")
+    eq(Library.stateText(A_ID), nil, "Concordance knows nothing: no state")
+    check(listener and listener[1] == "cloudlibrary", "listens for Concordance's changes")
     local t = os.time{ year = 2026, month = 10, day = 5, hour = 12 }
     states[A_ID] = { status = "complete", rating = 4, last_read = t, last_device = "Kobo Forma" }
     eq(Library.stateText(A_ID), "Finished · ★★★★☆ · Last read 5 Oct 2026 on Kobo Forma", "state line")
@@ -1876,9 +1876,9 @@ do
     eq(Library.stateText(A_ID), nil, "nonsense rating: nothing to say")
     states[A_ID] = { status = "reading" }
     eq(Virtual.stateText(A_ID), "Reading", "the details sheet asks the library")
-    package.loaded["omnisync/identity"].bookState = function() error("boom") end
-    eq(Virtual.stateText(A_ID), nil, "an OmniSync error leaves the line out")
-    package.loaded["omnisync/identity"] = nil
+    package.loaded["concordance/identity"].bookState = function() error("boom") end
+    eq(Virtual.stateText(A_ID), nil, "a Concordance error leaves the line out")
+    package.loaded["concordance/identity"] = nil
     Library.catalog, Library.matched, Library.by_title, Library.file_info, Library.on_device = unpack(saved)
 end
 

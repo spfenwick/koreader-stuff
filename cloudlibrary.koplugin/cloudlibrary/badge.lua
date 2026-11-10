@@ -1,7 +1,7 @@
 --[[
 Cover badges, in a white circle on the bottom-right corner of the cover:
 - cloud: a cloud on books that are only in the cloud library (default on),
-  with a check mark, play or pause mark cut out when OmniSync says the
+  with a check mark, play or pause mark cut out when Concordance says the
   book is finished, being read or on hold on another device;
 - local: a check mark on local books that are in the catalog (default off);
 - noncloud: a crossed-out cloud on books in the library folder that aren't

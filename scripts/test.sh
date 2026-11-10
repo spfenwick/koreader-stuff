@@ -20,16 +20,16 @@ cd "$repo_dir"
     knuthplass.koplugin/knuthplass_loader.lua \
     knuthplass.koplugin/knuthplass_updatecore.lua \
     shared/updatecore.lua \
-    omnisync.koplugin/_meta.lua \
-    omnisync.koplugin/main.lua \
-    omnisync.koplugin/omnisync/*.lua \
+    concordance.koplugin/_meta.lua \
+    concordance.koplugin/main.lua \
+    concordance.koplugin/concordance/*.lua \
     cloudlibrary.koplugin/_meta.lua \
     cloudlibrary.koplugin/main.lua \
     cloudlibrary.koplugin/cloudlibrary/*.lua
 "$lua_bin" tests/test_updatecore.lua
 "$lua_bin" tests/test_plugin.lua
-"$lua_bin" tests/test_omnisync_settings.lua
-# The rest of omnisync.koplugin's tests need KOReader's sources and rclone:
-# scripts/test-omnisync.sh
+"$lua_bin" tests/test_concordance_settings.lua
+# The rest of concordance.koplugin's tests need KOReader's sources and rclone:
+# scripts/test-concordance.sh
 # cloudlibrary.koplugin's tests need a KOReader emulator build:
 # tests/cloudlibrary/run_tests.sh
