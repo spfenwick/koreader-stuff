@@ -1,8 +1,9 @@
 # Book identity across file versions (plan)
 
-Status: steps 1 to 3 built: Cloud library's matcher fix, the identity
-stream (2026-11-06), and book data joining (2026-11-08); and step 7,
-progress across versions (2026-11-10). Steps 4 to 6 are a plan. Sections below say where the build
+Status: steps 1 to 4 built: Cloud library's matcher fix, the identity
+stream (2026-11-06), book data joining (2026-11-08) and statistics
+joining (2026-11-10); and step 7, progress across versions (2026-11-10).
+Steps 5 and 6 are a plan. Sections below say where the build
 differs from the plan.
 
 ## The problem
@@ -200,6 +201,27 @@ With identity:
 - Totals then come out right with KOReader's own queries, since they're
   per book row.
 
+As built (`Store.joinVersionsIn`, "Versions of a book" in
+`omnisync/store.lua`):
+
+- The row a book's readings go to: the most recently opened row this
+  device uses for any of its versions; for a book only known from other
+  devices, the most recently opened of the rows made for them.
+- Only rows made for other devices' readings (`foreign_books`, untouched
+  by KOReader since) are emptied into it and removed. Rows KOReader uses
+  here stay, which is narrower than the plan: with two versions opened on
+  one device, each keeps its own row (the reader shows the open file's),
+  and imports for a version with a row of its own go there. The open
+  book's rows are never removed.
+- On import, a version with no row of its own here goes straight to the
+  book's row, so no row is made for it. The readings are marked exported
+  under the row's MD5 as well as their own.
+- After the groups change (and once, on the first sync of this version,
+  for the groups already there), `Store:joinVersions` folds the rows made
+  before the link.
+- The web app's ingester keeps a row per file (`join_versions = false`):
+  it gathers versions itself, and shows each file's time.
+
 Caveat: `page` numbers are only comparable if the two files paginate
 alike; KOReader rescales by `book.pages` anyway, and statistics are
 already approximate across devices (DESIGN.md, item 8).
@@ -288,7 +310,7 @@ Cloud library then:
    than one version, books with different editions under one ID, and
    groups held back by the guards.
 3. Book data joining (level 1). **Built** (2026-11-08).
-4. Statistics joining, including the late-link move.
+4. Statistics joining, including the late-link move. **Built** (2026-11-10).
 5. Annotations, TOC and flows joining (level 2).
 6. Cloud library: links, `bookState`, badges and details.
 7. Progress across versions. **Built** (2026-11-10), before 4 to 6.

@@ -265,8 +265,11 @@ the two files as one book.
 
 - **What's joined**: status, rating, review and custom metadata. Finish a
   book on one device and it's finished on the others, whichever version
-  of the file they have. Highlights, the handmade table of contents and
-  reading statistics aren't joined yet.
+  of the file they have. Reading statistics too: other devices' reading
+  of any version counts towards the book on this device (one book in
+  KOReader's statistics, not one per file). If you've opened two versions
+  on one device, each keeps its own statistics there. Highlights and the
+  handmade table of contents aren't joined yet.
 - **What isn't**: files whose titles and authors both differ, or a book
   in more than 8 files, are left apart (a UUID shared by mistake).
 

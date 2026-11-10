@@ -73,14 +73,26 @@ local STATE_SCHEMA = [[
 
 local function num(v) return v ~= nil and tonumber(v) or nil end
 
---- opts: sq3 (lua-ljsqlite3 module), stats_path, state_path, logger (optional)
+--- opts: sq3 (lua-ljsqlite3 module), stats_path, state_path, logger (optional),
+-- join_versions (default true: readings of a book's other versions go into
+-- the row this device keeps for it, see joinVersions; false keeps a row per
+-- file), open_md5 (optional, function -> the open book's MD5: its rows are
+-- never removed)
 function Store.new(opts)
     local self = setmetatable({}, Store)
     self.SQ3 = assert(opts.sq3, "sq3 module")
     self.stats_path = assert(opts.stats_path)
     self.state_path = assert(opts.state_path)
     self.log = opts.logger
+    self.join_versions = opts.join_versions ~= false
+    self.open_md5 = opts.open_md5
     return self
+end
+
+function Store:_openMd5()
+    if not self.open_md5 then return nil end
+    local ok, md5 = pcall(self.open_md5)
+    return ok and md5 or nil
 end
 
 function Store:_open(path)
@@ -423,6 +435,41 @@ local function metaKey(b)
     return table.concat({ str(b.title), str(b.authors), str(b.series), str(b.language), str(b.pages) }, "\0")
 end
 
+--- Moves book row `from`'s events into row `to`. A key on both sides
+-- follows the merge rule. Returns the events that were in `from`
+-- ({ { page, start, dur }, … }), empty if none.
+local function mergeRow(conn, from, to)
+    local q_events = conn:prepare("SELECT page, start_time, duration, total_pages FROM page_stat_data WHERE id_book = ?;")
+    local events = {}
+    q_events:bind(from)
+    local e = q_events:step()
+    while e do
+        events[#events + 1] = { num(e[1]), num(e[2]), num(e[3]), num(e[4]) or 0 }
+        e = q_events:step()
+    end
+    q_events:close()
+    if #events == 0 then return events end
+    local q_event = conn:prepare("SELECT duration, total_pages FROM page_stat_data WHERE id_book = ? AND page = ? AND start_time = ?;")
+    local upd_event = conn:prepare("UPDATE page_stat_data SET duration = ?, total_pages = ? WHERE id_book = ? AND page = ? AND start_time = ?;")
+    local del_event = conn:prepare("DELETE FROM page_stat_data WHERE id_book = ? AND page = ? AND start_time = ?;")
+    for _, ev in ipairs(events) do
+        -- Keys the target already has: keep the winner there, drop this copy.
+        local page, start, dur, tp = ev[1], ev[2], ev[3], ev[4]
+        local t = q_event:reset():bind(to, page, start):step()
+        if t then
+            local t_dur, t_tp = num(t[1]), num(t[2]) or 0
+            if dur > t_dur or (dur == t_dur and tp > t_tp) then
+                upd_event:reset():bind(dur, tp, to, page, start):step()
+            end
+            del_event:reset():bind(from, page, start):step()
+        end
+    end
+    local move = conn:prepare("UPDATE page_stat_data SET id_book = ? WHERE id_book = ?;")
+    move:bind(to, from):step()
+    for _, st in ipairs({ q_event, upd_event, del_event, move }) do st:close() end
+    return events
+end
+
 --- Gathers each book's events into one row. KOReader makes a new book row
 -- when a file's title or authors change, so one md5 can have several rows,
 -- and how the events are split between them differs from device to device.
@@ -443,11 +490,6 @@ function Store.consolidate(conn, affected)
     q_md5s:close()
     if #md5s == 0 then return end
     local q_rows = conn:prepare("SELECT id FROM book WHERE md5 = ? ORDER BY last_open DESC, id ASC;")
-    local q_events = conn:prepare("SELECT page, start_time, duration, total_pages FROM page_stat_data WHERE id_book = ?;")
-    local q_event = conn:prepare("SELECT duration, total_pages FROM page_stat_data WHERE id_book = ? AND page = ? AND start_time = ?;")
-    local upd_event = conn:prepare("UPDATE page_stat_data SET duration = ?, total_pages = ? WHERE id_book = ? AND page = ? AND start_time = ?;")
-    local del_event = conn:prepare("DELETE FROM page_stat_data WHERE id_book = ? AND page = ? AND start_time = ?;")
-    local move = conn:prepare("UPDATE page_stat_data SET id_book = ? WHERE id_book = ?;")
     for _, md5 in ipairs(md5s) do
         local ids = {}
         q_rows:reset():bind(md5)
@@ -458,34 +500,111 @@ function Store.consolidate(conn, affected)
         end
         local target = ids[1]
         for i = 2, #ids do
-            local id = ids[i]
-            -- Keys the target already has: keep the winner there, drop this copy.
-            local events = {}
-            q_events:reset():bind(id)
-            local e = q_events:step()
-            while e do
-                events[#events + 1] = { num(e[1]), num(e[2]), num(e[3]), num(e[4]) or 0 }
-                e = q_events:step()
-            end
-            if #events > 0 then
-                for _, ev in ipairs(events) do
-                    local page, start, dur, tp = ev[1], ev[2], ev[3], ev[4]
-                    local t = q_event:reset():bind(target, page, start):step()
-                    if t then
-                        local t_dur, t_tp = num(t[1]), num(t[2]) or 0
-                        if dur > t_dur or (dur == t_dur and tp > t_tp) then
-                            upd_event:reset():bind(dur, tp, target, page, start):step()
-                        end
-                        del_event:reset():bind(id, page, start):step()
-                    end
-                end
-                move:reset():bind(target, id):step()
-                affected[id] = true
+            if #mergeRow(conn, ids[i], target) > 0 then
+                affected[ids[i]] = true
                 affected[target] = true
             end
         end
     end
-    for _, s in ipairs({ q_rows, q_events, q_event, upd_event, del_event, move }) do s:close() end
+    q_rows:close()
+end
+
+-- Versions of a book ---------------------------------------------------------
+--
+-- The book identity's joined groups (id_groups in the state database, kept
+-- by idstore.lua) say which MD5s are one book. Readings stay under the MD5
+-- they were made with on the server; on this device, the readings of a
+-- book's versions gather in one row (see IDENTITY.md, Statistics):
+--
+-- - the row they go to: the most recently opened row this device uses for
+--   any of the versions, else (a book only known from other devices) the
+--   most recently opened of the rows made for them;
+-- - rows made only for other devices' readings (foreign_books, untouched
+--   by KOReader since) are emptied into it and removed. Rows KOReader uses
+--   here stay: with two versions opened on this device, each keeps its own
+--   (the reader shows the open file's row), and imports for a version
+--   with a row of its own go there;
+-- - readings that join a row of another MD5 are marked exported under that
+--   MD5 too, so they're never sent as this device's own.
+
+--- md5 -> { md5, … } (its group, sorted), for MD5s in joined groups.
+local function loadGroups(state)
+    local has = state:rowexec("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'id_groups';")
+    if num(has) == 0 then return {} end
+    local of, by = {}, {}
+    local stmt = state:prepare("SELECT md5, grp FROM id_groups ORDER BY grp, md5;")
+    local r = stmt:step()
+    while r do
+        local md5, grp = r[1], r[2]
+        by[grp] = by[grp] or {}
+        table.insert(by[grp], md5)
+        of[md5] = by[grp]
+        r = stmt:step()
+    end
+    stmt:close()
+    return of
+end
+
+--- The rows of these MD5s, the one their readings go to first:
+-- { { id, md5, last_open, foreign }, … }. now_foreign: rows made in this
+-- import, not yet in foreign_books.
+local function versionRows(stats, state, md5s, now_foreign)
+    local q_rows = stats:prepare("SELECT id, last_open FROM book WHERE md5 = ?;")
+    local q_foreign = state:prepare("SELECT md5, last_open FROM foreign_books WHERE id_book = ?;")
+    local out = {}
+    for _, md5 in ipairs(md5s) do
+        q_rows:reset():bind(md5)
+        local r = q_rows:step()
+        while r do
+            local row = { id = num(r[1]), md5 = md5, last_open = num(r[2]) }
+            local f = q_foreign:reset():bind(row.id):step()
+            row.foreign = (now_foreign and now_foreign[row.id] ~= nil)
+                or (f ~= nil and f[1] == md5 and num(f[2]) == row.last_open)
+            out[#out + 1] = row
+            r = q_rows:step()
+        end
+    end
+    q_rows:close()
+    q_foreign:close()
+    table.sort(out, function(a, b)
+        if a.foreign ~= b.foreign then return not a.foreign end
+        if (a.last_open or 0) ~= (b.last_open or 0) then return (a.last_open or 0) > (b.last_open or 0) end
+        return a.id < b.id
+    end)
+    return out
+end
+
+--- Empties the rows made for other devices' readings of a book's versions
+-- into the row its readings go to (see above). Adds the ids it changed to
+-- `affected`; returns the number of rows removed. keep_md5: the open
+-- book's MD5 (its rows stay).
+function Store.joinVersionsIn(stats, state, affected, keep_md5)
+    local groups = loadGroups(state)
+    local done, removed = {}, 0
+    local up = state:prepare(UPSERT_EXPORTED)
+    local del_book = stats:prepare("DELETE FROM book WHERE id = ?;")
+    local del_foreign = state:prepare("DELETE FROM foreign_books WHERE id_book = ?;")
+    for _, group in pairs(groups) do
+        if not done[group] then
+            done[group] = true
+            local rows = versionRows(stats, state, group)
+            local target = rows[1]
+            for i = 2, #rows do
+                local r = rows[i]
+                if r.foreign and r.md5 ~= keep_md5 then
+                    for _, ev in ipairs(mergeRow(stats, r.id, target.id)) do
+                        up:reset():bind(target.md5, ev[1], ev[2], ev[3]):step()
+                    end
+                    del_book:reset():bind(r.id):step()
+                    del_foreign:reset():bind(r.id):step()
+                    affected[target.id] = true
+                    removed = removed + 1
+                end
+            end
+        end
+    end
+    for _, st in ipairs({ up, del_book, del_foreign }) do st:close() end
+    return removed
 end
 
 --- Recomputes book.total_read_pages/total_read_time the way insertDB() does.
@@ -500,9 +619,11 @@ end
 
 -- Merges one parsed segment into the open stats and state connections,
 -- inside transactions the caller opened. Returns the summary, or raises.
-local function mergeSegment(stats, state, path)
+local function mergeSegment(stats, state, path, opts)
+    opts = opts or {}
     local summary = { events = 0, inserted = 0, updated = 0, books_new = 0, books_updated = 0, affected = {} }
     local now_foreign = {}
+    local groups = opts.join and loadGroups(state) or {}
 
     local q_ids = stats:prepare("SELECT id, title, authors, series, language, pages, last_open FROM book WHERE md5 = ? ORDER BY last_open DESC, id ASC;")
     local q_foreign = state:prepare("SELECT md5, last_open FROM foreign_books WHERE id_book = ?;")
@@ -544,6 +665,25 @@ local function mergeSegment(stats, state, path)
     local function onBook(rec)
         local md5 = rec.md5
         local rows = localRows(md5)
+        -- A version of a book with no row of its own that KOReader uses:
+        -- its readings go to the book's row (another version's).
+        local group = groups[md5]
+        if group then
+            local own = false
+            for _, r in ipairs(rows) do
+                if not (now_foreign[r.id] or isUntouchedForeign(r, md5)) then own = true break end
+            end
+            if not own then
+                local vrows = versionRows(stats, state, group, now_foreign)
+                local target = vrows[1]
+                if target and target.md5 ~= md5 then
+                    local ids = {}
+                    for i, r in ipairs(vrows) do ids[i] = r.id end
+                    books[md5] = { target = target.id, ids = ids, target_md5 = target.md5 }
+                    return
+                end
+            end
+        end
         if #rows == 0 then
             ins_book:reset():bind(rec.title or "N/A", rec.authors or "N/A", rec.last_open, rec.pages,
                 rec.series or "N/A", rec.language or "N/A", md5):step()
@@ -605,6 +745,10 @@ local function mergeSegment(stats, state, path)
             summary.affected[found_id] = true
         end
         up_exported:reset():bind(e.md5, e.page, e.start, e.dur):step()
+        if b.target_md5 then
+            -- Under the row's MD5 too, or it would go out as this device's.
+            up_exported:reset():bind(b.target_md5, e.page, e.start, e.dur):step()
+        end
     end
 
     local header, err = Codec.readSegment(path, { book = onBook, event = onEvent })
@@ -619,9 +763,42 @@ local function mergeSegment(stats, state, path)
     end
     set_foreign:close()
     if not header then return nil, err end
+    if opts.join then
+        summary.joined = Store.joinVersionsIn(stats, state, summary.affected, opts.keep_md5)
+    end
     Store.consolidate(stats, summary.affected)
     Store.recomputeTotals(stats, summary.affected)
     return summary
+end
+
+--- Gathers the readings of each book's versions (see Versions of a book),
+-- after the groups changed. Returns { removed (rows), affected (ids) }, or
+-- nil and an error.
+function Store:joinVersions()
+    if not self.join_versions then return { removed = 0, affected = {} } end
+    local stats = self:openStats()
+    if not stats then return { removed = 0, affected = {} } end -- statistics not in use
+    local state = self:openState()
+    local affected = {}
+    local keep = self:_openMd5()
+    local ok, removed = pcall(function()
+        stats:exec("BEGIN IMMEDIATE;")
+        state:exec("BEGIN IMMEDIATE;")
+        local n = Store.joinVersionsIn(stats, state, affected, keep)
+        Store.consolidate(stats, affected)
+        Store.recomputeTotals(stats, affected)
+        return n
+    end)
+    if ok then
+        local cok, cerr = pcall(stats.exec, stats, "COMMIT;")
+        if cok then cok, cerr = pcall(state.exec, state, "COMMIT;") end
+        if not cok then ok, removed = false, cerr end
+    end
+    if not ok then rollback(stats); rollback(state) end
+    stats:close()
+    state:close()
+    if not ok then return nil, tostring(removed) end
+    return { removed = removed, affected = affected }
 end
 
 --- Imports one downloaded segment. Both databases are written in their own
@@ -644,7 +821,8 @@ function Store:importSegment(path, device_id, name, size, etag, now)
         local clean_row = q_clean:step()
         q_clean:close()
         local was_clean = clean_row and clean_row[1] == fingerprint(stats)
-        local s, e = mergeSegment(stats, state, path)
+        local s, e = mergeSegment(stats, state, path,
+            { join = self.join_versions, keep_md5 = self.join_versions and self:_openMd5() or nil })
         if not s then return nil, e end
         state:prepare(INSERT_SEEN):bind(device_id, name, size, etag, now, s.events):step()
         if was_clean then

@@ -36,7 +36,7 @@ export STATSYNC_TMP
 
 what=${1:-all}
 case "$what" in
-    unit) "$lua_bin" tests/test_omnisync.lua && "$lua_bin" tests/test_omnisync_ann.lua && "$lua_bin" tests/test_omnisync_book.lua && "$lua_bin" tests/test_omnisync_coll.lua && "$lua_bin" tests/test_omnisync_hist.lua && "$lua_bin" tests/test_omnisync_id.lua && "$lua_bin" tests/test_omnisync_updates.lua ;;
+    unit) "$lua_bin" tests/test_omnisync.lua && "$lua_bin" tests/test_omnisync_ann.lua && "$lua_bin" tests/test_omnisync_book.lua && "$lua_bin" tests/test_omnisync_coll.lua && "$lua_bin" tests/test_omnisync_hist.lua && "$lua_bin" tests/test_omnisync_id.lua && "$lua_bin" tests/test_omnisync_updates.lua && "$lua_bin" tests/test_omnisync_versions.lua ;;
     bench) "$lua_bin" tests/bench_omnisync.lua ;;
     *)
         "$lua_bin" tests/test_omnisync.lua
@@ -46,6 +46,7 @@ case "$what" in
         "$lua_bin" tests/test_omnisync_hist.lua
         "$lua_bin" tests/test_omnisync_id.lua
         "$lua_bin" tests/test_omnisync_updates.lua
+        "$lua_bin" tests/test_omnisync_versions.lua
         "$lua_bin" tests/test_omnisync_integration.lua
         "$lua_bin" tests/test_omnisync_plugin.lua
         ;;

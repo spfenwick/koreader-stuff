@@ -229,7 +229,14 @@ end
 
 local function makeStore()
     local p = paths()
-    return Store.new{ sq3 = require("lua-ljsqlite3/init"), stats_path = p.stats, state_path = p.state, logger = logger }
+    return Store.new{ sq3 = require("lua-ljsqlite3/init"), stats_path = p.stats, state_path = p.state, logger = logger,
+        -- The open book's statistics rows are KOReader's: never removed.
+        open_md5 = function()
+            local ok, ReaderUI = pcall(require, "apps/reader/readerui")
+            local ui = ok and ReaderUI.instance
+            return ui and ui.doc_settings and ui.doc_settings:readSetting("partial_md5_checksum")
+        end,
+    }
 end
 Plugin.makeStore = makeStore
 

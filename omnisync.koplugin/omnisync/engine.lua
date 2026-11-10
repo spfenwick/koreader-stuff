@@ -13,7 +13,8 @@ is synced whenever annotations are.
 
 Everything KOReader-specific is passed in (`deps`), so tests can drive it:
 
-    store                 omnisync/store instance
+    store                 omnisync/store instance (joinVersions after the
+                          book identity's groups change)
     makeTransport()       -> transport (called in the subprocess)
     spawn(fn)             -> handle | nil, err     run fn in a subprocess
     isDone(handle)        -> bool                  (reaps it when done)
@@ -736,6 +737,21 @@ function Engine:_finish(run)
             end
         end
     end
+    if run.id and d.store.joinVersions and (run.id_regrouped or not self.status.versions_joined) then
+        -- Readings of a book's versions into one row: after the groups
+        -- changed, and once for the groups there before this version.
+        local ok, res, err = pcall(d.store.joinVersions, d.store)
+        if ok and res then
+            self.status.versions_joined = true
+            run.stats_joined = res.removed
+            if next(res.affected) and d.afterImport then
+                local aok, aerr = pcall(d.afterImport, res.affected)
+                if not aok then self.log.warn("StatSync: refreshing statistics failed:", aerr) end
+            end
+        else
+            self.log.warn("StatSync: joining the statistics of book versions failed:", ok and err or res)
+        end
+    end
     if run.ann and d.ann.afterSync then
         local ok, err = pcall(d.ann.afterSync, run)
         if not ok then self.log.warn("StatSync: applying annotations failed:", err) end
@@ -819,9 +835,9 @@ function Engine:_finish(run)
             run.book_uploaded_records, run.book_segments_imported, run.book_imported_records, run.book_applied))
     end
     if run.id then
-        self.log.info(string.format("StatSync: book identity: sent %d facts, imported %d segments (%d facts, %d new here), read %d book files (%d new facts, %d still to read), %d files joined or parted",
+        self.log.info(string.format("StatSync: book identity: sent %d facts, imported %d segments (%d facts, %d new here), read %d book files (%d new facts, %d still to read), %d files joined or parted, %d statistics rows joined",
             run.id_uploaded_records, run.id_segments_imported, run.id_imported_records, run.id_applied,
-            run.id_scanned, run.id_new_facts, run.id_scan_left or 0, run.id_regrouped or 0))
+            run.id_scanned, run.id_new_facts, run.id_scan_left or 0, run.id_regrouped or 0, run.stats_joined or 0))
     end
     self.running = false
     self.current = nil

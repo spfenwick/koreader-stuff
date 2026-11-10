@@ -95,7 +95,8 @@ local function main()
 K.createStatsDB(stats_path)
 
 local stores = {
-    stats = Store.new{ sq3 = K.SQ3, stats_path = stats_path, state_path = state_path },
+    -- A row per file: the web app gathers a book's versions itself, and shows each file's time.
+    stats = Store.new{ sq3 = K.SQ3, stats_path = stats_path, state_path = state_path, join_versions = false },
     ann = AnnStore.new{ sq3 = K.SQ3, state_path = state_path, md5 = md5 },
     book = BookStore.new{ sq3 = K.SQ3, state_path = state_path, md5 = md5 },
     id = IdStore.new{ sq3 = K.SQ3, state_path = state_path },
