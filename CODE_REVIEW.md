@@ -3,9 +3,12 @@
 Reviewed 10 November 2026, at commit `c01c9ab`.
 
 This review comes from reading the code. The test suites were not run: no
-LuaJIT or KOReader build was available. Findings 3 and 4 were confirmed by
-executing the real modules under a stand-in Lua interpreter (Lua 5.5, with
-`logger` stubbed); the rest are unverified at runtime.
+KOReader build was available. Findings 3, 4 and D were confirmed by
+executing the real modules under a stand-in Lua interpreter (with `logger`
+and the archive reader stubbed); the rest are unverified at runtime.
+
+The identity logic was reviewed a second time in more detail (see "Book
+identity"). That pass narrowed finding 5.
 
 Assumptions:
 
@@ -79,18 +82,32 @@ Suggested fix: reject any manifest or listing path with an empty, `.` or
 Suggested fix: remember the original's results inside `call_orig` and
 return them instead of calling again.
 
-### 5. Title-only matching can permanently join two different books
+### 5. Title-only matching can wrongly join two different books
 
 - `cloudlibrary/matcher.lua:170` falls back to the title alone, even when
   the file names an author that contradicts the catalog's.
 - `Library.links()` (`cloudlibrary/library.lua:449`) passes that match to
-  Concordance as an identity fact.
-- Identity facts are never removed and are synced to every device, so
-  status, rating and statistics of the two books merge everywhere.
+  Concordance as a "link" identity fact, which is never removed and is
+  synced to every device.
+- A link only counts for a file with no identity fact read from the file
+  itself (`concordance/idstore.lua:377-387`). Concordance reads every EPUB
+  in Cloud library's folder, so the scope is narrower than the matcher
+  alone suggests:
+  - **Permanent wrong joins** are limited to PDFs, other non-EPUB formats,
+    and EPUBs with no UUID. Their status, rating and statistics merge with
+    the catalog book's on every device.
+  - **EPUBs with a UUID** can still be wrongly joined for a while. File
+    reading is capped at 60 seconds per sync (5 for a manual one), so the
+    link can count until the file is read. During that window statistics
+    rows are merged, and that merge is not undone.
+- **The guide overstates the feature.** `USER_GUIDE.md:192` says books
+  matched by title share status, rating and statistics. For most
+  title-matched EPUBs they will not, because the file's own UUIDs override
+  the link.
 
 Suggested fix: use the title-only fallback only when the file has no
 author, or when its author string contains the catalog's first author.
-Also consider a way to retract a link.
+Also consider a way to retract a link, and correct the guide.
 
 ### 6. A local edit is reverted when the stored record carries a later timestamp
 
@@ -102,6 +119,91 @@ Also consider a way to retract a link.
 
 Suggested fix: when the device had already applied the merged record,
 stamp the change `max(now, merged.updated + 1)`.
+
+## Book identity
+
+A closer read of `idformat.lua`, `idstore.lua`, `idscan.lua`,
+`identity.lua` and the parts of `bookstore.lua`, `engine.lua` and
+`plugin.lua` that use them. Finding D was confirmed by running
+`idscan.lua`; the rest are from reading only.
+
+### A. Different books by the same author that share a UUID are joined
+
+The guard only blocks a group when titles and first authors both differ
+(`concordance/idstore.lua:474`). Any UUID in the file counts, including
+the publisher's, which templates and some tools reuse across a series. Two
+such books then share status, rating, review, custom metadata (including a
+custom title), collections, history and statistics. Highlights are not
+affected, because they need a matching body signature.
+
+### B. A legitimate edit that changes both title and author blocks the join for good
+
+The guard looks at every fact ever recorded for the group, and facts are
+never removed. Fixing a subtitle and the author's name, in one or more
+Calibre edits, leaves the versions unjoined, with no way to clear it.
+
+### C. A ninth version unjoins the whole book, and status can revert
+
+- Groups above 8 MD5s are not joined (`concordance/idstore.lua:472`).
+  Every re-download after a Calibre edit adds an MD5, and so does a
+  replaced file's sidecar (`concordance/idstore.lua:215`).
+- When the limit is passed, all versions part. This affects the
+  longest-lived, most-edited books.
+- On parting, a version with its own older record (for example "reading")
+  is likely to be set back to it by `BookStore:plan`
+  (`concordance/bookstore.lua:416`), even though the device showed
+  "finished". This path was not run.
+
+### D. The body signature can match for different text (confirmed)
+
+A spine file that is not found in the archive contributes a fixed
+placeholder (`concordance/idscan.lua:137`). Two versions whose spine files
+could not be read got the same signature in a test, despite different
+bodies. Highlights and reading positions would then cross between
+different editions. This needs both files to fail the same way, so it is
+unlikely.
+
+### E. Never-opened cloud files are re-read after KOReader starts in a book
+
+- Cloud library does not load its catalog when KOReader starts in the
+  reader, so its file list is empty (`concordance/plugin.lua:403`).
+- A sync then drops the "already read" record of every downloaded file
+  that has not been opened (`concordance/engine.lua:349`,
+  `concordance/idstore.lua:262`).
+- They are all read again once the file browser opens. Nothing is lost;
+  the cost is repeated work on each such start.
+
+### F. Cloud book state ignores the guard
+
+`statesByUuid` (`concordance/bookstore.lua:574`) combines every file that
+names a UUID, whether or not its group passed the guards. Lookups use the
+catalog's own UUID, which is rarely shared, so the effect is small.
+
+### Smaller point
+
+Cloud library's matcher and Concordance's scanner parse identifiers
+differently (`cloudlibrary/matcher.lua:64` requires the `dc:` prefix; the
+scanner does not). A file can be matched by title in one and by UUID in
+the other.
+
+### What holds up
+
+- Only UUIDs join files; ISBNs and other identifiers never do.
+- Facts read from a file override links, and disagreeing links cancel out.
+- Position sharing requires both a shared UUID and the same body
+  signature.
+- Grouping is deterministic, so every device reaches the same groups from
+  the same facts.
+
+### Suggested changes
+
+- Change the guard to act on title difference alone unless there is
+  stronger evidence (a shared body signature, or a shared catalog UUID).
+- Replace the fixed limit of 8 with one that ignores superseded versions,
+  or raise it and report when it is hit.
+- Give no signature when any spine item is unreadable.
+- Skip the "forget files that are gone" step when Cloud library's list is
+  empty because its catalog is not loaded.
 
 ## Medium and low findings
 
@@ -161,7 +263,7 @@ stamp the change `max(now, merged.updated + 1)`.
 
 - **Cloud library:** `search.lua`, `badge.lua`, `zenos_source.lua`,
   `timing.lua`, most of `covers.lua`.
-- **Concordance:** the grouping rules in `idstore.lua`, parts of
+- **Concordance:** parts of
   `collsync.lua` and `histsync.lua`, `migrate.lua`, `updates.lua`, and the
   transport code in `remote.lua`.
 - **Shared:** the updater was skimmed only; it checks a SHA-256 published
@@ -210,7 +312,9 @@ on every device with no means of repair.
    UUID, its body signature) can stay permanent. Matches that are guesses,
    such as Cloud library's title matches, should be a separate record type
    that can be withdrawn, so a wrong join can be undone on every device.
-   (Finding 5.)
+   The same applies to the guards: they judge a group by every fact ever
+   recorded, so one bad or outdated fact blocks or forces a join for good.
+   (Findings 5, A, B and C.)
 
 3. **Fold the four streams into one implementation.** Highlights, book
    data and identity each repeat the same store pattern: transaction
