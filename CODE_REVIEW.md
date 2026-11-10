@@ -167,6 +167,96 @@ stamp the change `max(now, merged.updated + 1)`.
 - **Shared:** the updater was skimmed only; it checks a SHA-256 published
   alongside the download, which shows integrity, not authenticity.
 
+## Overall assessment
+
+The design of Concordance's sync core (statistics, highlights, book data)
+holds up on reading:
+
+- **Merging is safe by construction.** Records merge idempotently and in
+  any order, so repeated or out-of-order imports cannot corrupt state.
+- **Failure handling is consistent.** Uploads are verified before anything
+  is marked sent, imports are transactional, and an interrupted sync
+  repeats rather than loses work.
+- **Risky cases were considered.** Reset sidecars, restored backups, moved
+  folders and shared device IDs each have explicit handling.
+
+"Sound overall" goes further than this review can support:
+
+- Nothing was run, apart from the two confirmed findings.
+- Coverage was incomplete (see "Not reviewed, or only skimmed").
+- Reading file by file finds local defects. It is weak at finding problems
+  in how modules interact over time, which is where sync systems usually
+  fail.
+
+Running the existing suites (`scripts/test.sh`,
+`scripts/test-concordance.sh`, `tests/cloudlibrary/run_tests.sh`) is the
+cheapest way to strengthen the assessment.
+
+## Design improvements
+
+These assume the current constraints stay: a plain WebDAV server with no
+logic of its own, and no changes to KOReader itself. Items 1 and 2 give
+the most: they address the only ways found for synced data to end up wrong
+on every device with no means of repair.
+
+1. **Order changes by a logical clock, not the device clock.** Each
+   highlight and book property already carries an `updated` integer. If a
+   device stamps a change as the larger of "now" and "one more than the
+   newest value it has seen for that record", a later edit always beats
+   what it was based on, whatever the clocks say. The segment format does
+   not change, and older devices keep working. (Finding 6.)
+
+2. **Make inferred book matches retractable.** Facts read from a file (its
+   UUID, its body signature) can stay permanent. Matches that are guesses,
+   such as Cloud library's title matches, should be a separate record type
+   that can be withdrawn, so a wrong join can be undone on every device.
+   (Finding 5.)
+
+3. **Fold the four streams into one implementation.** Highlights, book
+   data and identity each repeat the same store pattern: transaction
+   wrapper, "wins" rule, outbox, export, mark-sent and import.
+   `concordance/engine.lua` repeats near-identical blocks per stream in its
+   export and collect steps. A single stream interface with per-stream
+   record handlers would remove the chance of the copies drifting apart,
+   and would make a fifth stream cheap.
+
+4. **Validate everything from the server at one boundary.** Segment
+   contents are strictly validated, but settings sync's manifest paths are
+   not. One path type, checked once where server data enters, would cover
+   the manifest, folder listings and any future source. (Finding 3.)
+
+5. **Change when pulled settings are applied.** Applying at plugin load
+   cannot work for files KOReader core has already read. Two options:
+   - Swap the files in just before the restart Concordance already offers,
+     after KOReader's final flush. More useful, but not checked against
+     KOReader's shutdown order.
+   - Declare core-owned files unsupported and refuse them with a logged
+     reason.
+
+   (Finding 2.)
+
+6. **Shrink Cloud library's hook surface.** It already registers as a
+   ZenOS book source. Since the plugin requires ZenOS anyway, a ZenOS-side
+   interface could replace the wrappers around `FileChooser`,
+   `ReadHistory`, `DocSettings` and the delete functions. Fewer replaced
+   functions means fewer ways a KOReader update breaks it. This depends on
+   ZenOS accepting such an interface, which was not assessed.
+
+7. **Make catalog deletion two-step.** Mark books missing after a full
+   sync, and remove them only after a second consecutive sync agrees or
+   the count matches the server's `/stats`. That removes the empty-feed
+   wipe without a special case.
+
+8. **Add convergence tests.** The stores take their dependencies as
+   arguments, so a test can simulate several devices making random edits,
+   deletions and syncs in random order, then check that all end in the
+   same state. This targets the cross-module interactions that file-by-file
+   reading is weak at.
+
+9. **Make the contract between the two plugins explicit.** They find each
+   other through `package.loaded` lookups in both directions. A small
+   versioned interface table would state what each may rely on.
+
 ## Conditions the guide does not state
 
 The guide's guarantees ("nothing is lost", "the later change wins") hold
