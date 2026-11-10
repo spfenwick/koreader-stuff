@@ -526,11 +526,44 @@ end
 --   with a row of its own go there;
 -- - readings that join a row of another MD5 are marked exported under that
 --   MD5 too, so they're never sent as this device's own.
+--
+-- Files no device has an identity record for (gone before book identity
+-- read them, or without a UUID, such as PDFs) are joined by title and
+-- author instead, for statistics only: a file without a record joins the
+-- book whose statistics carry exactly the same title and authors (see
+-- Store.titleKey), when only one book does; files without a record that
+-- share a title and authors, with no such book, join each other. Files
+-- with records are only ever joined by identity. The web app follows the
+-- same rule (omnisync-web/app/library.py).
 
---- md5 -> { md5, … } (its group, sorted), for MD5s in joined groups.
-local function loadGroups(state)
-    local has = state:rowexec("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'id_groups';")
-    if num(has) == 0 then return {} end
+--- Changes when the rules below change, so every device joins again once
+-- (1: by identity, 2: and by title for files without a record).
+Store.JOIN_RULES = 2
+
+local function hasTable(conn, name)
+    local n = conn:rowexec("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = '" .. name .. "';")
+    return num(n) ~= 0
+end
+
+--- What two books must share to be joined by title: lowercased (ASCII),
+-- punctuation and control characters as spaces, spaces collapsed, title
+-- and authors joined. Nil when either is missing or a placeholder.
+function Store.titleKey(title, authors)
+    local function norm(v)
+        if type(v) ~= "string" then return "" end
+        return (v:lower():gsub("[%p%c]", " "):gsub("%s+", " "):gsub("^ ", ""):gsub(" $", ""))
+    end
+    local t, a = norm(title), norm(authors)
+    if t == "" or t == "n a" or t == "untitled" then return nil end
+    if a == "" or a == "n a" or a == "unknown" or a == "unknown author" then return nil end
+    return t .. "\0" .. a
+end
+
+--- md5 -> { md5, … } (its group, sorted), for MD5s in joined groups: the
+-- book identity's, widened by title for files without a record (above).
+-- Only once book identity is in use (its tables exist).
+local function loadGroups(stats, state)
+    if not hasTable(state, "id_groups") then return {} end
     local of, by = {}, {}
     local stmt = state:prepare("SELECT md5, grp FROM id_groups ORDER BY grp, md5;")
     local r = stmt:step()
@@ -542,6 +575,52 @@ local function loadGroups(state)
         r = stmt:step()
     end
     stmt:close()
+    if not hasTable(state, "id_facts") then return of end
+
+    local recorded = {}
+    stmt = state:prepare("SELECT DISTINCT md5 FROM id_facts;")
+    r = stmt:step()
+    while r do recorded[r[1]] = true; r = stmt:step() end
+    stmt:close()
+    local by_key, keys = {}, {}
+    stmt = stats:prepare("SELECT DISTINCT md5, title, authors FROM book WHERE md5 IS NOT NULL ORDER BY md5;")
+    r = stmt:step()
+    while r do
+        local key = Store.titleKey(r[2], r[3])
+        if key then
+            if not by_key[key] then by_key[key] = {}; keys[#keys + 1] = key end
+            table.insert(by_key[key], r[1])
+        end
+        r = stmt:step()
+    end
+    stmt:close()
+    table.sort(keys)
+    local placed = {}
+    for _, key in ipairs(keys) do
+        local loose, book, books, seen = {}, nil, 0, {}
+        for _, md5 in ipairs(by_key[key]) do
+            if recorded[md5] then
+                local id = of[md5] and of[md5][1] or md5 -- the book: its group, or the file alone
+                if not seen[id] then seen[id], book, books = true, id, books + 1 end
+            elseif not placed[md5] then
+                loose[#loose + 1] = md5
+            end
+        end
+        if #loose > 0 and books <= 1 then
+            local members = {}
+            if book then
+                for _, m in ipairs(of[book] or { book }) do members[#members + 1] = m end
+            end
+            for _, m in ipairs(loose) do
+                members[#members + 1] = m
+                placed[m] = true
+            end
+            if #members >= 2 then
+                table.sort(members)
+                for _, m in ipairs(members) do of[m] = members end
+            end
+        end
+    end
     return of
 end
 
@@ -579,7 +658,7 @@ end
 -- `affected`; returns the number of rows removed. keep_md5: the open
 -- book's MD5 (its rows stay).
 function Store.joinVersionsIn(stats, state, affected, keep_md5)
-    local groups = loadGroups(state)
+    local groups = loadGroups(stats, state)
     local done, removed = {}, 0
     local up = state:prepare(UPSERT_EXPORTED)
     local del_book = stats:prepare("DELETE FROM book WHERE id = ?;")
@@ -623,7 +702,7 @@ local function mergeSegment(stats, state, path, opts)
     opts = opts or {}
     local summary = { events = 0, inserted = 0, updated = 0, books_new = 0, books_updated = 0, affected = {} }
     local now_foreign = {}
-    local groups = opts.join and loadGroups(state) or {}
+    local groups = opts.join and loadGroups(stats, state) or {}
 
     local q_ids = stats:prepare("SELECT id, title, authors, series, language, pages, last_open FROM book WHERE md5 = ? ORDER BY last_open DESC, id ASC;")
     local q_foreign = state:prepare("SELECT md5, last_open FROM foreign_books WHERE id_book = ?;")

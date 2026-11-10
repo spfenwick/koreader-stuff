@@ -8,6 +8,7 @@
 <p class="muted">
   Files OmniSync's book identity joined as one book, because they carry the same book ID (a UUID in the EPUB).
   Status, rating, review and custom metadata are shared by every version.
+  A file no device has read (gone before book identity read it, or without a book ID, such as a PDF) joins the book with exactly its title and authors, for reading statistics only.
   Files with the same text (the same letter below) also share their reading position, through KOReader's progress sync.
 </p>
 {% set unread = books | length - same - differ %}
@@ -34,7 +35,7 @@
     <tbody>
     {% for e in book.editions %}
     <tr>
-      <td>{{ e.title or '—' }}{% if 'sidecar' in e.sources and 'file' not in e.sources %}<div class="small muted">Kept by a book's settings after its file was replaced</div>{% endif %}</td>
+      <td>{{ e.title or '—' }}{% if 'sidecar' in e.sources and 'file' not in e.sources %}<div class="small muted">Kept by a book's settings after its file was replaced</div>{% endif %}{% if e.by_title %}<div class="small muted">No device has read this file: joined by its title and authors, for reading statistics</div>{% endif %}</td>
       <td><code>{{ e.md5 }}</code></td>
       <td>{% if e.text %}<span class="chip" title="Body signature {{ e.sig[:12] }}…">{{ e.text }}</span>{% else %}<span class="muted" title="No device has read this file's text">—</span>{% endif %}</td>
       <td>{% for d in e.reported_by | sort %}{{ device_names.get(d) or d }}{{ ', ' if not loop.last }}{% else %}<span class="muted">—</span>{% endfor %}</td>

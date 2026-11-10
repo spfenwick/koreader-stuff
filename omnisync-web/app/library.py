@@ -6,7 +6,9 @@ changed something. Readings (hundreds of thousands of rows) stay in SQLite
 and are queried per page.
 
 A "book" here is a work: every file the plugin's book identity joined (the
-same UUID) is one book, with each file an edition. Book data that applies to
+same UUID) is one book, with each file an edition. A file no device has an
+identity record for joins the book with exactly its title and authors, as
+the plugin does for statistics (title_key); its book data stays its own. Book data that applies to
 every version (status, rating, review, custom metadata, collections, when it
 was last opened) is merged across editions the way the plugin does: the
 record with the highest (updated, device, hash) wins. Highlights and readings
@@ -28,6 +30,56 @@ META_KEYS = ("title", "authors", "series", "series_index", "keywords", "language
 GROUP_PROPS = {"status", "rating", "note", "hist"} | {f"meta.{k}" for k in META_KEYS}
 STATUS_LABELS = {"reading": "Reading", "complete": "Finished", "abandoned": "On hold"}
 SESSION_GAP = 30 * 60  # seconds between readings that start a new session
+
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+_PUNCT_OR_CONTROL = re.compile(r"[!-/:-@\[-`{-~\x00-\x1f\x7f]")
+
+
+def title_key(title, authors) -> str | None:
+    """What two files must share to be joined by title: the plugin's
+    Store.titleKey (ASCII lowercase, punctuation and control characters as
+    spaces, spaces collapsed). None for a missing or placeholder value."""
+    def norm(v) -> str:
+        if not isinstance(v, str):
+            return ""
+        return re.sub(" +", " ", _PUNCT_OR_CONTROL.sub(" ", v.translate(_ASCII_LOWER))).strip()
+    t, a = norm(title), norm(authors)
+    if t in ("", "n a", "untitled") or a in ("", "n a", "unknown", "unknown author"):
+        return None
+    return f"{t}\0{a}"
+
+
+def title_groups(group_of: dict[str, str], recorded: set, titles: list[tuple[str, str, str]]) -> dict[str, str]:
+    """Files without an identity record joined by title (the plugin's
+    loadGroups in store.lua): md5 -> group, for each file placed so. A file
+    joins the one book (identity group, or recorded file alone) with its
+    title key; files without records sharing a key, with no such book, join
+    each other. group_of (md5 -> group) is updated in place."""
+    by_key: dict[str, list[str]] = {}
+    for md5, title, authors in sorted(titles):
+        key = title_key(title, authors)
+        if key and md5 not in by_key.setdefault(key, []):
+            by_key[key].append(md5)
+    placed: dict[str, str] = {}
+    for key in sorted(by_key):
+        books, loose = set(), []
+        for md5 in by_key[key]:
+            if md5 in recorded:
+                books.add(group_of.get(md5, md5))
+            elif md5 not in placed:
+                loose.append(md5)
+        if not loose or len(books) > 1:
+            continue
+        members = [m for m, g in group_of.items() if g in books] or list(books)
+        members += loose
+        if len(members) < 2:
+            continue
+        grp = min(members)
+        for m in members:
+            group_of[m] = grp
+        for m in loose:
+            placed[m] = grp
+    return placed
 
 
 def is_group_prop(prop: str) -> bool:
@@ -141,6 +193,7 @@ class Edition:
     sources: set = field(default_factory=set)  # "file", "sidecar", "link"
     reported_by: set = field(default_factory=set)  # device IDs that sent a fact
     text: str | None = None  # "A", "B", …: files with the same text share a letter
+    by_title: bool = False  # no identity record: joined by title and authors
 
 
 @dataclass
@@ -406,10 +459,17 @@ class Library:
                 if scheme.lower() == "calibre" and value.strip().isdigit():
                     file_ids.setdefault(md5, set()).add(int(value))
 
-        # Groups: files the plugin joined as one book.
+        # Groups: files the plugin joined as one book, then files without an
+        # identity record by title.
         group_of: dict[str, str] = {}
         for md5, grp in state.execute("SELECT md5, grp FROM id_groups"):
             group_of[md5] = grp
+        recorded = {md5 for (md5,) in state.execute("SELECT DISTINCT md5 FROM id_facts")}
+        by_title = title_groups(group_of, recorded, list(stats.execute(
+            "SELECT DISTINCT md5, title, authors FROM book WHERE md5 IS NOT NULL")))
+        for md5 in by_title:
+            if md5 in editions:
+                editions[md5].by_title = True
         members: dict[str, list[str]] = {}
         for md5 in editions:
             members.setdefault(group_of.get(md5, md5), []).append(md5)
@@ -421,6 +481,8 @@ class Library:
             eds = sorted((editions[m] for m in md5s), key=lambda e: -e.read_time)
             merged: dict[str, Record] = {}
             for m in md5s:
+                if m in by_title:
+                    continue  # joined for statistics only
                 for prop, rec in props.get(m, {}).items():
                     if not is_group_prop(prop):
                         continue

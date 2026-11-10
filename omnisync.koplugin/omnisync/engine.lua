@@ -745,12 +745,14 @@ function Engine:_finish(run)
             end
         end
     end
-    if run.id and d.store.joinVersions and (run.id_regrouped or not self.status.versions_joined) then
+    local join_rules = d.store.JOIN_RULES or 1
+    if run.id and d.store.joinVersions and (run.id_regrouped or self.status.versions_joined ~= join_rules) then
         -- Readings of a book's versions into one row: after the groups
-        -- changed, and once for the groups there before this version.
+        -- changed, and once when the rules for joining change (versions
+        -- before them joined by other rules, or not at all).
         local ok, res, err = pcall(d.store.joinVersions, d.store)
         if ok and res then
-            self.status.versions_joined = true
+            self.status.versions_joined = join_rules
             run.stats_joined = res.removed
             if next(res.affected) and d.afterImport then
                 local aok, aerr = pcall(d.afterImport, res.affected)

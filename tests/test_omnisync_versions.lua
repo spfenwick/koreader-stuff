@@ -27,13 +27,15 @@ local function device(name, opts)
     function d:readBook(md5, sessions, title)
         return self:read({ title = title or BOOK.title, authors = BOOK.authors, md5 = md5, pages = BOOK.pages }, sessions)
     end
-    -- The two versions joined as one book.
+    -- The two versions joined as one book (each with an identity record).
     function d:join(md5s)
         local id = IdStore.new{ sq3 = S.SQ3, state_path = self.state }
         id:open():close()
         local conn = S.SQ3.open(self.state)
         for _, m in ipairs(md5s) do
             conn:exec(string.format("INSERT OR REPLACE INTO id_groups (md5, grp) VALUES ('%s', '%s');", m, md5s[1]))
+            conn:exec(string.format([[INSERT OR REPLACE INTO id_facts (md5, fact, src, uuids, device)
+                VALUES ('%s', 'f', 'file', 'u', 'x');]], m))
         end
         conn:close()
     end
@@ -169,7 +171,7 @@ end
 
 do
     local A, B = device("A"), device("B")
-    A:readBook(OTHER, { { 1, 1000, 30 } })
+    A:readBook(OTHER, { { 1, 1000, 30 } }, "Emma")
     B:readBook(Y, { { 2, 2000, 40 } })
     B:join{ X, Y }
     import(B, (export(A)))
@@ -183,6 +185,89 @@ do
     W:join{ X, Y }
     check(assert(W.store:joinVersions()).removed == 0 and rows(W, X) == 1 and rows(W, Y) == 1,
         "joining off: a row per file")
+end
+
+-- Files without an identity record: joined by title and authors ----------------------------
+
+check(Store.titleKey("How Mathematicians Think", "William Byers")
+        == Store.titleKey("how mathematicians think ", "William  Byers"), "title key: case and spaces")
+check(Store.titleKey("Pride and Prejudice", "Jane Austen") ~= Store.titleKey("Pride & Prejudice", "Jane Austen"),
+    "title key: different words differ")
+check(Store.titleKey("Book", "N/A") == nil and Store.titleKey("N/A", "Someone") == nil
+        and Store.titleKey("", "Someone") == nil, "title key: none for placeholders")
+
+-- Identity records for these MD5s (as IdStore keeps them).
+local function record(d, md5s)
+    local id = IdStore.new{ sq3 = S.SQ3, state_path = d.state }
+    id:open():close()
+    local conn = S.SQ3.open(d.state)
+    for _, m in ipairs(md5s) do
+        conn:exec(string.format([[INSERT OR REPLACE INTO id_facts (md5, fact, src, uuids, device)
+            VALUES ('%s', 'f', 'file', 'u', 'x');]], m))
+    end
+    conn:close()
+end
+
+local Z, Z2, W = string.rep("3", 32), string.rep("4", 32), string.rep("5", 32)
+do
+    -- B reads Y (recorded, joined with X); A read Z, a copy no device has a record for.
+    local A, B = device("A"), device("B")
+    A:readBook(Z, { { 1, 1000, 30 }, { 2, 1030, 40 } })
+    B:readBook(Y, { { 5, 2000, 60 } })
+    export(B)
+    B:join{ X, Y }
+    local pathA = export(A)
+    import(B, pathA)
+    check(rows(B, Z) == 0 and events(B, Y) == 3, "a file without a record: into the book with its title")
+    sendsNothing(B, "joined by title")
+    totalsOk(B, "joined by title")
+
+    -- Before book identity is in use, nothing is joined by title.
+    local C = device("C")
+    C:readBook(Y, { { 5, 2000, 60 } })
+    export(C)
+    import(C, pathA)
+    check(rows(C, Z) == 1 and events(C, Y) == 1, "without book identity: a row per file")
+    -- It arrives: the row made for Z is folded in.
+    C:join{ X, Y }
+    check(assert(C.store:joinVersions()).removed == 1 and rows(C, Z) == 0 and events(C, Y) == 3,
+        "book identity arrives: folded in")
+    sendsNothing(C, "folded by title")
+end
+
+do
+    -- Two books with the title (different UUIDs, not joined): which one is unclear.
+    local A, B = device("A"), device("B")
+    A:readBook(Z, { { 1, 1000, 30 } })
+    B:readBook(X, { { 2, 2000, 40 } })
+    B:readBook(W, { { 3, 3000, 50 } })
+    export(B)
+    record(B, { X, W })
+    import(B, (export(A)))
+    check(assert(B.store:joinVersions()).removed == 0 and rows(B, Z) == 1 and rows(B, X) == 1 and rows(B, W) == 1,
+        "two books with the title: nothing joined")
+
+    -- Files without records alone: joined with each other.
+    local C, D, E = device("C"), device("D"), device("E")
+    C:readBook(Z, { { 1, 1000, 30 } })
+    D:readBook(Z2, { { 2, 2000, 40 } })
+    E:join{ X, Y }
+    import(E, (export(C)))
+    import(E, (export(D)))
+    check(rows(E, Z) + rows(E, Z2) == 1 and E:count("SELECT count(*) FROM page_stat_data") == 2,
+        "files without records, same title: one row")
+    sendsNothing(E, "unrecorded together")
+    totalsOk(E, "unrecorded together")
+
+    -- Other authors, or none: apart.
+    local F, G = device("F"), device("G")
+    F:read({ title = BOOK.title, authors = "Someone Else", md5 = Z, pages = BOOK.pages }, { { 1, 1000, 30 } })
+    F:read({ title = BOOK.title, authors = "N/A", md5 = Z2, pages = BOOK.pages }, { { 2, 1100, 30 } })
+    G:readBook(Y, { { 5, 2000, 60 } })
+    export(G)
+    G:join{ X, Y }
+    import(G, (export(F)))
+    check(rows(G, Z) == 1 and rows(G, Z2) == 1 and events(G, Y) == 1, "other authors, or none: apart")
 end
 
 S.finish("omnisync version statistics tests")

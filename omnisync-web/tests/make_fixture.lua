@@ -43,6 +43,10 @@ local BOOKS = {
       uuid = nil },
     { key = "dune", title = "Middlemarch", authors = "George Eliot", pages = 880, kind = "rolling",
       uuid = "1a2b3c4d-0000-4000-8000-000000000005", series = nil },
+    -- An older copy of Frankenstein no device has an identity record for:
+    -- joined by title and authors.
+    { key = "frank_old", title = "Frankenstein", authors = "Mary Wollstonecraft Shelley", pages = 300,
+      kind = "rolling", uuid = nil },
 }
 for _, b in ipairs(BOOKS) do b.md5 = md5(b.key) end
 local by = {}
@@ -112,6 +116,7 @@ local plan = {
     { dev = 1, book = "frank", from = 85, to = 60 },
     { dev = 2, book = "origin", from = 70, to = 30 },
     { dev = 1, book = "dune", from = 25, to = 0 },
+    { dev = 2, book = "frank_old", from = 110, to = 95 },
 }
 local events = { {}, {} } -- per device: list of lines
 local books_used = { {}, {} }
