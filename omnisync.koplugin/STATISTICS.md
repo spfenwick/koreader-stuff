@@ -268,8 +268,10 @@ the two files as one book.
   of the file they have. Reading statistics too: other devices' reading
   of any version counts towards the book on this device (one book in
   KOReader's statistics, not one per file). If you've opened two versions
-  on one device, each keeps its own statistics there. Highlights and the
-  handmade table of contents aren't joined yet.
+  on one device, each keeps its own statistics there. Highlights,
+  bookmarks, the handmade table of contents and hidden flows are joined
+  between versions with the same text (a copy rewritten after a new cover
+  or tags), not between editions, where their positions wouldn't match.
 - **What isn't**: files whose titles and authors both differ, or a book
   in more than 8 files, are left apart (a UUID shared by mistake).
 

@@ -321,6 +321,13 @@ do
     G:refreshGroups()
     check(same(G:positionPeers("side"), ""), "peers: none for an MD5 without a signature")
     check(same(G:positionPeers("x1"), "x2,x3,x4"), "peers: not the signatureless MD5")
+    check(next(G:refreshGroups()) == nil, "refresh again: nothing changed")
+    -- Another device read the original file: its signature joins it at level 2.
+    G:recordScan({ path = "/g/original", md5 = "side", size = 1, mtime = 1 },
+        { md5 = "side", uuids = { U[1] }, sig = "s1", title = "Book", authors = "Ann" }, "devH")
+    local changed = G:refreshGroups()
+    check(changed.side and changed.x1 and not changed.e1, "a signature arriving later: its group is refreshed")
+    check(same(G:positionPeers("side"), "x1,x2,x3,x4"), "peers: now with the signature")
 end
 
 -- Progress sync hook ---------------------------------------------------------------------------

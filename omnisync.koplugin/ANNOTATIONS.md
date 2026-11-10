@@ -78,7 +78,9 @@ the statistics records already carry.
 - Positions are only valid in the file they were made in, and the MD5
   identifies that file. Different files of the same book (another edition,
   another source) don't share annotations: their XPointers wouldn't point at
-  the same text.
+  the same text. The exception is a file rewritten with the same body (a
+  new cover or tags): book identity tells those apart, and they share
+  annotations (see "Versions of a book" below).
 - Title and authors aren't part of the key. They differ between devices for
   the same file (Calibre edits, the PDF trailing-`\0` quirk) and would only
   cause missed matches. They're sent for display only.
@@ -86,8 +88,28 @@ the statistics records already carry.
   highlights at the wrong places.
 - Limitation: the MD5 is fixed when a device first opens a book. A device
   that first opened a copy later rewritten by Calibre has a different MD5
-  from one that first opened the rewritten copy. Rare; clearing one
-  device's sidecar for that book fixes it.
+  from one that first opened the rewritten copy. Book identity joins the
+  two once both files have been read (below).
+
+### Versions of a book
+
+Files that are the same book with the same body (same UUID and body
+signature: level 2 in [IDENTITY.md](IDENTITY.md)) share annotations. They
+are kept in `id_pos`, rebuilt from the identity facts at the end of each
+sync. A book's merged state is then, key by key, the winner across all of
+those files' records, by the usual rule; keys are creation times, so an
+annotation is the same one in every version. Changes are still recorded
+and sent under the book's own MD5: nothing on the server changes, and
+devices without the link (or an older OmniSync) carry on with each file's
+own.
+
+Importing records for one version marks the others seen on this device as
+having changes to apply; when the files are linked later, the linked
+books are looked at again, so annotations that arrived before the link
+need nothing more. Another edition under the same UUID (a different
+body) is never joined. A sidecar's MD5 whose file was replaced in place
+has no signature of its own, so it only joins once a device has read the
+original file.
 
 ### Annotations: creation time, plus position when needed
 

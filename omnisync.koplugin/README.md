@@ -14,7 +14,8 @@ KOReader's Cloud storage:
   [STATISTICS.md](STATISTICS.md#book-status-and-details).
 - **Book identity** (which files are the same book), with highlights
   (WebDAV): a book's status, rating, review and custom metadata are shared
-  by every version of its file. See
+  by every version of its file, and its highlights, bookmarks and handmade
+  table of contents by every version with the same text. See
   [STATISTICS.md](STATISTICS.md#book-identity).
 - **Reading progress across versions of a book**: with KOReader's own
   Progress sync enabled, a book opened in one version of its file gets the

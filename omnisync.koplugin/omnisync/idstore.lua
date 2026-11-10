@@ -19,6 +19,10 @@ Tables:
                guards passed), grp being the group's smallest MD5. Rebuilt
                by refreshGroups() after each sync. Book data reads it (see
                bookstore.lua).
+    id_pos     md5 -> grp: within those groups, the MD5s whose positions
+               match (level 2: the same body signature), two or more per
+               grp, grp being the smallest. Rebuilt with id_groups.
+               Annotations, the handmade TOC and flows read it.
 --]]
 
 local IdFormat = require("omnisync/idformat")
@@ -67,6 +71,11 @@ local SCHEMA = [[
         grp TEXT NOT NULL
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS id_groups_grp ON id_groups (grp);
+    CREATE TABLE IF NOT EXISTS id_pos (
+        md5 TEXT PRIMARY KEY,
+        grp TEXT NOT NULL
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS id_pos_grp ON id_pos (grp);
     CREATE TABLE IF NOT EXISTS seen_segments (
         device_id   TEXT    NOT NULL,
         name        TEXT    NOT NULL,
@@ -404,44 +413,112 @@ function IdStore:groups()
     return self:_read(computeGroups)
 end
 
---- Brings id_groups in line with the facts. Returns the MD5s whose group
--- changed (joined, left, or its members changed): { [md5] = true }.
+--- Within each joined group, the MD5s whose positions match: those sharing
+-- a body signature, transitively. Returns { { md5, … } (sorted), … } for
+-- sets of two or more.
+local function computePositions(conn, groups)
+    local sigs = {}
+    for _, r in ipairs(rows(conn:prepare("SELECT md5, sig FROM id_facts WHERE sig IS NOT NULL;"))) do
+        sigs[r[1]] = sigs[r[1]] or {}
+        sigs[r[1]][r[2]] = true
+    end
+    local out = {}
+    for _, g in ipairs(groups) do
+        local parent = {}
+        local function find(x)
+            while parent[x] ~= x do x = parent[x] end
+            return x
+        end
+        local by_sig = {}
+        for _, md5 in ipairs(g.md5s) do
+            parent[md5] = md5
+            for sig in pairs(sigs[md5] or {}) do
+                if by_sig[sig] then
+                    local ra, rb = find(by_sig[sig]), find(md5)
+                    if ra ~= rb then if ra < rb then parent[rb] = ra else parent[ra] = rb end end
+                else
+                    by_sig[sig] = md5
+                end
+            end
+        end
+        local sets = {}
+        for _, md5 in ipairs(g.md5s) do
+            local root = find(md5)
+            sets[root] = sets[root] or {}
+            table.insert(sets[root], md5)
+        end
+        for _, set in pairs(sets) do
+            if #set >= 2 then
+                table.sort(set)
+                out[#out + 1] = set
+            end
+        end
+    end
+    return out
+end
+
+-- md5 -> its set's members, joined (to tell whether it changed).
+local function loadSets(conn, tbl)
+    local members = {}
+    for _, r in ipairs(rows(conn:prepare("SELECT grp, md5 FROM " .. tbl .. " ORDER BY grp, md5;"))) do
+        members[r[1]] = members[r[1]] or {}
+        table.insert(members[r[1]], r[2])
+    end
+    local out = {}
+    for _, list in pairs(members) do
+        local key = table.concat(list, ",")
+        for _, md5 in ipairs(list) do out[md5] = key end
+    end
+    return out
+end
+
+local function diffSets(old, new, changed)
+    local any = false
+    for md5, key in pairs(old) do if new[md5] ~= key then changed[md5] = true; any = true end end
+    for md5, key in pairs(new) do if old[md5] ~= key then changed[md5] = true; any = true end end
+    return any
+end
+
+local function writeSets(conn, tbl, sets)
+    conn:exec("DELETE FROM " .. tbl .. ";")
+    local put = conn:prepare("INSERT INTO " .. tbl .. " (md5, grp) VALUES (?, ?);")
+    for _, set in ipairs(sets) do
+        for _, md5 in ipairs(set) do put:reset():bind(md5, set[1]):step() end
+    end
+    put:close()
+end
+
+--- Brings id_groups and id_pos in line with the facts. Returns the MD5s
+-- whose group or position set changed (joined, left, or its members
+-- changed): { [md5] = true }.
 function IdStore:refreshGroups()
     return self:_tx(function(conn)
-        -- Each MD5's group, as the sorted list of its members.
-        local old, new = {}, {}
-        local members = {}
-        for _, r in ipairs(rows(conn:prepare("SELECT grp, md5 FROM id_groups ORDER BY grp, md5;"))) do
-            members[r[1]] = members[r[1]] or {}
-            table.insert(members[r[1]], r[2])
-        end
-        for _, list in pairs(members) do
-            local key = table.concat(list, ",")
-            for _, md5 in ipairs(list) do old[md5] = key end
-        end
-        local groups = {}
+        local groups, group_sets = {}, {}
         for _, g in ipairs(computeGroups(conn)) do
             if g.ok then
                 groups[#groups + 1] = g
-                local key = table.concat(g.md5s, ",")
-                for _, md5 in ipairs(g.md5s) do new[md5] = key end
+                group_sets[#group_sets + 1] = g.md5s
             end
         end
-        local changed = {}
-        for md5, key in pairs(old) do if new[md5] ~= key then changed[md5] = true end end
-        for md5, key in pairs(new) do if old[md5] ~= key then changed[md5] = true end end
-        if next(changed) then
-            conn:exec("DELETE FROM id_groups;")
-            local put = conn:prepare("INSERT INTO id_groups (md5, grp) VALUES (?, ?);")
-            for _, g in ipairs(groups) do
-                for _, md5 in ipairs(g.md5s) do put:reset():bind(md5, g.md5s[1]):step() end
+        local pos_sets = computePositions(conn, groups)
+        local function keys(sets)
+            local out = {}
+            for _, set in ipairs(sets) do
+                local key = table.concat(set, ",")
+                for _, md5 in ipairs(set) do out[md5] = key end
             end
-            put:close()
+            return out
+        end
+        local changed = {}
+        if diffSets(loadSets(conn, "id_groups"), keys(group_sets), changed) then
+            writeSets(conn, "id_groups", group_sets)
+        end
+        if diffSets(loadSets(conn, "id_pos"), keys(pos_sets), changed) then
+            writeSets(conn, "id_pos", pos_sets)
         end
         return changed
     end)
 end
-
 
 --- The other MD5s whose positions match this one's (level 2: same joined
 -- group and same body signature), sorted. Empty when this MD5 has no
@@ -449,13 +526,9 @@ end
 function IdStore:positionPeers(md5)
     return self:_read(function(conn)
         local stmt = conn:prepare([[
-            SELECT DISTINCT g.md5 FROM id_groups me
-            JOIN id_groups g ON g.grp = me.grp AND g.md5 <> me.md5
-            JOIN id_facts f ON f.md5 = g.md5
-            WHERE me.md5 = ? AND f.sig IN
-                (SELECT sig FROM id_facts WHERE md5 = ? AND sig IS NOT NULL)
-            ORDER BY g.md5;]])
-        stmt:bind(md5, md5)
+            SELECT g.md5 FROM id_pos me JOIN id_pos g ON g.grp = me.grp AND g.md5 <> me.md5
+            WHERE me.md5 = ? ORDER BY g.md5;]])
+        stmt:bind(md5)
         local out = {}
         for _, r in ipairs(rows(stmt)) do out[#out + 1] = r[1] end
         return out

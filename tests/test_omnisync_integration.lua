@@ -555,6 +555,22 @@ check(A.book_affected and A.book_affected[OLD_MD5], "A told its version of the b
 local jplan = A.book_store:plan(OLD_MD5, nowhere)
 check(#jplan == 2 and jplan[1].value == 3 and jplan[2].value == "complete",
     "A would apply B's status and rating to its own file")
+-- Joining (level 2): the same body, so a highlight made in B's file applies to A's.
+for _, d in ipairs({ A, B, C }) do
+    local c = S.SQ3.open(d.state)
+    check(tonumber(c:rowexec("SELECT count(*) FROM id_pos")) == 2, "book identity: " .. d.name .. " matched their positions")
+    c:close()
+end
+A.ann_store:observe{ md5 = OLD_MD5, kind = "rolling", items = {}, now = os.time(), device = A.id,
+                     title = "The View From Nowhere" }
+B.ann_store:observe{ md5 = NEW_MD5, kind = "rolling", items = { annItem(20, "from B's file") }, now = os.time(),
+                     device = B.id, title = "The View From Nowhere" }
+A.ann_affected = nil
+sync({ B, A })
+check(A.ann_affected and A.ann_affected[OLD_MD5 .. "\0rolling"], "A told its version's annotations changed")
+local aplan = A.ann_store:plan(OLD_MD5, "rolling", {})
+check(#aplan == 1 and aplan[1].op == "add" and aplan[1].item.note == "from B's file",
+    "A would add B's highlight to its own file")
 
 -- 10. Packs ---------------------------------------------------------------------------------------
 -- Packing needs only a few segments here, and deleting waits for nothing,

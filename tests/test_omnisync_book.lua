@@ -467,10 +467,21 @@ do
     obs(MP, { rating = false })
     check(#d.store:plan(MP, { rating = false }) == 0, "clearing it again sticks")
 
-    -- Positions don't cross versions: a handmade TOC stays with its file.
+    -- Positions cross only versions with the same body: a handmade TOC
+    -- made on one applies to the other.
     local toc = { enabled = true, items = { { title = "One", depth = 1, xpointer = "/body/DocFragment[2]" } } }
     obs(MQ, { ["toc.rolling"] = toc })
-    check(#d.store:plan(MP, { ["toc.rolling"] = false }) == 0, "handmade TOC not shared between versions")
+    ops = d.store:plan(MP, { ["toc.rolling"] = false })
+    check(#ops == 1 and ops[1].prop == "toc.rolling" and ops[1].value.items[1].title == "One",
+        "handmade TOC shared by versions with the same body")
+    -- Another edition (a different body) under the same ID: it stays with its file.
+    local MV, MW = string.rep("a", 32), string.rep("b", 32)
+    local ed = "0000aaaa-0000-4000-8000-000000000004"
+    facts(d, { { md5 = MV, uuids = { ed }, sig = "s1" }, { md5 = MW, uuids = { ed }, sig = "s2" } })
+    obs(MW, { ["toc.rolling"] = toc, ["flows.rolling"] = { enabled = true, items = {} } })
+    obs(MW, { status = "complete" })
+    ops = d.store:plan(MV, { ["toc.rolling"] = false, ["flows.rolling"] = false, status = "reading" })
+    check(#ops == 1 and ops[1].prop == "status", "another edition: its status applies, not its TOC or flows")
 
     -- Guards: unrelated books sharing a UUID by mistake aren't joined.
     local MR, MS = string.rep("5", 32), string.rep("6", 32)

@@ -35,9 +35,10 @@ other streams' (names book-…).
 Versions of a book: id_groups (kept by idstore.lua) says which MD5s are
 the same book. A book's merged value of a property about the book (status,
 rating, review, custom metadata: BookFormat.GROUP_PROPS) is then the winner
-across all of them. Changes are still recorded under the book's own MD5,
-so nothing on the server changes and devices without the groups carry on
-as before.
+across all of them. id_pos says which of them have matching positions (the
+same body); the handmade TOC and flows are the winner across those. Changes
+are still recorded under the book's own MD5, so nothing on the server
+changes and devices without the groups carry on as before.
 --]]
 
 local AnnFormat = require("omnisync/annformat")
@@ -95,6 +96,11 @@ local SCHEMA = [[
         grp TEXT NOT NULL
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS id_groups_grp ON id_groups (grp);
+    CREATE TABLE IF NOT EXISTS id_pos (
+        md5 TEXT PRIMARY KEY,
+        grp TEXT NOT NULL
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS id_pos_grp ON id_pos (grp);
     CREATE TABLE IF NOT EXISTS seen_segments (
         device_id   TEXT    NOT NULL,
         name        TEXT    NOT NULL,
@@ -189,14 +195,32 @@ local function groupOf(conn, md5)
     return out
 end
 
+--- The versions of the book whose positions match this one's.
+local function positionPeers(conn, md5)
+    local stmt = conn:prepare([[
+        SELECT g.md5 FROM id_pos me JOIN id_pos g ON g.grp = me.grp AND g.md5 <> me.md5
+        WHERE me.md5 = ?;]])
+    stmt:bind(md5)
+    local out = {}
+    for _, r in ipairs(rows(stmt)) do out[r[1]] = true end
+    return out
+end
+
 --- The merged state as it applies to this book: its own records, with
--- the properties about the book taken from whichever version's record wins.
+-- the properties about the book taken from whichever version's record
+-- wins, and those holding positions from whichever version with matching
+-- positions.
 local function loadEffective(conn, md5)
     local eff = loadMerged(conn, md5)
     local group = groupOf(conn, md5)
+    local peers = #group > 1 and positionPeers(conn, md5) or {}
     for i = 2, #group do
+        local same_pos = peers[group[i]]
         for prop, m in pairs(loadMerged(conn, group[i])) do
-            if BookFormat.isGroupProp(prop) and BookStore.wins(m, eff[prop]) then eff[prop] = m end
+            if (BookFormat.isGroupProp(prop) or (same_pos and BookFormat.isPositionProp(prop)))
+                    and BookStore.wins(m, eff[prop]) then
+                eff[prop] = m
+            end
         end
     end
     return eff

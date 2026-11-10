@@ -735,6 +735,14 @@ function Engine:_finish(run)
                     self.log.warn("StatSync: applying book data to new versions failed:", all)
                 end
             end
+            if run.ann and d.ann.store.regroup then
+                local aok, pending = pcall(d.ann.store.regroup, d.ann.store, changed)
+                if aok then
+                    for id, a in pairs(pending) do run.ann_affected[id] = a end
+                else
+                    self.log.warn("StatSync: applying annotations to new versions failed:", pending)
+                end
+            end
         end
     end
     if run.id and d.store.joinVersions and (run.id_regrouped or not self.status.versions_joined) then

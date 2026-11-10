@@ -21,6 +21,13 @@ Tables:
 
 Segments imported are recorded in the statistics' seen_segments and
 bad_segments tables (their names, ann-…, can't clash with seg-…).
+
+Versions of a book: id_pos (kept by idstore.lua) says which MD5s are the
+same book with matching positions (the same body). A book's merged state is
+then, key by key, the winner across all of them. Keys are creation times,
+so an annotation made on one version is the same annotation on the others.
+Changes are still recorded under the book's own MD5, so nothing on the
+server changes and devices without the groups carry on as before.
 --]]
 
 local AnnFormat = require("omnisync/annformat")
@@ -75,6 +82,11 @@ local SCHEMA = [[
         updated INTEGER NOT NULL,
         PRIMARY KEY (md5, kind, key)
     ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS id_pos (
+        md5 TEXT PRIMARY KEY,
+        grp TEXT NOT NULL
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS id_pos_grp ON id_pos (grp);
     CREATE TABLE IF NOT EXISTS seen_segments (
         device_id   TEXT    NOT NULL,
         name        TEXT    NOT NULL,
@@ -164,6 +176,34 @@ local function loadMerged(conn, md5, kind)
         n = n + 1
     end
     return map, n
+end
+
+--- The other versions of the book whose positions match this one's.
+local function peersOf(conn, md5)
+    local stmt = conn:prepare([[
+        SELECT g.md5 FROM id_pos me JOIN id_pos g ON g.grp = me.grp AND g.md5 <> me.md5
+        WHERE me.md5 = ? ORDER BY g.md5;]])
+    stmt:bind(md5)
+    local out = {}
+    for _, r in ipairs(rows(stmt)) do out[#out + 1] = r[1] end
+    return out
+end
+
+--- The merged state as it applies to this book: key by key, the winner
+-- across it and its versions with matching positions. Also returns its
+-- own records.
+local function loadEffective(conn, md5, kind)
+    local own = loadMerged(conn, md5, kind)
+    local peers = peersOf(conn, md5)
+    if #peers == 0 then return own, own end
+    local eff = {}
+    for key, m in pairs(own) do eff[key] = m end
+    for _, peer in ipairs(peers) do
+        for key, m in pairs(loadMerged(conn, peer, kind)) do
+            if AnnStore.wins(m, eff[key]) then eff[key] = m end
+        end
+    end
+    return eff, own
 end
 
 local function loadLocal(conn, md5, kind)
@@ -285,16 +325,19 @@ function AnnStore:observe(opts)
     return self:_tx(function(conn)
         ensureBook(conn, md5, kind, opts)
         local book = loadBook(conn, md5, kind)
-        local merged = loadMerged(conn, md5, kind)
-        local prev, nprev = loadLocal(conn, md5, kind)
+        -- Recorded under this book's own MD5 (own); compared with what
+        -- applies to it (its versions' records too) to tell what changed.
+        local merged, own = loadEffective(conn, md5, kind)
+        local prev = loadLocal(conn, md5, kind)
         local held = loadHeld(conn, md5, kind)
         local res = { added = 0, changed = 0, deleted = 0, held = 0, skipped = skipped }
 
         local function record(key, rec)
-            if AnnStore.wins(rec, merged[key]) then
+            if AnnStore.wins(rec, own[key]) then
                 putMerged(conn, md5, kind, key, rec)
                 putOutbox(conn, md5, kind, key, rec.updated)
-                merged[key] = rec
+                own[key] = rec
+                if AnnStore.wins(rec, merged[key]) then merged[key] = rec end
                 return true
             end
         end
@@ -366,7 +409,7 @@ end
 function AnnStore:plan(md5, kind, items)
     local snap = self:snapshot(items, kind)
     return self:_read(function(conn)
-        local merged = loadMerged(conn, md5, kind)
+        local merged = loadEffective(conn, md5, kind)
         local held = loadHeld(conn, md5, kind)
         local ops = {}
         for key, m in pairs(merged) do
@@ -395,7 +438,7 @@ function AnnStore:applied(md5, kind, items)
     return self:_tx(function(conn)
         ensureBook(conn, md5, kind)
         writeLocal(conn, md5, kind, snap)
-        local pending = differs(loadMerged(conn, md5, kind), snap, loadHeld(conn, md5, kind))
+        local pending = differs((loadEffective(conn, md5, kind)), snap, loadHeld(conn, md5, kind))
         local stmt = conn:prepare("UPDATE ann_books SET observed = 1, pending = ? WHERE md5 = ? AND kind = ?;")
         stmt:bind(pending and 1 or 0, md5, kind):step()
         stmt:close()
@@ -433,6 +476,30 @@ function AnnStore:isPending(md5, kind)
     return self:_read(function(conn)
         local b = loadBook(conn, md5, kind)
         return b ~= nil and b.pending
+    end)
+end
+
+--- After the groups changed (IdStore:refreshGroups): looks again at what's
+-- to be applied to these books, seen on this device. md5s = { [md5] = true }.
+-- Returns those now with changes to apply: { ["md5\0kind"] = { md5, kind } }.
+function AnnStore:regroup(md5s)
+    return self:_tx(function(conn)
+        local out = {}
+        local stmt = conn:prepare("SELECT kind FROM ann_books WHERE md5 = ? AND observed = 1;")
+        for md5 in pairs(md5s) do
+            stmt:reset():bind(md5)
+            local kinds = {}
+            local r = stmt:step()
+            while r do kinds[#kinds + 1] = r[1]; r = stmt:step() end
+            for _, kind in ipairs(kinds) do
+                local pending = differs((loadEffective(conn, md5, kind)), loadLocal(conn, md5, kind),
+                    loadHeld(conn, md5, kind))
+                setBook(conn, md5, kind, "pending", pending and 1 or 0)
+                if pending then out[md5 .. "\0" .. kind] = { md5 = md5, kind = kind } end
+            end
+        end
+        stmt:close()
+        return out
     end)
 end
 
@@ -601,6 +668,21 @@ function AnnStore:importSegment(path, device_id, name, size, etag, now)
             local b = book_info[a.md5]
             if b then fill:reset():bind(b.title, b.authors, a.md5, a.kind):step() end
         end
+        -- The versions of these books with matching positions, seen here,
+        -- are affected too.
+        local seen = conn:prepare("UPDATE ann_books SET pending = 1 WHERE md5 = ? AND kind = ? AND observed = 1;")
+        local extra = {}
+        for _, a in pairs(summary.affected) do
+            for _, peer in ipairs(peersOf(conn, a.md5)) do
+                local id = peer .. "\0" .. a.kind
+                if not summary.affected[id] then
+                    seen:reset():bind(peer, a.kind):step()
+                    if num(conn:rowexec("SELECT changes();")) ~= 0 then extra[id] = { md5 = peer, kind = a.kind } end
+                end
+            end
+        end
+        seen:close()
+        for id, a in pairs(extra) do summary.affected[id] = a end
         pend:close()
         fill:close()
         local stmt = conn:prepare(INSERT_SEEN)

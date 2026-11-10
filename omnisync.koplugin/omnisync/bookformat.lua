@@ -60,7 +60,8 @@ for _, k in ipairs(BookFormat.META_KEYS) do BookFormat.CLOSED_PROPS["meta." .. k
 
 --- Properties about the book rather than places in it: every version of a
 -- book (files sharing a UUID, see IDENTITY.md) shares them. The handmade
--- TOC and flows hold positions, so they stay with their own file.
+-- TOC and flows hold positions, so they're only shared by versions whose
+-- positions match (see isPositionProp).
 -- Collection memberships are shared too (see isGroupProp), and so is
 -- when the book was last opened.
 BookFormat.GROUP_PROPS = { hist = true }
@@ -84,6 +85,13 @@ end
 --- Is this property shared by every version of a book?
 function BookFormat.isGroupProp(prop)
     return BookFormat.GROUP_PROPS[prop] or BookFormat.collId(prop) ~= nil
+end
+
+--- Is this property shared by versions of a book whose positions match
+-- (the same body: level 2 in IDENTITY.md)? The handmade TOC and flows.
+function BookFormat.isPositionProp(prop)
+    local what = type(prop) == "string" and prop:match("^(%a+)%.%a+$")
+    return what == "toc" or what == "flows"
 end
 
 local META = {}

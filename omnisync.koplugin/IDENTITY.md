@@ -1,10 +1,10 @@
 # Book identity across file versions (plan)
 
-Status: steps 1 to 4 built: Cloud library's matcher fix, the identity
-stream (2026-11-06), book data joining (2026-11-08) and statistics
-joining (2026-11-10); and step 7, progress across versions (2026-11-10).
-Steps 5 and 6 are a plan. Sections below say where the build
-differs from the plan.
+Status: steps 1 to 5 built: Cloud library's matcher fix, the identity
+stream (2026-11-06), book data joining (2026-11-08), statistics joining
+(2026-11-10) and annotations, TOC and flows joining (2026-11-10); and
+step 7, progress across versions (2026-11-10). Step 6 is a plan.
+Sections below say where the build differs from the plan.
 
 ## The problem
 
@@ -241,6 +241,25 @@ Records from a group member with a *different* signature (another
 edition) are not applied. They could be shown later ("3 highlights from
 another edition of this book"); out of scope here.
 
+As built:
+
+- `IdStore:refreshGroups()` also keeps `id_pos(md5, grp)`: within each
+  joined group, the MD5s sharing a signature (transitively), two or more
+  per set. A signature arriving later (another device read the original
+  file) counts as a change of group, so everything below is looked at
+  again. `positionPeers` (progress) reads it too.
+- Annotations (`omnisync/annstore.lua`): a book's merged state is, key by
+  key, the winner across its `id_pos` set. Local changes are judged
+  against that and recorded under the book's own MD5. Importing records
+  for one MD5 marks the others seen here as pending (and affected, for the
+  open book); `AnnStore:regroup` recomputes pending for MD5s whose group
+  changed, so closed books are written after the next sync and the open
+  book gets them live.
+- Handmade TOC and flows (`toc.<kind>`, `flows.<kind>`,
+  `BookFormat.isPositionProp`): joined the same way, inside
+  `BookStore`'s `loadEffective`, over the `id_pos` set only.
+- Kinds stay apart: a rolling list joins only rolling lists.
+
 ### Progress (level 2)
 
 KOReader's progress sync keys by MD5 too, on its own server, so this is a
@@ -311,7 +330,7 @@ Cloud library then:
    groups held back by the guards.
 3. Book data joining (level 1). **Built** (2026-11-08).
 4. Statistics joining, including the late-link move. **Built** (2026-11-10).
-5. Annotations, TOC and flows joining (level 2).
+5. Annotations, TOC and flows joining (level 2). **Built** (2026-11-10).
 6. Cloud library: links, `bookState`, badges and details.
 7. Progress across versions. **Built** (2026-11-10), before 4 to 6.
 

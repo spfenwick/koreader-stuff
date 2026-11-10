@@ -679,4 +679,74 @@ do -- status counts and requeue
     check(A:outbox() == 2, "requeue: everything to send again")
 end
 
+-- Versions of a book ------------------------------------------------------------------------
+
+do -- versions with the same body share annotations; others don't
+    -- Marks MD5s as one book with matching positions (as IdStore:refreshGroups does).
+    local function join(dev, md5s)
+        local c = S.SQ3.open(dev.store.state_path)
+        dev.store:open():close()
+        for _, m in ipairs(md5s) do
+            c:exec(string.format("INSERT OR REPLACE INTO id_pos (md5, grp) VALUES ('%s', '%s');", m, md5s[1]))
+        end
+        c:close()
+    end
+    local X, Y = string.rep("a", 32), string.rep("b", 32)
+    local A, B, C = newDev("A"), newDev("B"), newDev("C")
+    join(A, { X, Y }); join(B, { X, Y })
+    B:open(Y, "rolling"); B:close()
+    C:open(Y, "rolling"); C:close()
+
+    -- A highlights its version; B gets it in its own.
+    A:open(X, "rolling"); A:highlight(1, 1, 0, 5); tick(); A:highlight(2, 1, 0, 5); tick(); A:close()
+    local seg = A:export()
+    local s = B:import(seg, A.id)
+    check(s.affected[Y .. "\0rolling"] and B.store:isPending(Y, "rolling"), "B's version is affected")
+    B:open(Y, "rolling")
+    check(B:listText(Y) == A:listText(X), "B's version gets A's highlights")
+    B:close()
+    check(B:export() == nil and B:merged(Y) == "", "nothing recorded under B's version, nothing sent back")
+
+    -- Without the link: nothing.
+    C:import(seg, A.id)
+    C:open(Y, "rolling")
+    check(#C.ui.annotation.annotations == 0, "a device without the link: its version unchanged")
+    C:close()
+
+    -- B edits one and deletes the other in its version; A, reading, gets both live.
+    tick(10)
+    B:open(Y, "rolling")
+    local list = B.ui.annotation.annotations
+    B:edit(list[1], { note = "from B" })
+    B:remove(list[2])
+    B:close()
+    local seg2, r2 = B:export()
+    check(r2 and r2.records == 2 and B:merged(Y) ~= "", "B's changes recorded under its own MD5")
+    A:open(X, "rolling")
+    A:import(seg2, B.id)
+    check(#A.ui.annotation.annotations == 1 and A.ui.annotation.annotations[1].note == "from B",
+        "A's open version: the edit and deletion applied live")
+    A:close()
+    check(A:export() == nil, "nothing sent back from A")
+    check(B:listText(Y) == A:listText(X), "both versions alike")
+
+    -- A device that read both before the link: once linked, each gets the other's.
+    local D = newDev("D")
+    D:open(Y, "rolling"); D:highlight(5, 1, 0, 5); tick(); D:close()
+    D:import(seg, A.id); D:import(seg2, B.id)
+    D:open(X, "rolling"); D:close()
+    D:export()
+    join(D, { X, Y })
+    local pending = D.store:regroup({ [X] = true, [Y] = true })
+    check(pending[X .. "\0rolling"] and pending[Y .. "\0rolling"], "after the link: both versions to update")
+    D:open(Y, "rolling")
+    check(#D.ui.annotation.annotations == 2, "D's version: its own and the other's")
+    D:close()
+    D:open(X, "rolling")
+    check(#D.ui.annotation.annotations == 2, "and the other version: the same two")
+    D:close()
+    check(D:export() == nil, "nothing new sent after the link")
+    check(next(D.store:regroup({ [X] = true, [Y] = true })) == nil, "nothing left to update")
+end
+
 S.finish("omnisync annotation tests")

@@ -98,12 +98,15 @@ KOReader keeps no times for these properties, so:
 Files that are the same book (they share a UUID, see
 [IDENTITY.md](IDENTITY.md)) share status, rating, review and custom
 metadata: a book's merged value is the winner across the records of all
-its files, by the same rule. The TOC and flows hold positions, so they stay
-with their own file. Changes are still recorded and sent under the book's
-own MD5; nothing already on the server changes.
+its files, by the same rule. The TOC and flows hold positions, so they're
+only shared by the files whose positions match (the same body signature,
+level 2 in IDENTITY.md): another edition under the same UUID keeps its
+own. Changes are still recorded and sent under the book's own MD5; nothing
+already on the server changes.
 
-The joined files are kept in `id_groups`, rebuilt from the identity facts
-at the end of each sync. When a group changes, its books' closed-book
+The joined files are kept in `id_groups`, and those with matching
+positions in `id_pos`, rebuilt from the identity facts at the end of each
+sync. When a group changes, its books' closed-book
 writes are looked at again and they count as changed for the open book,
 so a link that arrives after the values did needs nothing more.
 
@@ -278,6 +281,7 @@ book_books(md5, title, authors, write)     -- write: closed-book values to write
 book_files(path, md5, sig)                 -- where the book is; sidecar size and time
 coll_files(path, md5, sig)                 -- books in collections or the history; file size and time
 id_groups(md5, grp)                        -- versions of a book (kept by idstore.lua)
+id_pos(md5, grp)                           -- those with matching positions (kept by idstore.lua)
 ```
 
 Segments imported are recorded in `seen_segments`/`bad_segments`, so
