@@ -315,7 +315,7 @@ deleted whatever order files arrive in.
 ## Packs
 
 Real use uploads a small segment after most reading sessions (a sync runs on
-closing a book, waking, connecting and starting), so a busy device writes
+opening and closing a book, waking, connecting and starting), so a busy device writes
 thousands a year. The daily full listing and a new device's first sync (one
 request per segment) grow with them. So each device packs its own small
 segments (`pack.lua`, step 5 of `netjob.lua`):
