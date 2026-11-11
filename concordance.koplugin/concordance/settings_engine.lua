@@ -59,9 +59,19 @@ local SKIPPED_DIRS = { ["cache"] = true, ["settings/concordance/settings-sync"] 
 -- left in plugins/ until it's deleted.)
 Engine.SELF_UPDATING = { "concordance.koplugin", "knuthplass.koplugin", "omnisync.koplugin" }
 
+--- KOReader's main settings: read when it starts, before any plugin, and
+-- written back from memory when it exits. A pulled copy can't be put in
+-- place early enough: KOReader would write the old values over it, and the
+-- next sync send them back as newer. (defaults.custom.lua is read as early,
+-- but only written when a default is changed: it syncs, a restart late.)
+Engine.CORE_OWNED = { ["settings.reader.lua"] = true }
+
 --- Why a file is never synced, or nil if it can be. Also a key to report it
 -- under, once for a whole folder.
 function Engine.excluded(path)
+    if Engine.CORE_OWNED[path] then
+        return "KOReader writes it back from memory, never synced", path
+    end
     if path:sub(1, #OWN) == OWN and not OWN_SYNCED[path] then
         return "Concordance's own, never synced", path
     end

@@ -52,6 +52,12 @@ skipped one):
   `state.sqlite3` (its sync database) and `settings-sync/` (settings sync's
   state). `settings/concordance/settings.lua` and the list are synced.
 - `cache/`.
+- `settings.reader.lua`: KOReader reads it when it starts, before any
+  plugin, and writes it back from memory when it exits. A pulled copy
+  would be written over, then sent back as if it were newer.
+  (`defaults.custom.lua` can be listed: KOReader only writes it when a
+  default is changed. A pulled copy is used from the restart after the one
+  that puts it in place.)
 - The plugins from this repository (`concordance.koplugin`,
   `knuthplass.koplugin`): they update themselves from GitHub, and a sync
   would fight the updater over their folders.

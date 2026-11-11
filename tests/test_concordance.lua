@@ -415,6 +415,13 @@ local function memTransport(files)
         if type(v) ~= "string" then return nil, "HTTP 404", 404 end
         return { size = #v }
     end
+    -- t.no_size: a server that doesn't report sizes.
+    local stat_with_size = t.stat
+    function t:stat(path)
+        local st, err, code = stat_with_size(self, path)
+        if st and self.no_size then st.size = nil end
+        return st, err, code
+    end
     function t:mkdir(path) note("mkdir " .. path); if path ~= "" then self.files[path] = true end return true end
     function t:put(path, lp) note("put " .. path); self.files[path] = S.readFile(lp); return true end
     function t:put_new(path, lp)
@@ -452,6 +459,15 @@ do
         local got = {}
         for _, d in ipairs(r.downloads) do got[d.device .. "/" .. d.name] = S.readFile(d.path) end
         return got
+    end
+    -- A server that reports no sizes: the upload counts, marked unchecked.
+    do
+        local tn = memTransport()
+        tn.no_size = true
+        local rn = NetJob.run({ device_id = "dev1", pending = { path = pending, size = 1 }, meta_path = meta,
+                                seen = {}, tmp_dir = tmp, full_list = true }, tn)
+        check(rn.ok and rn.uploaded and rn.uploaded.verified and rn.uploaded.unchecked,
+            "no size from the server: upload accepted, marked unchecked")
     end
     -- Empty server, first sync (full listing)
     local t = memTransport()

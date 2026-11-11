@@ -467,6 +467,43 @@ do
     obs(MP, { rating = false })
     check(#d.store:plan(MP, { rating = false }) == 0, "clearing it again sticks")
 
+    -- A change made after applying a record from a device whose clock runs
+    -- ahead isn't undone: it's stamped after that record.
+    do
+        local MC = string.rep("5", 32)
+        local c = newDev("clock")
+        local function o(values) return c.store:observe{ md5 = MC, values = values, now = clock, device = "c" } end
+        o({ rating = 3, note = "fine" })
+        local ahead = clock + 100000
+        local fseg = TMP .. "/clock-ahead.jsonl"
+        S.writeFile(fseg, table.concat({ BookFormat.headerLine("z", 1), BookFormat.bookLine{ md5 = MC },
+            BookFormat.recordLine{ md5 = MC, prop = "rating", updated = ahead, device = "z", value_json = "5" },
+            BookFormat.recordLine{ md5 = MC, prop = "note", updated = ahead, device = "z", value_json = '"great"' },
+            BookFormat.trailerLine(1, 2) }, "\n") .. "\n")
+        c.store:importSegment(fseg, "z", BookFormat.segmentName(901), 1, nil, clock)
+        check(#c.store:plan(MC, { rating = 3, note = "fine" }) == 2, "the other device's values apply")
+        c.store:applied(MC, { rating = 5, note = "great" })
+        tick(10)
+        local r = o({ rating = 2, note = false })
+        check(r.changed == 2, "changes recorded though the merged record is dated later")
+        check(#c.store:plan(MC, { rating = 2, note = false }) == 0, "the changes aren't undone")
+        local cc = S.SQ3.open(c.store.state_path)
+        check(tonumber(cc:rowexec("SELECT updated FROM book_merged WHERE md5 = '" .. MC .. "' AND prop = 'rating'")) == ahead + 1,
+            "stamped just after the record it was made from")
+        cc:close()
+        -- A value this device never applied still loses to the later record.
+        local MD = string.rep("6", 32)
+        c.store:observe{ md5 = MD, values = { rating = 1 }, now = clock, device = "c" }
+        S.writeFile(fseg, table.concat({ BookFormat.headerLine("z", 2), BookFormat.bookLine{ md5 = MD },
+            BookFormat.recordLine{ md5 = MD, prop = "rating", updated = ahead, device = "z", value_json = "5" },
+            BookFormat.trailerLine(1, 1) }, "\n") .. "\n")
+        c.store:importSegment(fseg, "z", BookFormat.segmentName(902), 1, nil, clock)
+        tick(10)
+        c.store:observe{ md5 = MD, values = { rating = 4 }, now = clock, device = "c" }
+        local ops2 = c.store:plan(MD, { rating = 4 })
+        check(#ops2 == 1 and ops2[1].value == 5, "a change not made from the later record still loses to it")
+    end
+
     -- Positions cross only versions with the same body: a handmade TOC
     -- made on one applies to the other.
     local toc = { enabled = true, items = { { title = "One", depth = 1, xpointer = "/body/DocFragment[2]" } } }

@@ -351,6 +351,13 @@ function AnnStore:observe(opts)
                 if book.observed and p and (s.upd == nil or (p.upd and s.upd <= p.upd)) then upd = now end
                 local m = merged[key]
                 if not (m and m.hash == s.hash) then
+                    -- Made from the merged record (this device had it): it's
+                    -- later than it, whatever the clocks say. Otherwise a
+                    -- record stamped by a clock running ahead would win, and
+                    -- the edit be undone here.
+                    if book.observed and p and m and p.hash == m.hash and upd <= m.updated then
+                        upd = m.updated + 1
+                    end
                     if record(key, { updated = upd, device = device, deleted = false, hash = s.hash, fields = s.fields }) then
                         if m and not m.deleted then res.changed = res.changed + 1 else res.added = res.added + 1 end
                     end
@@ -382,7 +389,11 @@ function AnnStore:observe(opts)
                 res.held = #gone
             else
                 for _, key in ipairs(gone) do
-                    if record(key, { updated = now, device = device, deleted = true, hash = "" }) then
+                    -- As for an edit: removing what the merged record
+                    -- holds is later than it.
+                    local m, upd = merged[key], now
+                    if m and prev[key].hash == m.hash and upd <= m.updated then upd = m.updated + 1 end
+                    if record(key, { updated = upd, device = device, deleted = true, hash = "" }) then
                         res.deleted = res.deleted + 1
                     end
                 end

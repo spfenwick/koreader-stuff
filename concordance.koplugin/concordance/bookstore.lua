@@ -384,6 +384,14 @@ function BookStore:_observeIn(conn, opts)
         end
     end
 
+    -- A change made from the merged record (this device had its value) is
+    -- later than it, whatever the clocks say. Otherwise a record stamped
+    -- by a clock running ahead would win, and the change be undone here.
+    local function after(m, prev)
+        if m and prev == m.hash and now <= m.updated then return m.updated + 1 end
+        return now
+    end
+
     for prop, s in pairs(snap) do
         local prev = loc[prop]
         local first = opts.fresh or prev == nil
@@ -391,13 +399,16 @@ function BookStore:_observeIn(conn, opts)
         local same = m and not m.deleted and m.hash == s.hash
         if s.hash == "" then
             if not first and prev ~= "" and prop ~= "status" and not (m and m.deleted) then
-                record(prop, { updated = now, device = device, deleted = true, hash = "" })
+                record(prop, { updated = after(m, prev), device = device, deleted = true, hash = "" })
             end
         elseif not same and (first or prev ~= s.hash) then
-            local upd = now
-            if first then upd = times[prop] or 0 end
+            local upd
             if prop == "status" and (first or prev == "") and AnnFormat.decodeValue(s.json) == "reading" then
                 upd = 0
+            elseif first then
+                upd = times[prop] or 0
+            else
+                upd = after(m, prev)
             end
             record(prop, { updated = upd, device = device, deleted = false, hash = s.hash, value = s.json })
         end

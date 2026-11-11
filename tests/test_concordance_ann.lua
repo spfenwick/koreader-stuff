@@ -749,4 +749,39 @@ do -- versions with the same body share annotations; others don't
     check(next(D.store:regroup({ [X] = true, [Y] = true })) == nil, "nothing left to update")
 end
 
+-- A device whose clock runs ahead: edits and removals made elsewhere after
+-- its highlights arrived aren't undone.
+do
+    local MC = string.rep("c", 32)
+    local A, B = newDev("ahead"), newDev("ontime")
+    local real = clock
+    clock = real + 100000
+    A:open(MC)
+    A:highlight(1, 1, 0, 5)
+    A:highlight(1, 2, 0, 5)
+    A:close()
+    local segA = A:export()
+    clock = real
+    B:import(segA, A.id)
+    B:open(MC)
+    local list = B.ui.annotation.annotations
+    check(#list == 2, "the highlights arrive")
+    tick(10)
+    B:edit(list[1], { note = "mine" })
+    B:remove(list[2])
+    B:close()
+    local segB = B:export()
+    check(segB ~= nil, "the edit and removal are recorded though the merged records are dated later")
+    B:open(MC)
+    check(#B.ui.annotation.annotations == 1 and B.ui.annotation.annotations[1].note == "mine",
+        "the edit and removal aren't undone here")
+    B:close()
+    A:import(segB, B.id)
+    A:open(MC)
+    check(#A.ui.annotation.annotations == 1 and A.ui.annotation.annotations[1].note == "mine",
+        "and reach the device with the fast clock")
+    A:close()
+    clock = real + 20
+end
+
 S.finish("concordance annotation tests")

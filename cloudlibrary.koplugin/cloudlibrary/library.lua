@@ -434,6 +434,13 @@ function Library.bookState(id)
     return Identity.bookState({ id })
 end
 
+--- Whether the catalog has been read since KOReader started (it isn't when
+-- KOReader starts in a book): until then localFiles() and links() are
+-- empty, which doesn't mean the files are gone.
+function Library.isLoaded()
+    return Library.loaded_key ~= nil
+end
+
 --- The catalog books' files in the library folder (for Concordance to read
 -- their identity, opened or not): { path, … }, sorted.
 function Library.localFiles()

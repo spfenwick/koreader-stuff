@@ -379,6 +379,8 @@ function NetJob.run(params, transport, report)
                 if st and (st.size == nil or st.size == stream.pending.size) then
                     up.verified = true
                     up.etag = st.etag
+                    -- The server gave no size: found, but not compared.
+                    if st.size == nil then up.unchecked = true end
                 else
                     up_err = "upload not found with the right size"
                 end

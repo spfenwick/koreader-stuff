@@ -74,6 +74,18 @@ Done 11 November 2026, with tests for each; all suites pass.
 
 ### Phase 2: sync correctness
 
+Done 11 November 2026, with tests; all suites pass. Three steps came out
+differently from what is written below:
+
+- **Step 7:** only `settings.reader.lua` is refused. KOReader writes
+  `defaults.custom.lua` only when a default is changed, so it syncs
+  correctly (a restart late) and stays supported.
+- **Step 10, upload verification:** an upload with no size from the server
+  is still accepted, but flagged and logged. Refusing it would make such a
+  server re-upload every segment on every sync.
+- **Step 10, device IDs:** `validDeviceId` is unchanged. Tightening it
+  could silently ignore a real device whose ID is not in today's format.
+
 6. **Finding 6:** when the device's last-seen hash equals the merged
    record's, stamp the edit `max(now, merged.updated + 1)` in
    `annstore.lua` and `bookstore.lua`. Add a test with one device's clock

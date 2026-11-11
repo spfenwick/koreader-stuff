@@ -542,6 +542,16 @@ for _, f in ipairs(P.identityFiles()) do files[f.path] = f end
 check(files[TMP .. "/cloud-book.epub"] and files[TMP .. "/cloud-book.epub"].md5 == nil
     and not files[TMP .. "/cloud-book.pdf"] and not files[TMP .. "/gone.epub"],
     "Cloud library's EPUBs read for their identity, not yet opened")
+check(select(2, P.identityFiles()) == true, "the list is complete")
+-- Cloud library hasn't read its catalog (KOReader started in a book): its
+-- files aren't listed, and the list says it's incomplete.
+package.loaded["cloudlibrary/library"].isLoaded = function() return false end
+local partial, complete = P.identityFiles()
+local n_cloud = 0
+for _, f in ipairs(partial) do if f.path == TMP .. "/cloud-book.epub" then n_cloud = n_cloud + 1 end end
+check(n_cloud == 0 and complete == false, "Cloud library's catalog not read: list marked incomplete")
+package.loaded["cloudlibrary/library"].isLoaded = function() return true end
+check(select(2, P.identityFiles()) == true, "catalog read: complete again")
 P.engine().deps.id.collect()
 local Identity = require("concordance/identity")
 check(Identity.available(), "identity set up for other plugins")

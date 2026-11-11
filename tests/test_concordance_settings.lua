@@ -81,6 +81,9 @@ check(Engine.excluded("settings/concordance/device.lua") and Engine.excluded("se
     and Engine.excluded("settings/concordance/settings-sync/state.tsv"), "Concordance's own files never synced")
 check(not Engine.excluded("settings/concordance/settings.lua") and not Engine.excluded(Engine.LIST),
     "its shared settings and the list are")
+check(Engine.excluded("settings.reader.lua") and not Engine.excluded("defaults.custom.lua")
+    and not Engine.excluded("settings/reader.lua") and not Engine.excluded("settings.reader.lua.old"),
+    "KOReader's main settings never synced")
 check(Engine.excluded("cache/x.lua") and Engine.excluded("plugins/concordance.koplugin/main.lua")
     and Engine.excluded("plugins/knuthplass.koplugin/main.lua") and not Engine.excluded("plugins/assistant.koplugin/main.lua"),
     "the cache and plugins that update themselves never synced")

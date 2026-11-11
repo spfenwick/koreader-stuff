@@ -342,11 +342,16 @@ function Engine:_export(run)
             bad = d.store:badSegments(IdFormat.BAD_VERSION),
         }
         -- Book files to read in the subprocess, after the network step.
-        local fok, files = pcall(d.id.files)
+        local fok, files, complete = pcall(d.id.files)
         if fok and files then
-            local present = {}
-            for _, f in ipairs(files) do present[f.path] = true end
-            pcall(d.id.store.keepScanned, d.id.store, present)
+            -- An incomplete list (Cloud library's catalog not read yet)
+            -- doesn't say which files are gone: forgetting them would
+            -- have them all read again.
+            if complete ~= false then
+                local present = {}
+                for _, f in ipairs(files) do present[f.path] = true end
+                pcall(d.id.store.keepScanned, d.id.store, present)
+            end
             local tok, todo = pcall(d.id.store.toScan, d.id.store, files)
             if tok and #todo > 0 then
                 scan_items = todo
@@ -495,6 +500,12 @@ function Engine:_collect(run)
     run.missing_own = result.missing_own
     if result.full_listed and not run.killed then run.full_listed = d.now() end
     for _, e in ipairs(result.segment_errors or {}) do self.log.warn("StatSync:", e) end
+    for _, key in ipairs({ "uploaded", "ann_uploaded", "book_uploaded", "id_uploaded" }) do
+        local u = result[key]
+        if u and u.unchecked then
+            self.log.warn("StatSync: the server gave no size for", u.name, "- the upload was found but its size not checked")
+        end
+    end
 
     local up = result.uploaded
     if up and up.verified then

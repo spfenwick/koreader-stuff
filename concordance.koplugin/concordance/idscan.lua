@@ -176,7 +176,12 @@ function IdScan.scan(path, deps)
             local wanted, hashes = {}, {}
             for _, f in ipairs(files) do wanted[f] = true end
             arc:each(wanted, function(name, data) hashes[name] = IdScan.bodyHash(data, md5) end)
-            info.sig = IdScan.combine(files, hashes, md5)
+            -- No signature unless every spine file was read: with one
+            -- left out, two different books could get the same one, and
+            -- their highlights and positions cross.
+            local whole = true
+            for _, f in ipairs(files) do if not hashes[f] then whole = false end end
+            if whole then info.sig = IdScan.combine(files, hashes, md5) end
         end
         return info
     end)

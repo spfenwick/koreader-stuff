@@ -438,13 +438,19 @@ function Plugin.installProgressHook()
 end
 
 --- Book files in Cloud library's folder that are catalog books, when
--- Cloud library is installed: { path, … }.
+-- Cloud library is installed: { path, … }, and whether that's all of them
+-- (false while Cloud library hasn't read its catalog, or couldn't say).
 local function cloudFiles()
     local CloudLibrary = package.loaded["cloudlibrary/library"]
-    if type(CloudLibrary) ~= "table" or type(CloudLibrary.localFiles) ~= "function" then return {} end
+    if type(CloudLibrary) ~= "table" or type(CloudLibrary.localFiles) ~= "function" then return {}, true end
+    if type(CloudLibrary.isLoaded) == "function" then
+        local ok_l, loaded = pcall(CloudLibrary.isLoaded)
+        if not (ok_l and loaded) then return {}, false end
+    end
     local ok, list = pcall(CloudLibrary.localFiles)
     if not ok then logger.warn("Concordance: asking Cloud library failed:", list) end
-    return ok and type(list) == "table" and list or {}
+    if ok and type(list) == "table" then return list, true end
+    return {}, false
 end
 
 --- Files Cloud library matched to a catalog book without the file naming
@@ -460,6 +466,8 @@ end
 --- Book files to read for book identity: the EPUBs book data knows about
 -- (books opened on this device), with the sidecar's MD5, and those in
 -- Cloud library's folder (downloaded, maybe never opened: no MD5 yet).
+-- Also returns whether the list is complete: false when Cloud library's
+-- files aren't known just now, so files left out aren't taken as gone.
 function Plugin.identityFiles()
     local lfs = require("libs/libkoreader-lfs")
     local out, seen = {}, {}
@@ -472,11 +480,12 @@ function Plugin.identityFiles()
         end
     end
     for path, f in pairs(Plugin.bookStore():files()) do add(path, f.md5) end
-    for _, path in ipairs(cloudFiles()) do
+    local cloud, complete = cloudFiles()
+    for _, path in ipairs(cloud) do
         if type(path) == "string" then add(path, nil) end
     end
     table.sort(out, function(a, b) return a.path < b.path end)
-    return out
+    return out, complete
 end
 
 local controller

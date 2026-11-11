@@ -180,6 +180,17 @@ do
     check(IdScan.scan("/b/retagged.epub", scan_deps).sig ~= old.sig, "changed element: another signature")
     check(IdScan.scan("/b/reordered.epub", scan_deps).sig ~= old.sig, "changed spine order: another signature")
     check(IdScan.scan("/b/missing.epub", scan_deps) == nil, "unreadable file: nothing")
+    -- A spine file that can't be read: no signature, rather than one that
+    -- another damaged book could share.
+    addBook("/b/holed1.epub", "md5h1", OPF9, CH1, CH2)
+    addBook("/b/holed2.epub", "md5h2", OPF9, CH1:gsub("dark", "stormy"), CH2)
+    archives["/b/holed1.epub"].entries["OEBPS/text/ch1.html"] = nil
+    archives["/b/holed2.epub"].entries["OEBPS/text/ch1.html"] = nil
+    for _, a in ipairs({ archives["/b/holed1.epub"], archives["/b/holed2.epub"] }) do
+        a.order = { "mimetype", "OEBPS/text/ch 2.html", "META-INF/container.xml", "OEBPS/content.opf" }
+    end
+    local h1 = assert(IdScan.scan("/b/holed1.epub", scan_deps))
+    check(h1.sig == nil and #h1.uuids == 2, "a spine file missing: UUIDs read, no signature")
     archives["/b/noopf.epub"] = { fingerprint = "x", entries = {}, order = {} }
     local none, why = IdScan.scan("/b/noopf.epub", scan_deps)
     check(none == nil and why == "no package file", "no package file: nothing")
