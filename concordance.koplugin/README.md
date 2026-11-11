@@ -60,6 +60,8 @@ Tools → Concordance, in both the file browser and the reader:
   rating, review, metadata, the handmade table of contents,
   collections and favorites, and the reading history.
 - **Server** and **Folder on server**.
+- **Sync in the file browser**: every 5, 15, 30 or 60 minutes, or never (the
+  default).
 - **Turn on Wi-Fi for automatic syncs** (off by default).
 - **Status**: server and folders, last syncs and errors, devices seen, books known in more than one version,
   what was sent and received, this device's ID.
@@ -79,7 +81,9 @@ KOReader).
 
 Statistics and highlights sync automatically (each unless turned off): when
 a book is closed, on wake-up, when the network connects, and 20 seconds
-after KOReader starts. Without a network connection an automatic sync is
+after KOReader starts; and, if "Sync in the file browser" is set, that often
+while the file browser is shown and Wi-Fi is on (it never turns Wi-Fi on).
+Without a network connection an automatic sync is
 skipped; nothing is queued, the next sync catches up. "Turn on Wi-Fi for
 automatic syncs" makes automatic syncs turn Wi-Fi on the way KOReader's network
 settings say. A sync by hand asks to turn on Wi-Fi if needed, and shows the

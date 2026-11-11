@@ -265,6 +265,19 @@ function Loop:schedule(delay, fn)
     table.insert(self.tasks, { at = S.now() + delay, seq = self.seq, fn = fn })
 end
 
+function Loop:unschedule(fn)
+    for i = #self.tasks, 1, -1 do
+        if self.tasks[i].fn == fn then table.remove(self.tasks, i) end
+    end
+end
+
+--- Seconds until fn's run, nil when it isn't scheduled.
+function Loop:pending(fn)
+    for _, t in ipairs(self.tasks) do
+        if t.fn == fn then return t.at - S.now() end
+    end
+end
+
 --- Runs tasks until none are left (or `until_fn()` is true, or timeout).
 function Loop:run(timeout, until_fn)
     local deadline = S.now() + (timeout or 600)

@@ -120,6 +120,7 @@ local Concordance = WidgetContainer:extend{
 }
 
 local started -- once per KOReader process
+local home    -- the file browser's instance, while it's open
 
 function Concordance:onDispatcherRegisterActions()
     Dispatcher:registerAction("concordance_sync", {
@@ -151,6 +152,10 @@ function Concordance:init()
     if not started then
         started = true
         UIManager:scheduleIn(STARTUP_DELAY, function() self.trigger("start") end)
+    end
+    if self.ui and not self.ui.document then
+        home = self
+        self:scheduleHomeSync()
     end
     Updates.register(function() return self:updateEntries() end)
     Updates.scheduleCheck()
@@ -335,8 +340,49 @@ function Concordance:onCloseDocument()
     UIManager:scheduleIn(CLOSE_DELAY, function() self.trigger("close") end)
 end
 
-function Concordance:onResume() self.trigger("resume") end
-function Concordance:onNetworkConnected() self.trigger("network") end
+-- Syncs every few minutes while the file browser is shown --------------------------
+
+--- (Re)starts the wait for the next sync from the file browser, a full
+-- interval from now, or stops it (set to never, or not the file browser).
+function Concordance:scheduleHomeSync()
+    if self.home_tick then UIManager:unschedule(self.home_tick) end
+    self.home_tick = nil
+    if home ~= self then return end
+    local minutes = Plugin.homeInterval()
+    if minutes <= 0 then return end
+    self.home_tick = function()
+        self.home_tick = nil
+        if home ~= self then return end
+        -- Only while Wi-Fi is on already: never turns it on for this.
+        if NetworkMgr:isConnected() then self.trigger("home") end
+        self:scheduleHomeSync()
+    end
+    UIManager:scheduleIn(minutes * 60, self.home_tick)
+end
+
+function Concordance:onCloseWidget()
+    if home == self then
+        home = nil
+        self:scheduleHomeSync()
+    end
+end
+
+function Concordance:onSuspend()
+    if self.home_tick then UIManager:unschedule(self.home_tick) end
+    self.home_tick = nil
+end
+
+-- Waking up and Wi-Fi connecting sync anyway: the next one from the file
+-- browser is a full interval after.
+function Concordance:onResume()
+    self.trigger("resume")
+    self:scheduleHomeSync()
+end
+
+function Concordance:onNetworkConnected()
+    self.trigger("network")
+    self:scheduleHomeSync()
+end
 
 function Concordance:onConcordanceNow()
     self.trigger("manual", { stats = true, ann = true }, true)
@@ -736,6 +782,32 @@ Turn off KOReader's "Export annotations on book closing" (in the reader's Bookma
             help_text = _([[Settings are synced in its Files folder, statistics, highlights and book data in its Reading folder. Use the same server and folder on every device.]]),
             keep_menu_open = true,
             callback = function(touchmenu_instance) self:editRoot(touchmenu_instance) end,
+        },
+        {
+            text_func = function()
+                local m = Plugin.homeInterval()
+                return T(_("Sync in the file browser: %1"),
+                    m > 0 and T(_("every %1 min"), m) or _("never"))
+            end,
+            help_text = _([[While the file browser is shown, sync statistics and highlights this often too (as set to sync automatically), so changes from other devices show up without opening a book. Only while Wi-Fi is on: it's never turned on for this.]]),
+            sub_item_table_func = function()
+                local list = {}
+                local function choice(text, minutes)
+                    table.insert(list, {
+                        text = text,
+                        radio = true,
+                        checked_func = function() return Plugin.homeInterval() == minutes end,
+                        callback = function()
+                            Plugin.settings().home_interval = minutes > 0 and minutes or nil
+                            Plugin.saveSettings()
+                            if home then home:scheduleHomeSync() end
+                        end,
+                    })
+                end
+                for _i, m in ipairs(Plugin.HOME_INTERVALS) do choice(T(_("Every %1 minutes"), m), m) end
+                choice(_("Never"), 0)
+                return list
+            end,
         },
         {
             text = _("Turn on Wi-Fi for automatic syncs"),

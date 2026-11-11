@@ -104,6 +104,16 @@ end
 function Plugin.autoStats() return Plugin.settings().auto_stats ~= false end
 function Plugin.autoAnnotations() return Plugin.settings().auto_annotations ~= false end
 
+--- Minutes between automatic syncs while the file browser is shown (0: never).
+Plugin.HOME_INTERVALS = { 5, 15, 30, 60 }
+function Plugin.homeInterval()
+    local m = Plugin.settings().home_interval
+    for _, v in ipairs(Plugin.HOME_INTERVALS) do
+        if m == v then return m end
+    end
+    return 0
+end
+
 local function randomId()
     local f = io.open("/dev/urandom", "rb")
     local bytes = f and f:read(8)

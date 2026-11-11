@@ -61,6 +61,7 @@ stub("ui/network/manager", {
 stub("ui/uimanager", {
     scheduleIn = function(_, delay, fn) loop:schedule(delay, fn) end,
     nextTick = function(_, fn) loop:schedule(0, fn) end,
+    unschedule = function(_, fn) loop:unschedule(fn) end,
     preventStandby = function() end, allowStandby = function() end,
     show = function(_, w) table.insert(shown, w) end,
     close = function(_, w) closed[w] = true end,
@@ -254,6 +255,47 @@ plugin:onResume()
 loop:run(10)
 check(P.deviceState().status.last_attempt == before, "offline: automatic sync skipped")
 connected = true
+
+-- Syncs from the file browser (this instance has no book open): never by default.
+check(item("Sync in the file browser: never") and not plugin.home_tick, "file browser syncs off by default")
+local intervals = item("Sync in the file browser").sub_item_table_func()
+check(#intervals == 5 and intervals[5].checked_func(), "5, 15, 30, 60 minutes or never")
+intervals[1].callback()
+check(fileData("concordance/settings.lua").home_interval == 5 and item("Sync in the file browser: every 5 min"),
+    "every 5 minutes chosen")
+local wait = loop:pending(plugin.home_tick)
+check(wait and wait > 290 and wait <= 300, "next file browser sync in 5 minutes (" .. tostring(wait) .. ")")
+-- Runs the due file browser sync now; returns the one scheduled after it.
+local function homeTick()
+    local tick = plugin.home_tick
+    loop:unschedule(tick)
+    tick()
+    local nxt = plugin.home_tick
+    check(nxt and loop:pending(nxt), "next file browser sync scheduled")
+    loop:unschedule(nxt) -- the loop would wait 5 minutes for it
+    return nxt
+end
+-- Offline when it's due: skipped, and Wi-Fi left alone.
+P.settings().allow_wifi = true
+connected = false
+P.engine().status.last_attempt = 0
+homeTick()
+loop:run(5)
+check(P.engine().status.last_attempt == 0 and not connected, "offline: file browser sync skipped, Wi-Fi not turned on")
+P.settings().allow_wifi = false
+connected = true
+homeTick()
+loop:run(60)
+check(P.engine().status.last_attempt ~= 0, "online: file browser sync ran")
+plugin:onSuspend()
+check(not plugin.home_tick, "stopped on suspend")
+plugin:onResume()
+wait = plugin.home_tick and loop:pending(plugin.home_tick)
+check(wait and wait > 290, "restarted on wake-up, a full interval away")
+loop:unschedule(plugin.home_tick)
+loop:run(60)
+item("Sync in the file browser").sub_item_table_func()[5].callback()
+check(not plugin.home_tick and fileData("concordance/settings.lua").home_interval == nil, "set back to never")
 
 -- Another device's reading of the open book shows up in the open book's totals
 local other = S.newDevice("other", TMP .. "/other")
