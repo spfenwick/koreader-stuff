@@ -318,6 +318,30 @@ end
 local coll_sync
 
 --- The process-wide collections and favorites sync (synced with book data).
+--- ZenOS's Home page module, when ZenOS is installed and the file browser
+-- is running.
+local function zenHome()
+    local FileManager = package.loaded["apps/filemanager/filemanager"]
+    local fm = type(FileManager) == "table" and FileManager.instance
+    local SharedState = package.loaded["common/shared_state"]
+    local home = fm and fm.zenos and type(SharedState) == "table" and type(SharedState.get) == "function"
+        and SharedState.get(fm.zenos, "home")
+    return type(home) == "table" and home or nil
+end
+
+--- No menu or dialog is open, so collections and the history can be
+-- changed. ZenOS's Home is a page of its own over the file browser, not a
+-- menu: it counts as idle too, or nothing would arrive while it's shown.
+local function uiIdle()
+    local home = zenHome()
+    if home and type(home.isActiveOnTop) == "function" then
+        local ok, on_top = pcall(home.isActiveOnTop)
+        if ok and on_top == true then return true end
+    end
+    return CollSync.uiIdle()
+end
+Plugin._uiIdle = uiIdle
+
 function Plugin.collSync()
     if coll_sync then return coll_sync end
     coll_sync = CollSync.new{
@@ -329,6 +353,7 @@ function Plugin.collSync()
         schedule = function(delay, fn)
             if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
         end,
+        idle = uiIdle,
     }
     return coll_sync
 end
@@ -359,10 +384,8 @@ local function refreshAfterHistory(paths)
         local ok, err = pcall(history.updateItemTable, history)
         if not ok then logger.warn("Concordance: refreshing the History list failed:", err) end
     end
-    local SharedState = package.loaded["common/shared_state"]
-    local home = fm.zenos and type(SharedState) == "table" and type(SharedState.get) == "function"
-        and SharedState.get(fm.zenos, "home")
-    if type(home) == "table" and type(home.rebuildActive) == "function" then
+    local home = zenHome()
+    if home and type(home.rebuildActive) == "function" then
         if type(home.invalidateBookCache) == "function" then
             for _, path in ipairs(paths or {}) do pcall(home.invalidateBookCache, path, true) end
         end

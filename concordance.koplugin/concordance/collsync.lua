@@ -325,8 +325,8 @@ end
 
 -- Applying the merged state --------------------------------------------------------------
 
-function CollSync:_idle()
-    if self.deps.idle then return self.deps.idle() end
+--- Whether only the file browser or the book is showing (no menu or dialog).
+function CollSync.uiIdle()
     local UIManager = require("ui/uimanager")
     local top = UIManager:getTopmostVisibleWidget()
     if not top then return true end
@@ -334,6 +334,11 @@ function CollSync:_idle()
     local ok_r, ReaderUI = pcall(require, "apps/reader/readerui")
     return (ok_fm and top == FileManager.instance) or (ok_r and ReaderUI.instance
         and (top == ReaderUI.instance or top == ReaderUI.instance.dialog)) or false
+end
+
+function CollSync:_idle()
+    if self.deps.idle then return self.deps.idle() end
+    return CollSync.uiIdle()
 end
 
 function CollSync:_refreshUI()

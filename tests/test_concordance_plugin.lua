@@ -551,6 +551,32 @@ check(iconn:rowexec("SELECT count(*) FROM id_facts WHERE md5 = 'pdfmd5' AND src 
 iconn:close()
 package.loaded["cloudlibrary/library"] = nil
 
+-- ZenOS's Home is a page over the file browser: history and collections
+-- from other devices arrive while it's shown, but not under a menu.
+do
+    local um = package.loaded["ui/uimanager"]
+    local old_top, old_fm = um.getTopmostVisibleWidget, package.loaded["apps/filemanager/filemanager"]
+    local old_shared = package.loaded["common/shared_state"]
+    local fm = { zenos = {} }
+    local home_widget, menu = {}, {}
+    local top = menu
+    local home = { isActiveOnTop = function() return top == home_widget end }
+    um.getTopmostVisibleWidget = function() return top end
+    package.loaded["apps/filemanager/filemanager"] = { instance = fm }
+    check(not P._uiIdle(), "busy under a menu")
+    top = fm
+    check(P._uiIdle(), "idle in the file browser")
+    top = home_widget
+    check(not P._uiIdle(), "busy under an unknown page without ZenOS")
+    package.loaded["common/shared_state"] = { get = function(plugin, key) return plugin == fm.zenos and key == "home" and home end }
+    check(P._uiIdle(), "idle on ZenOS's Home")
+    top = menu
+    check(not P._uiIdle(), "busy under a menu over ZenOS's Home")
+    um.getTopmostVisibleWidget = old_top
+    package.loaded["apps/filemanager/filemanager"] = old_fm
+    package.loaded["common/shared_state"] = old_shared
+end
+
 server.stop()
 -- Reset device ID
 item("Troubleshooting", "Reset device ID").callback()
