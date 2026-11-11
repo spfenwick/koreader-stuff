@@ -279,14 +279,14 @@ function Virtual.showDetails(path)
     cancelZenOSOpeningBanner()
     rawset(_G, "__CLOUDLIBRARY_LAST_DETAILS", path)
     local UIManager = require("ui/uimanager")
-    local ButtonDialog = require("ui/widget/buttondialog")
     -- Full record (summary, formats...) from the catalog, when available.
     local full = Virtual.details and Virtual.details(book.id) or book
-    local lines = { full.title or book.title or book.id }
-    if full.authors and #full.authors > 0 then table.insert(lines, table.concat(full.authors, ", ")) end
+    local series
     if full.series then
-        table.insert(lines, full.series_index
-            and string.format("%s #%s", full.series, tostring(full.series_index)) or full.series)
+        local index = tonumber(full.series_index)
+        series = index and string.format("%s #%.4g", full.series, index)
+            or full.series_index and string.format("%s #%s", full.series, tostring(full.series_index))
+            or full.series
     end
     local facts = {}
     if full.published then table.insert(facts, tostring(full.published)) end
@@ -299,29 +299,28 @@ function Virtual.showDetails(path)
         if kind then table.insert(kinds, kind:upper()) end
     end
     if #kinds > 0 then table.insert(facts, table.concat(kinds, ", ")) end
-    if #facts > 0 then table.insert(lines, table.concat(facts, " · ")) end
+    local summary
     if full.summary then
-        local summary = full.summary:gsub("%s+", " ")
+        summary = full.summary:gsub("%s+", " ")
         if #summary > 400 then
             summary = summary:sub(1, 400):gsub("[\128-\191]*$", ""):gsub("%s*%S*$", "") .. "…"
         end
-        table.insert(lines, "")
-        table.insert(lines, summary)
     end
-    table.insert(lines, "")
-    local state = Virtual.stateText and Virtual.stateText(book.id)
-    if state then table.insert(lines, state) end
-    table.insert(lines, _("In your cloud library, not on this device."))
     local dialog
     local function close() UIManager:close(dialog) end
     local buttons = Virtual.detailsButtons and Virtual.detailsButtons(book.id, full, close)
         or {{ { text = _("Close"), callback = close } }}
-    dialog = ButtonDialog:new{
-        title = table.concat(lines, "\n"),
-        title_align = "left",
+    dialog = require("cloudlibrary/details").show{
+        path = path,
+        cover_file = book.cover,
+        title = full.title or book.title or book.id,
+        authors = full.authors and #full.authors > 0 and table.concat(full.authors, ", ") or nil,
+        series = series,
+        facts = #facts > 0 and table.concat(facts, " · ") or nil,
+        state = Virtual.stateText and Virtual.stateText(book.id) or nil,
+        summary = summary,
         buttons = buttons,
     }
-    UIManager:show(dialog)
 end
 
 --- A file browser item for a virtual book (as in the library folder).

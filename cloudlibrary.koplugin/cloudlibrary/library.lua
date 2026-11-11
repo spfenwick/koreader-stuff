@@ -998,45 +998,45 @@ function Library.downloaded(book, result, opts)
     end
 end
 
---- Buttons for a cloud book's details sheet. close() closes the sheet.
+--- Buttons for a cloud book's details sheet, one action per row as in
+-- ZenOS's book menu (tapping outside closes it). close() closes the sheet.
 function Library.detailsButtons(id, full, close)
+    local Details = require("cloudlibrary/details")
     local choices = Downloads.choices(full and full.formats)
     local busy = Downloads.isQueued(id)
     local first = choices[1]
     local label = first and #choices > 1 and first.ext:upper() or nil
-    local rows = {{
-        { text = _("Close"), callback = close },
-        {
-            text = label and T(_("Download %1"), label) or _("Download"),
+    local rows = {
+        {{
+            text = Details.label("download", label and T(_("Download %1"), label) or _("Download")),
+            align = "left",
             enabled = first ~= nil and not busy,
             callback = function()
                 close()
                 Library.download(id, { ext = first and first.ext })
             end,
-        },
-        {
-            text = _("Download & read"),
+        }},
+        {{
+            text = Details.label("reading", _("Download & read")),
+            align = "left",
             enabled = first ~= nil and not busy,
             callback = function()
                 close()
                 Library.download(id, { ext = first and first.ext, open = true })
             end,
-        },
-    }}
-    if #choices > 1 then
-        local row = {}
-        for i = 2, math.min(#choices, 4) do
-            local c = choices[i]
-            table.insert(row, {
-                text = T(_("Download %1"), c.ext:upper()),
-                enabled = not busy,
-                callback = function()
-                    close()
-                    Library.download(id, { ext = c.ext })
-                end,
-            })
-        end
-        table.insert(rows, row)
+        }},
+    }
+    for i = 2, math.min(#choices, 4) do
+        local c = choices[i]
+        table.insert(rows, {{
+            text = Details.label("download", T(_("Download %1"), c.ext:upper())),
+            align = "left",
+            enabled = not busy,
+            callback = function()
+                close()
+                Library.download(id, { ext = c.ext })
+            end,
+        }})
     end
     return rows
 end

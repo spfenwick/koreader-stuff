@@ -181,7 +181,7 @@ def main() -> int:
         buttons = s.cmd("cl_details_buttons", id=book_a["uuid"])["buttons"]
         report["details_buttons"] = [b["text"] for b in buttons]
         started = time.monotonic()
-        s.cmd("cl_details_buttons", id=book_a["uuid"], press=True, row=1, col=2)  # Download
+        s.cmd("cl_details_buttons", id=book_a["uuid"], press=True, row=1, col=1)  # Download
         st = proto_b.wait_for(lambda: (lambda r: r if r.get("file") and not r.get("downloading") else None)(
             s.cmd("cl_book_state", id=book_a["uuid"])), 120, "download")
         report["download"] = {
@@ -195,7 +195,7 @@ def main() -> int:
         report["after_download_screenshot"] = s.shot("after-download")
 
         # Download & read.
-        s.cmd("cl_details_buttons", id=book_b["uuid"], press=True, row=1, col=3)
+        s.cmd("cl_details_buttons", id=book_b["uuid"], press=True, row=2, col=1)
         st = proto_b.wait_for(lambda: (lambda r: r if r.get("reader_open") else None)(
             s.cmd("cl_book_state", id=book_b["uuid"])), 120, "download & read")
         report["download_and_read"] = {"reader_file": str(st["reader_file"]).rsplit("/", 1)[-1],
