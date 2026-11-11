@@ -201,22 +201,6 @@ function Covers.prefetch(fetch, root, store, dir, opts)
     end
     local result = Covers.downloadMissing(fetch, root, store, dir, opts)
     result.backfill = backfill
-    -- Then, with time left, check some kept covers against the server
-    -- (opts.check_limit of those not checked since opts.check_before): a
-    -- changed cover keeps its link, and the catalog doesn't say it changed.
-    local now = opts.now or os.time
-    if not backfill and opts.check_limit and not result.network_error
-            and not (opts.deadline and now() >= opts.deadline) then
-        local books = store:coversToCheck(opts.check_limit, opts.check_before or now())
-        local checked = Covers.download(fetch, root, store, dir, books, opts)
-        result.checked = checked.fetched + checked.failed + checked.unchanged
-        result.changed = checked.fetched
-        result.fetched = result.fetched + checked.fetched
-        result.failed = result.failed + checked.failed
-        result.unchanged = result.unchanged + checked.unchanged
-        result.network_error = result.network_error or checked.network_error
-        result.check_timing = checked.timing
-    end
     if not backfill then
         result.more = nil
     elseif result.left == false then

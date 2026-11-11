@@ -87,8 +87,6 @@ local FULL_INTERVALS = { daily = 24 * HOUR, weekly = 7 * 24 * HOUR }
 local FULL_SYNC_MODES = { "daily", "weekly", "never" }
 local PREFETCH_COVERS = 300          -- covers a batch after each sync, newest first (all, in batches, on a first sync)
 local PREFETCH_SECONDS = 180        -- (a batch, also for "Download missing covers")
-local CHECK_COVERS = 300            -- kept covers checked for changes after each sync (a cover changed on the
-local CHECK_AGE = 7 * 24 * 60 * 60  -- server keeps its link), each at most once in this time
 local MAX_CRASHES = 3               -- cover jobs dying in a row before giving up
 local CHECK_DELAY = 3                -- s after the file browser opens: let it draw first
 
@@ -646,7 +644,6 @@ local function runJob(server, folder, mode, db_path, wal, covers_dir, opts)
             -- In batches: if a job dies, only its batch is cut short.
             local batch = { limit = PREFETCH_COVERS, deadline = os.time() + PREFETCH_SECONDS, track = true }
             if mode == "prefetch" then
-                batch.check_limit, batch.check_before = CHECK_COVERS, os.time() - CHECK_AGE
                 result.covers = Covers.prefetch(Http.fetcher(server), server.url, store, covers_dir, batch)
             else
                 -- "Download missing covers": also retry covers that failed
@@ -818,10 +815,6 @@ local function pollJob()
     Timing.record(label .. ": job", Timing.since(job.t0), "in the background, from start to result (checked every second)")
     if result.sync then Timing.recordAll(result.sync.timing, label .. ": ") end
     if result.covers then Timing.recordAll(result.covers.timing, label .. ": ") end
-    if result.covers and result.covers.check_timing then
-        Timing.recordAll(result.covers.check_timing, "covers (check for changes): ")
-        logger.info("CloudLibrary: checked", result.covers.checked, "covers,", result.covers.changed, "changed")
-    end
     if result.scan_ms then
         Timing.record("folder check: scan files", result.scan_ms,
             string.format("%d files read", result.scanned or 0))
@@ -1176,7 +1169,7 @@ function Library.menuEntry(plugin)
                 },
                 {
                     text = _("Full sync now"),
-                    help_text = _("Reads the whole catalog again: picks up edited and removed books and series. Changed covers are found separately: after each sync, some covers are checked with the server, so every cover is checked about once a week."),
+                    help_text = _("Reads the whole catalog again: picks up edited and removed books and series. A book whose file changed on the server (as a new cover does) gets its cover downloaded again."),
                     enabled_func = has_server,
                     callback = function() Library.sync("full") end,
                 },

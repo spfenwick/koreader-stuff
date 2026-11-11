@@ -670,8 +670,9 @@ do
     eq(store6:count(), 1, "5 -> 6 keeps books")
     eq(store6:listing()[1].cover_file, "ol/old-1.webp", "5 -> 6 keeps covers")
     eq(store6:markCoversStale(), 1, "cover_stale column added")
-    store6:setCoverUnchanged("old-1", 0)
-    eq(#store6:coversToCheck(10, 1), 1, "6 -> 7: check columns added")
+    store6:setCover("old-1", "ol/old-1.webp", 1, 1, { etag = '"e"', checked = 0 })
+    store6:markCoversStale({ "old-1" })
+    eq(store6:missingCovers(nil, 0)[1].etag, '"e"', "6 -> 7: ETag columns added")
     store6:setLocalFile("/k.epub", { mtime = 1, size = 2, uuids = { "u" } })
     store6:close()
 
@@ -823,8 +824,8 @@ do
     check(store:markCoversStale() >= 2, "all downloaded covers marked")
     eq(row(books[5].uuid).cover_stale, nil, "books without a cover file not marked")
 
-    -- Kept covers are checked with the server (ETag / Last-Modified): a
-    -- changed cover keeps its link and the catalog doesn't say it changed.
+    -- Stale covers are asked for with their ETag / Last-Modified: a changed
+    -- cover keeps its link and the catalog doesn't say it changed.
     do
         local cstore = Store.open(TMP .. "/db/check.sqlite3", false)
         local cbooks = makeBooks(3)
@@ -844,60 +845,44 @@ do
         local first = Covers.download(cfetch, ORIGIN .. "/", cstore, cdir, cstore:missingCovers(nil, 0), { now = clock })
         eq(first.fetched, 3, "check: covers downloaded")
         eq(sent["1001"], false, "first download isn't conditional")
-        eq(#cstore:coversToCheck(10, 1000), 0, "just downloaded: nothing to check")
-        local due = cstore:coversToCheck(10, 2000)
-        eq(#due, 3, "checked a while ago: due")
-        eq(due[1].etag, '"v1"', "ETag kept")
-        eq(due[1].modified, "Mon, 09 Nov 2026 03:29:15 GMT", "Last-Modified kept")
-        eq(#cstore:coversToCheck(2, 2000), 2, "check limit")
+        eq(#cstore:missingCovers(nil, 0), 0, "downloaded: nothing missing")
 
-        -- One cover changes on the server.
+        -- "Refresh all covers", with one cover changed on the server.
         etags["1002"] = '"v2"'
-        t = 3000
-        local r = Covers.download(cfetch, ORIGIN .. "/", cstore, cdir, cstore:coversToCheck(10, 2000), { now = clock })
-        eq(sent["1001"]["If-None-Match"], '"v1"', "conditional request with the ETag")
-        eq(sent["1001"]["If-Modified-Since"], "Mon, 09 Nov 2026 03:29:15 GMT", "and Last-Modified")
-        eq(r.unchanged, 2, "unchanged covers")
-        eq(r.fetched, 1, "changed cover downloaded")
-        eq(r.failed, 0, "nothing failed")
-        eq(#cstore:coversToCheck(10, 3000), 0, "all checked now")
-        local again = cstore:coversToCheck(10, 4000)
-        local e2
-        for _i, m in ipairs(again) do if m.id == cbooks[2].uuid then e2 = m.etag end end
-        eq(e2, '"v2"', "new ETag recorded")
-        local _wc, have = cstore:coverCounts()
-        eq(have, 3, "covers still counted")
-
-        -- "Refresh all covers": stale covers are asked for conditionally.
         eq(cstore:markCoversStale(), 3, "all marked stale")
         local stale = cstore:missingCovers(nil, 0)
         eq(#stale, 3, "stale covers wanted")
-        check(stale[1].etag ~= nil, "stale covers carry their ETag")
-        eq(#cstore:coversToCheck(10, 9999), 0, "stale covers aren't checked twice")
+        eq(stale[1].etag, '"v1"', "stale covers carry their ETag")
+        eq(stale[1].modified, "Mon, 09 Nov 2026 03:29:15 GMT", "and Last-Modified")
         t = 5000
         local rr = Covers.downloadMissing(cfetch, ORIGIN .. "/", cstore, cdir, { now = clock, limit = 10 })
-        eq(rr.unchanged, 3, "refresh: all unchanged")
+        eq(sent["1001"]["If-None-Match"], '"v1"', "conditional request with the ETag")
+        eq(sent["1001"]["If-Modified-Since"], "Mon, 09 Nov 2026 03:29:15 GMT", "and Last-Modified")
+        eq(rr.unchanged, 2, "refresh: unchanged covers")
+        eq(rr.fetched, 1, "refresh: changed cover downloaded")
+        eq(rr.failed, 0, "refresh: nothing failed")
         eq(#cstore:missingCovers(nil, 0), 0, "refresh: no longer stale")
         eq(rr.more, false, "refresh: done")
+        cstore:markCoversStale({ cbooks[2].uuid })
+        eq(cstore:missingCovers(nil, 0)[1].etag, '"v2"', "new ETag recorded")
+        local _wc, have = cstore:coverCounts()
+        eq(have, 3, "covers still counted")
 
-        -- After a sync, prefetch checks some kept covers.
+        -- After a sync, prefetch doesn't check kept covers.
+        cstore:setCoverUnchanged(cbooks[2].uuid, t)
+        sent = {}
         etags["1003"] = '"v3"'
-        t = 6000
-        local p = Covers.prefetch(cfetch, ORIGIN .. "/", cstore, cdir,
-            { now = clock, limit = 10, check_limit = 10, check_before = 5500 })
-        eq(p.checked, 3, "prefetch checked kept covers")
-        eq(p.changed, 1, "prefetch found the changed cover")
-        eq(p.fetched, 1, "changed cover counted as fetched (listing reloads)")
-        local p2 = Covers.prefetch(cfetch, ORIGIN .. "/", cstore, cdir,
-            { now = clock, limit = 10, check_limit = 10, check_before = 5500 })
-        eq(p2.checked, 0, "checked covers wait for the next round")
+        local p = Covers.prefetch(cfetch, ORIGIN .. "/", cstore, cdir, { now = clock, limit = 10 })
+        eq(p.fetched + p.unchanged, 0, "prefetch: kept covers left alone")
+        eq(next(sent), nil, "prefetch: nothing asked for")
 
-        -- A network error stops the check without marking anything.
+        -- A network error stops the refresh, leaving the covers stale.
+        cstore:markCoversStale()
         t = 7000
-        local off = Covers.download(function() return nil, "timeout", "network" end, ORIGIN .. "/",
-            cstore, cdir, cstore:coversToCheck(10, 6500), { now = clock })
-        check(off.network_error ~= nil, "check: network error reported")
-        eq(#cstore:coversToCheck(10, 6500), 3, "check: still due after a network error")
+        local off = Covers.downloadMissing(function() return nil, "timeout", "network" end, ORIGIN .. "/",
+            cstore, cdir, { now = clock, limit = 10 })
+        check(off.network_error ~= nil, "refresh: network error reported")
+        eq(#cstore:missingCovers(nil, 0), 3, "refresh: still stale after a network error")
         cstore:close()
     end
 

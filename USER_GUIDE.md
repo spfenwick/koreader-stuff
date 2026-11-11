@@ -26,7 +26,7 @@ Every book in your catalog appears in your library folder, whether it's on the d
 ### Browsing cloud books
 
 - **In the library folder**: cloud books sit beside downloaded ones, in list or mosaic view, sorted the same way.
-- **Covers** download as you browse, plus a batch after each sync. Changed covers are noticed: every cover is checked with the server about once a week.
+- **Covers** download as you browse, plus a batch after each sync. A full sync notices a changed cover when the book's file changed with it; for others, use Refresh all covers.
 - **Badges** on the cover show where a book is: a cloud for cloud-only books; with Concordance, the cloud carries a check, play or pause mark when the book is finished, being read or on hold on another device.
 - **ZenOS tabs**: cloud books appear in Authors, Series and Tags, on Home, and in the reading history. Books in a series are numbered in the order the server lists them, so a gap or a number such as 2.5 shows as the next whole number.
 - **File search** finds cloud books by title, author or series.

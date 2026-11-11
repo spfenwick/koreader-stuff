@@ -110,8 +110,8 @@ function Store.open(path, wal)
     if version >= 1 and version < SCHEMA_VERSION then
         -- 4 -> 5: normalised title and author (filled by fillMatchKeys()).
         -- 5 -> 6: cover_stale (a cover to download again, see upsertBooks).
-        -- 6 -> 7: the cover's ETag and Last-Modified, and when it was last
-        -- checked against the server (see coversToCheck).
+        -- 6 -> 7: the cover's ETag and Last-Modified (stale covers are asked
+        -- for conditionally), and when it was last checked against the server.
         -- 7 -> 8: local files' partial MD5 (for Concordance; files without
         -- one are read again by the next scan).
         local have = {}
@@ -367,24 +367,6 @@ function Store:setCoverUnchanged(uuid, when)
         "UPDATE books SET cover_stale = NULL, cover_failed = NULL, cover_checked = ? WHERE uuid = ?;")
     stmt:bind(when, uuid):step()
     stmt:close()
-end
-
---- Downloaded covers not checked against the server since before (unix
--- time), least recently checked first, as for missingCovers. Covers that
--- failed since then are left out.
-function Store:coversToCheck(limit, before)
-    local out = {}
-    local stmt = self.conn:prepare([[SELECT uuid, cover, cover_etag, cover_modified FROM books
-        WHERE cover IS NOT NULL AND cover_file IS NOT NULL AND cover_stale IS NULL
-          AND (cover_checked IS NULL OR cover_checked < ?)
-          AND (cover_failed IS NULL OR cover_failed < ?)
-        ORDER BY cover_checked ASC, added DESC LIMIT ?;]])
-    stmt:bind(before, before, limit or -1)
-    for row in stmt:rows() do
-        table.insert(out, { id = row[1], href = row[2], etag = row[3], modified = row[4] })
-    end
-    stmt:close()
-    return out
 end
 
 --- Renames a cover file (moved to another place in the covers folder).
