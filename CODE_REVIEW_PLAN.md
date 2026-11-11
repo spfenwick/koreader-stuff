@@ -132,6 +132,12 @@ withdrawn links). Differences from the steps below:
 
 ### Phase 4: docs and leftovers
 
+Done 11 November 2026; all suites pass. The convergence test is
+`tests/test_concordance_converge.lua` (highlights and book data, three
+devices with clocks that disagree; `CONVERGE_RUNS` and `CONVERGE_SEED` set
+how many histories and which). It does not cover statistics, collections,
+history or identity.
+
 15. **Finding 1 and guide conditions:** reword `USER_GUIDE.md:73`, `:192`
     and `:214`, and state the correct-clock and trusted-server conditions.
     Add series numbering and the same-second highlight collision as known

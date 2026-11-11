@@ -561,6 +561,21 @@ do
         pstore:close()
     end
 
+    -- A second copy of a matched book isn't a file missing from the catalog.
+    do
+        local cf = TMP .. "/copies"
+        os.execute("mkdir -p '" .. cf .. "'")
+        for _i, name in ipairs({ "Zed - Unique Title.pdf", "Zed - Unique Title.cbz", "Nobody - Nothing.pdf" }) do
+            local cfile = io.open(cf .. "/" .. name, "w"); cfile:write("x"); cfile:close()
+        end
+        local cm, cun, _cby, ccopies = Matcher.match(cf, {}, catalog)
+        local first = cm[catalog[3].id]
+        local second = first == cf .. "/Zed - Unique Title.pdf" and cf .. "/Zed - Unique Title.cbz" or cf .. "/Zed - Unique Title.pdf"
+        check(first ~= nil and ccopies[second] == catalog[3].id, "a second copy is known as the book's")
+        eq(#cun, 1, "only the stranger is unmatched")
+        eq(cun[1], cf .. "/Nobody - Nothing.pdf", "the stranger")
+    end
+
     -- Unscanned files still match by name.
     local m2 = Matcher.match(folder, {}, catalog)
     eq(m2[catalog[2].id] ~= nil, true, "file name match without a scan")

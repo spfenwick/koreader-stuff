@@ -88,7 +88,10 @@ local function dateTime(s)
     if type(s) ~= "string" then return nil end
     local y, m, d = s:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)")
     if not y then return nil end
-    return os.time{ year = tonumber(y), month = tonumber(m), day = tonumber(d), hour = 12 }
+    -- KOReader keeps the day only. The start of it: a change another
+    -- device timed to the second that day is the later one, as far as
+    -- anyone can tell.
+    return os.time{ year = tonumber(y), month = tonumber(m), day = tonumber(d), hour = 0 }
 end
 
 local function summaryValues(values, times, summary)

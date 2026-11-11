@@ -156,6 +156,23 @@ do
     sendsNothing(B, "two versions here")
 end
 
+-- A third version's reading that's already in a row here that isn't the
+-- book's main one: updated there, and not sent back as that row's own.
+do
+    local Z = string.rep("3", 32)
+    local A, B = device("A"), device("B")
+    A:readBook(Z, { { 2, 1500, 99 } })
+    B:readBook(X, { { 3, 2000, 40 } })
+    B:readBook(Y, { { 2, 1500, 20 } }, "Pride & Prejudice")
+    export(B)
+    B:join{ X, Y, Z }
+    B.store:joinVersions()
+    import(B, (export(A)))
+    check(B:count("SELECT duration FROM page_stat_data p JOIN book b ON b.id = p.id_book WHERE b.md5 = '" .. Y
+        .. "' AND p.page = 2 AND p.start_time = 1500") == 99, "the longer reading replaces the one in the other row")
+    sendsNothing(B, "a reading updated in another of the book's rows")
+end
+
 -- The open book's rows aren't touched -----------------------------------------------------------
 
 do

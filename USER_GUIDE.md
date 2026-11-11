@@ -28,7 +28,7 @@ Every book in your catalog appears in your library folder, whether it's on the d
 - **In the library folder**: cloud books sit beside downloaded ones, in list or mosaic view, sorted the same way.
 - **Covers** download as you browse, plus a batch after each sync. Changed covers are noticed: every cover is checked with the server about once a week.
 - **Badges** on the cover show where a book is: a cloud for cloud-only books; with Concordance, the cloud carries a check, play or pause mark when the book is finished, being read or on hold on another device.
-- **ZenOS tabs**: cloud books appear in Authors, Series and Tags, on Home, and in the reading history.
+- **ZenOS tabs**: cloud books appear in Authors, Series and Tags, on Home, and in the reading history. Books in a series are numbered in the order the server lists them, so a gap or a number such as 2.5 shows as the next whole number.
 - **File search** finds cloud books by title, author or series.
 
 ### Downloading
@@ -45,7 +45,7 @@ Downloads run in the background, one at a time. Files are named like KOReader's 
 | Sync | What it does | Runs (default) |
 | --- | --- | --- |
 | Quick sync | Adds books new to the catalog. Becomes a full sync if the number of books changed | Every hour, when the file browser opens or Wi-Fi connects |
-| Full sync | Rereads the whole catalog: edited and removed books, series, titles | Weekly |
+| Full sync | Rereads the whole catalog: edited and removed books, series, titles. A catalog that comes back empty removes nothing | Weekly |
 
 Quick sync can be every 1, 3, 6 or 12 hours, daily or never; full sync daily, weekly or never. Neither turns Wi-Fi on. Run either by hand from the menu, or assign **Cloud library: quick sync** to a gesture.
 
@@ -70,7 +70,9 @@ If a KOReader or ZenOS update breaks part of Cloud library, it turns that part o
 
 ## Concordance
 
-Concordance keeps KOReader the same on all your devices through your own server: your settings, reading time, highlights and the state of every book. Nothing is lost by syncing, and nothing you delete is deleted elsewhere without asking.
+Concordance keeps KOReader the same on all your devices through your own server: your settings, reading time, highlights and the state of every book. Syncing only ever adds reading time, and a change made on one device (a deletion too) is made on the others, with the later change winning. Removing many highlights at once asks first.
+
+This relies on two things: each device's clock being roughly right (KOReader sets it from the network), and a server and connection you trust, since what's on the server is what devices take.
 
 ### Setting up
 
@@ -110,6 +112,8 @@ List one pattern per line in `settings/concordance/sync.txt`, starting from KORe
 - The list itself syncs too, so change it on one device and the others follow.
 - **Preview changes** shows what a sync would do without doing it.
 - A file changed on both sides keeps the newer copy and saves the other in `settings/concordance/settings-sync/conflicts/`.
+- A listed file you delete on one device is deleted on the server and the other devices.
+- KOReader's main settings file, `settings.reader.lua`, is never synced: KOReader writes it back from memory, so a pulled copy would be lost.
 - Pulled settings are put in place at the next start, and the sync offers to restart.
 
 Sync first from the device whose settings you want to keep.
@@ -124,13 +128,15 @@ Don't also use Reading statistics' own "Cloud sync" on the same devices: the two
 
 - Edits sync too: note text, colour, style and adjusted ends. If the same highlight changes on two devices, the later change wins.
 - They arrive in the book you're reading right after a sync, and in other books the next time they're opened.
-- **Removing many at once asks first.** If more than 5 of a book's highlights disappear together (say its settings were reset), you choose: **Restore them here**, **Remove everywhere** or **Ask later**.
+- Removing one removes it everywhere.
+- **Removing many at once asks first.** If more than 5 of a book's highlights disappear together (say its settings were reset), you choose: **Restore them here**, **Remove everywhere** or **Ask later**. Five or fewer are removed everywhere without asking.
+- Two highlights made in the same book in the same second on different devices count as one: one replaces the other.
 
 Turn off KOReader's "Export annotations on book closing", and leave "Write highlights into PDF" off for synced PDFs.
 
 ### Book status, collections and history
 
-- Mark a book finished, rate or review it, or edit its metadata on one device, and the others match.
+- Mark a book finished, rate or review it, or edit its metadata on one device, and the others match. Clearing a rating or review, or taking a book out of a collection, clears it on the others too.
 - Collections and favorites follow the book, not its folder, so devices can organise files differently. Each device keeps its own sort order.
 - Books read on another device appear in this device's History at the time they were read. The latest book read anywhere is the one KOReader reopens.
 - A device's first sync doesn't overwrite what other devices already have.
@@ -190,7 +196,11 @@ Editing a book on the server (a new cover, new tags) rewrites its file, so KORea
 | Highlights, bookmarks, handmade table of contents, hidden flows | No | Yes |
 | Reading position (with KOReader's Progress sync on) | No | Yes |
 
-Highlights and positions only cross between versions with the same text, so a different edition keeps its own. With Cloud library, catalog books in its folder are recognised whether or not they've been opened, and PDFs or books matched by title share status, rating and statistics with their catalog book.
+Highlights and positions only cross between versions with the same text, so a different edition keeps its own.
+
+Files sharing a book ID count as one book when their titles agree, their text is the same, or they share both of Calibre's IDs. A retitled new edition with different text and only one ID in common is kept apart; so are different books that share an ID by mistake.
+
+With Cloud library, catalog books in its folder are recognised whether or not they've been opened. A file with no book ID of its own (a PDF, or an EPUB without one) that Cloud library matches by title shares status, rating and statistics with its catalog book; an EPUB with its own ID goes by that instead. If Cloud library stops matching a file to a book, the device that made the match withdraws it at its next sync.
 
 Tools → Concordance → **Status** shows how many books are known in more than one version; Concordance web's **Versions** page lists them.
 
@@ -212,7 +222,7 @@ Things to avoid:
 
 - Don't sync books' `.sdr` folders, `docsettings/`, `history.lua` or `collection.lua` with settings sync or another file sync; Concordance already handles them.
 - Don't copy Concordance or Cloud library between devices with settings sync; they update themselves.
-- Deletions don't sync: reset statistics on every device, and remove the server's files by hand, to clear them everywhere.
+- Reading statistics and history entries you remove on one device stay on the others: to clear statistics everywhere, reset them on every device and remove the server's files by hand. Other deletions (highlights, ratings, reviews, collections, listed settings files) do sync.
 - Notes and reviews are sent as plain text to your server; passwords are never logged.
 
 Log lines start with `CloudLibrary:`, `Concordance:` or `StatSync:` in KOReader's `crash.log`.

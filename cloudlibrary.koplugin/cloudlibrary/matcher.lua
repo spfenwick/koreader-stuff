@@ -10,8 +10,10 @@ Matcher.match(folder, files, books)
                                 cheap: uses scanned info, or the file name
                                 for files not scanned yet. Returns
                                 { [uuid] = path }, a list of local files
-                                that matched nothing, and { [uuid] = true }
-                                for books matched by title (2 and 3 below).
+                                that matched nothing, { [uuid] = true }
+                                for books matched by title (2 and 3 below),
+                                and { [path] = uuid } for further files of
+                                a book already matched (a second copy).
 
 How a file matches a book, in order:
 1. a UUID in the EPUB's identifiers equals the book's ID (Calibre writes
@@ -21,7 +23,8 @@ How a file matches a book, in order:
 3. title alone, if exactly one catalog book has that title, and the file
    doesn't name another author: it names none, or the book's first author
    is somewhere in what it names ("A, B - Title" for a book by B).
-Each catalog book matches at most one file.
+Each catalog book matches at most one file; another copy of it is a
+catalog book's file all the same, not one missing from the catalog.
 Only files directly in the folder are considered.
 ]]
 
@@ -137,7 +140,7 @@ function Matcher.partialMD5(path)
 end
 
 --- Returns { [uuid] = path }, { unmatched local paths }, { [uuid] = true }
--- for those matched by title.
+-- for those matched by title, { [path] = uuid } for second copies.
 function Matcher.match(folder, files, books)
     local by_uuid, by_title_author, by_title, first_author = {}, {}, {}, {}
     for _i, b in ipairs(books) do
@@ -151,7 +154,7 @@ function Matcher.match(folder, files, books)
             if by_title[t] == nil then by_title[t] = b.id else by_title[t] = false end
         end
     end
-    local matched, unmatched, titled_ids = {}, {}, {}
+    local matched, unmatched, titled_ids, copies = {}, {}, {}, {}
     eachBookFile(folder, function(path, name, _ext, attr)
         local info = files and files[path]
         if not (info and info.mtime == attr.modification and info.size == attr.size) then
@@ -189,11 +192,13 @@ function Matcher.match(folder, files, books)
         if id and not matched[id] then
             matched[id] = path
             if titled then titled_ids[id] = true end
+        elseif id then
+            copies[path] = id
         else
             table.insert(unmatched, path)
         end
     end)
-    return matched, unmatched, titled_ids
+    return matched, unmatched, titled_ids, copies
 end
 
 return Matcher

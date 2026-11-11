@@ -224,7 +224,7 @@ function Library.load()
     store:close()
     Timing.record("catalog: read database", Timing.since(t0), #books .. " books")
     t0 = Timing.start()
-    local matched, unmatched, by_title = Matcher.match(folder, files, books)
+    local matched, unmatched, by_title, copies = Matcher.match(folder, files, books)
     Timing.record("catalog: match local files", Timing.since(t0))
     local cloud = {}
     for _i, b in ipairs(books) do
@@ -236,6 +236,8 @@ function Library.load()
     Library.file_info = files
     Library.on_device = {}
     for _id, path in pairs(matched) do Library.on_device[path] = true end
+    -- A second copy of a catalog book is a catalog book's file too.
+    for path in pairs(copies or {}) do Library.on_device[path] = true end
     Library.not_in_catalog = {}
     for _i, path in ipairs(unmatched) do Library.not_in_catalog[path] = true end
     Library.stats = {

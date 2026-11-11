@@ -756,9 +756,12 @@ local function mergeSegment(stats, state, path, opts)
                 local vrows = versionRows(stats, state, group, now_foreign)
                 local target = vrows[1]
                 if target and target.md5 ~= md5 then
-                    local ids = {}
-                    for i, r in ipairs(vrows) do ids[i] = r.id end
-                    books[md5] = { target = target.id, ids = ids, target_md5 = target.md5 }
+                    local ids, md5s = {}, {}
+                    for i, r in ipairs(vrows) do
+                        ids[i] = r.id
+                        md5s[r.id] = r.md5
+                    end
+                    books[md5] = { target = target.id, ids = ids, target_md5 = target.md5, md5s = md5s }
                     return
                 end
             end
@@ -827,6 +830,12 @@ local function mergeSegment(stats, state, path, opts)
         if b.target_md5 then
             -- Under the row's MD5 too, or it would go out as this device's.
             up_exported:reset():bind(b.target_md5, e.page, e.start, e.dur):step()
+            -- And under the MD5 of the row it was found in, when that's
+            -- another of the book's rows.
+            local found_md5 = found_id and b.md5s and b.md5s[found_id]
+            if found_md5 and found_md5 ~= b.target_md5 and found_md5 ~= e.md5 then
+                up_exported:reset():bind(found_md5, e.page, e.start, e.dur):step()
+            end
         end
     end
 
