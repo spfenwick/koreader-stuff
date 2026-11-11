@@ -34,7 +34,10 @@ local BOOKS = {
     { key = "pride", title = "Pride and Prejudice", authors = "Jane Austen", pages = 380, kind = "rolling",
       uuid = "1a2b3c4d-0000-4000-8000-000000000001", series = nil },
     { key = "pride2", title = "Pride & Prejudice (Annotated)", authors = "Jane Austen", pages = 412, kind = "rolling",
-      uuid = "1a2b3c4d-0000-4000-8000-000000000001" },
+      uuid = "1a2b3c4d-0000-4000-8000-000000000001",
+      -- The file's own metadata still says the plain title: files that share one
+      -- UUID are only joined when their titles agree (or more than the UUID matches).
+      id_title = "Pride and Prejudice" },
     { key = "moby", title = "Moby-Dick; or, The Whale", authors = "Herman Melville", pages = 720, kind = "rolling",
       uuid = "1a2b3c4d-0000-4000-8000-000000000002" },
     { key = "frank", title = "Frankenstein", authors = "Mary Wollstonecraft Shelley", pages = 280, kind = "rolling",
@@ -292,7 +295,7 @@ for i, dev in ipairs(DEVICES) do
         local mine = (i == 1 and b.key ~= "pride2" and b.key ~= "origin") or (i == 2 and (b.key == "pride2" or b.key == "origin" or b.key == "moby"))
         if mine and b.uuid then
             body[#body + 1] = IdFormat.recordLine{ md5 = b.md5, src = "file", uuids = { b.uuid }, sig = md5(b.key .. "sig"),
-                title = b.title, authors = b.authors }
+                title = b.id_title or b.title, authors = b.authors }
             n = n + 1
         end
         if i == 2 and b.link then
