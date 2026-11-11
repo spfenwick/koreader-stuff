@@ -386,6 +386,16 @@ do
     eq(store:getBook(books[2].uuid).series, nil, "series cleared")
     eq(store:getBook(books[4].uuid).series_index, 1, "remaining series member")
 
+    -- A list with no books (an expired login, a restricted view) deletes nothing.
+    do
+        local kept = books
+        server.books = {}
+        local r_empty, err_empty = newSync(store, server, 2500):full()
+        check(r_empty and r_empty.deleted == 0, "empty list: nothing deleted " .. tostring(err_empty))
+        eq(store:count(), 9, "empty list: books kept")
+        server.books = kept
+    end
+
     -- A failure part-way deletes nothing.
     table.remove(books, 1)
     server.fail["offset=6"] = true
@@ -1005,6 +1015,17 @@ do
     eq(Downloads.fileName(book, "epub", folder), "Ann One, Bob Two - Why_ A _Question__ (2).epub",
         "existing file not overwritten")
     eq(Downloads.fileName({ id = "x", title = "T" }, "pdf", folder), "T.pdf", "no author")
+    -- A KEPUB gets a name KOReader opens.
+    eq(Downloads.fileName({ id = "x", title = "K" }, "kepub", folder), "K.kepub.epub", "kepub name")
+    local kf = io.open(folder .. "/K.kepub.epub", "w"); kf:write("x"); kf:close()
+    eq(Downloads.fileName({ id = "x", title = "K" }, "kepub", folder), "K (2).kepub.epub", "second kepub name")
+    os.remove(folder .. "/K.kepub.epub")
+    do
+        local Http = require("cloudlibrary/http")
+        eq(Http.auth({ username = "ann", password = "p%41ss" }), "Basic " .. require("mime").b64("ann:p%41ss"),
+            "password with % sent as typed")
+        eq(Http.auth({ username = "" }), nil, "no header without a user name")
+    end
 
     local path = folder .. "/ok.epub"
     local r = Downloads.fetch(function(_url, part)
@@ -1249,6 +1270,17 @@ do
     eq(t2:f("b"), "orig b", "later calls go straight to the original")
     eq(calls, 2, "original not called twice for one call afterwards")
     check(Guard.ok("badge"), "other features unaffected")
+
+    -- The plugin's code fails after the original ran: the original isn't
+    -- run again (a delete, or opening a book, would happen twice).
+    reset()
+    local ran = 0
+    local t5 = { f = function(_self, a) ran = ran + 1; return nil, "done " .. a end }
+    Guard.hook("search", t5, "f", function(orig, self, a) orig(self, a); error("late plugin bug") end)
+    local l1, l2 = t5:f("a")
+    check(l1 == nil and l2 == "done a", "original's results kept after a late plugin error")
+    eq(ran, 1, "original run once")
+    check(not Guard.ok("search"), "feature off after a late plugin error")
 
     -- The original fails: its error passes through, nothing turns off.
     reset()

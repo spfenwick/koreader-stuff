@@ -73,8 +73,11 @@ function Downloads.fileName(book, ext, folder)
         name = table.concat(book.authors, ", ") .. " - " .. name
     end
     -- As KOReader's OPDS plugin: replace characters FAT can't store, always.
+    -- KOReader opens a KEPUB as "….kepub.epub"; ".kepub" alone it doesn't know.
+    if ext == "kepub" then ext = "kepub.epub" end
     name = util.getSafeFilename(util.replaceAllInvalidChars(name) .. "." .. ext, folder)
-    local base, suffix = name:match("^(.*)(%.[^.]+)$")
+    local base, suffix = name:match("^(.*)(%.kepub%.epub)$")
+    if not base then base, suffix = name:match("^(.*)(%.[^.]+)$") end
     local candidate, n = name, 1
     while lfs.attributes(folder .. "/" .. candidate) do
         n = n + 1

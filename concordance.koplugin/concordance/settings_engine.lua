@@ -359,9 +359,19 @@ local function saveTsv(path, rows, fields)
     return writeFile(path, table.concat(lines, "\n") .. (#lines > 0 and "\n" or ""))
 end
 
+--- Whether a path is a plain one inside KOReader's folder: no empty, "."
+-- or ".." part (so no leading / either), no control characters. Paths from
+-- the server (its file list, its folders) and from pending.tsv are only
+-- used if they are: one with ".." could reach outside KOReader's folder,
+-- or the files that are never synced.
 local function safePath(path)
-    return not path:find("[\t\n\r]")
+    if type(path) ~= "string" or path == "" or path:find("%c") then return false end
+    for part in (path .. "/"):gmatch("([^/]*)/") do
+        if part == "" or part == "." or part == ".." then return false end
+    end
+    return true
 end
+Engine.safePath = safePath
 
 -- kind is "sync" or "pull" (see Engine.kind).
 local STATE_FIELDS = { "kind", "path", "h" }
@@ -378,7 +388,7 @@ function Engine.parseManifest(text)
                 return nil, "The file list on the server is in another format (" .. tostring(row[3])
                     .. "): it's from an older version of Concordance."
             end
-        elseif row[1] ~= "" and row[2] and row[2] ~= "" then
+        elseif safePath(row[1]) and row[2] and row[2] ~= "" then
             manifest[row[1]] = { h = row[2], s = tonumber(row[3]), t = tonumber(row[4]), by = row[5],
                 fp = row[6] ~= "" and row[6] or nil }
         end
@@ -1043,11 +1053,15 @@ end
 function Engine.applyPending(paths)
     if not Engine.isPending(paths) then return nil end
     local entries = loadTsv(paths.pending, { "op", "path" })
-    local failed, lines = {}, {}
+    local failed, lines, refused = {}, {}, false
     for _, e in ipairs(entries) do
         local dest = paths.kodir .. "/" .. (e.path or "")
         local ok, err
-        if e.op == "copy" then
+        if not safePath(e.path) or Engine.excluded(e.path) then
+            -- Never written by a sync: refused, and not tried again.
+            lines[#lines + 1] = "  ! " .. tostring(e.op) .. " " .. tostring(e.path) .. ": not a path to change"
+            ok, refused = true, true
+        elseif e.op == "copy" then
             local src = paths.staging .. "/" .. e.path
             Engine.mkdirs(dirname(dest))
             ok, err = Remote.copyFile(src, dest .. TEMP_SUFFIX)
@@ -1058,8 +1072,12 @@ function Engine.applyPending(paths)
             ok = lfs().attributes(dest) == nil
             err = "couldn't delete"
         end
-        table.insert(lines, (ok and "  " or "  ! ") .. tostring(e.op) .. " " .. tostring(e.path)
-            .. (ok and "" or ": " .. tostring(err)))
+        if refused then
+            refused = false
+        else
+            table.insert(lines, (ok and "  " or "  ! ") .. tostring(e.op) .. " " .. tostring(e.path)
+                .. (ok and "" or ": " .. tostring(err)))
+        end
         if not ok then table.insert(failed, e) end
     end
     if #failed > 0 then

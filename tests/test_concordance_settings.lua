@@ -117,6 +117,24 @@ check(back["settings/gestures.lua"].h == "abc" and back["settings/gestures.lua"]
 local old_man, old_why = Engine.parseManifest("#\tSettings sync manifest\t2\nsettings\tgestures.lua\tabc\t3\t1\tKobo\t\n")
 check(old_man == nil and old_why:find("older version"), "an old file list refused: " .. tostring(old_why))
 
+-- Paths from the server: only plain ones inside KOReader's folder.
+for _, bad in ipairs({ "", "/etc/passwd", "settings/../../../etc/passwd", "settings/x/../concordance/device.lua",
+                       "fonts/../patches/9-evil.lua", "..", "./a", "a//b", "a/", "a\tb", "a\nb" }) do
+    check(not Engine.safePath(bad), "path refused: " .. bad)
+end
+check(Engine.safePath("settings/gestures.lua") and Engine.safePath("fonts/a..b/c.ttf")
+    and Engine.safePath("settings/.hidden"), "plain paths accepted")
+local evil = Engine.parseManifest(table.concat({
+    "#\tConcordance manifest\t3",
+    "settings/gestures.lua\tabc\t3\t100\tKobo\t",
+    "settings/../../../etc/passwd\tabc\t3\t100\tKobo\t",
+    "fonts/../patches/9-evil.lua\tabc\t3\t100\tKobo\t",
+    "/abs.lua\tabc\t3\t100\tKobo\t",
+}, "\n") .. "\n")
+local evil_n = 0
+for _ in pairs(evil) do evil_n = evil_n + 1 end
+check(evil_n == 1 and evil["settings/gestures.lua"], "file list entries with .. or a leading / dropped")
+
 -- The engine --------------------------------------------------------------------
 
 -- A space and a quote, to check paths are handled.
@@ -237,6 +255,23 @@ check(read(B.kodir .. "/settings/gestures.lua") == "return { a = 1 }\n", "A's ge
 check(exists(B.kodir .. "/settings/ZenOS/config.lua"), "listed folder in place")
 check(not Engine.isPending(B.paths), "nothing waiting")
 check(Engine.applyPending(B.paths) == nil, "nothing to put in place twice")
+-- A pending list that names files outside KOReader's folder, or ones never
+-- synced, changes nothing.
+do
+    local outside = B.kodir .. "/../outside-" .. tostring(os.time()) .. ".txt"
+    write(outside, "keep\n")
+    write(B.kodir .. "/settings/concordance/device.lua", "return 1\n")
+    Engine.writeFile(B.paths.pending, "delete\t../" .. outside:match("[^/]+$") .. "\n"
+        .. "delete\tsettings/x/../concordance/device.lua\n"
+        .. "delete\tsettings/concordance/device.lua\n")
+    local ok_evil, evil_log = Engine.applyPending(B.paths)
+    check(ok_evil and evil_log:find("not a path to change", 1, true), "bad pending entries refused")
+    check(exists(outside), "file outside KOReader's folder kept")
+    check(exists(B.kodir .. "/settings/concordance/device.lua"), "never-synced file kept")
+    check(not Engine.isPending(B.paths), "refused entries not tried again")
+    os.remove(outside)
+    os.remove(B.kodir .. "/settings/concordance/device.lua")
+end
 local conflict_copy = sh("find " .. q(B.paths.conflicts) .. " -name gestures.lua"):gsub("%s+$", "")
 check(conflict_copy ~= "" and read(conflict_copy) == "return { b = 2 }\n"
     and conflict_copy:find("/settings/gestures.lua$"), "B's own gestures kept in conflicts/: " .. conflict_copy)

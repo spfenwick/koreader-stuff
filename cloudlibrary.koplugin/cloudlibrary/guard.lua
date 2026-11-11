@@ -88,19 +88,23 @@ function Guard.hook(feature, target, name, fn, label)
         if not Guard.ok(feature) then return orig(...) end
         -- Errors from the original itself aren't ours: pass them on as if
         -- the plugin weren't there, rather than turning the feature off.
-        local orig_error
+        local orig_error, orig_done
         local function call_orig(...)
             local r = pack(pcall(orig, ...))
             if not r[1] then
                 orig_error = r[2]
                 error(r[2], 0)
             end
+            orig_done = r
             return unpack(r, 2, r.n)
         end
         local r = pack(xpcall(fn, traceback, call_orig, ...))
         if r[1] then return unpack(r, 2, r.n) end
         if orig_error ~= nil then error(orig_error, 0) end
         Guard.fail(feature, label, r[2])
+        -- The original already ran before our code failed: its results
+        -- stand. Running it again would delete, or open, twice.
+        if orig_done then return unpack(orig_done, 2, orig_done.n) end
         return orig(...)
     end
     target[name] = wrapper

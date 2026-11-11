@@ -158,7 +158,7 @@ function Sync:remoteCount()
 end
 
 --- Full sync. Books not listed any more are deleted only if every page was
--- read. Returns { added, updated, deleted, total, series, requests, seconds }
+-- read, and listed at least one book. Returns { added, updated, deleted, total, series, requests, seconds }
 -- or nil, error.
 function Sync:full()
     local started = self.now()
@@ -182,7 +182,9 @@ function Sync:full()
         self.progress("books", page, seen)
     end)
     if not ok then return nil, perr end
-    local deleted = self:timed("database", function()
+    -- A list with no books at all is more likely a login that expired, or
+    -- a view without rights, than an emptied library: keep what's known.
+    local deleted = seen == 0 and 0 or self:timed("database", function()
         store:begin()
         local n = store:deleteUnseen(stamp)
         store:commit()

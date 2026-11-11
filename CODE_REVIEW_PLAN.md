@@ -57,6 +57,8 @@ was not run.
 
 ### Phase 1: safety fixes (small, each with a test)
 
+Done 11 November 2026, with tests for each; all suites pass.
+
 1. **Finding 3:** add one path validator that rejects empty, `.` and `..`
    segments, a leading `/` and control characters. Use it in
    `parseManifest`, both listing loops, `scan` and `applyPending` (which
