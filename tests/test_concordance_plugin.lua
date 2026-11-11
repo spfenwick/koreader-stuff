@@ -529,6 +529,37 @@ check(#reader.annotation.annotations == 6, "restored in the open book")
 check(not item("Removed highlights waiting"), "nothing held any more")
 package.loaded["apps/reader/readerui"].instance = { statistics = stats }
 
+-- Opening a book syncs, so other devices get it in their history: only
+-- while Wi-Fi is on, and not if the book is closed first (closing syncs).
+do
+    local real, reasons = Concordance.trigger, {}
+    Concordance.trigger = function(reason, what, interactive, scanned, refreshed)
+        -- Not its own calls back into itself, after reading what changed.
+        if not scanned and not refreshed then reasons[#reasons + 1] = reason end
+        return real(reason, what, interactive, scanned, refreshed)
+    end
+    reader_plugin:onReaderReady()
+    loop:run(60)
+    check(#reasons == 1 and reasons[1] == "open", "opening a book syncs (" .. table.concat(reasons, ",") .. ")")
+    local opened = P.deviceState().status
+    check(opened.last_success and not opened.last_error, "sync on opening succeeded: " .. tostring(opened.last_error))
+    connected = false
+    reasons = {}
+    reader_plugin:onReaderReady()
+    loop:run(10)
+    check(#reasons == 0 and not connected, "offline: opening a book doesn't sync or turn Wi-Fi on")
+    connected = true
+    reasons = {}
+    reader_plugin:onReaderReady()
+    -- The book is ready, the sync for opening it still waiting.
+    loop:run(5, function() return reader_plugin.open_tick ~= nil end)
+    check(reader_plugin.open_tick ~= nil, "sync for opening the book waiting")
+    reader_plugin:onCloseDocument()
+    loop:run(60)
+    check(#reasons == 1 and reasons[1] == "close", "closed straight away: only the closing sync (" .. table.concat(reasons, ",") .. ")")
+    Concordance.trigger = real
+end
+
 -- Cloud library's files and matches.
 S.writeFile(TMP .. "/cloud-book.epub", "not really an epub")
 S.writeFile(TMP .. "/cloud-book.pdf", "%PDF")

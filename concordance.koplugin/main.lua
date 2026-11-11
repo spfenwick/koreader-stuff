@@ -43,6 +43,7 @@ local Updates = require("concordance/updates")
 
 local STARTUP_DELAY = 20 -- s: let KOReader settle (and Wi-Fi come up) first
 local CLOSE_DELAY = 2    -- s: after the statistics plugin has written the closed book
+local OPEN_DELAY = 2     -- s: after KOReader has put the opened book into its history
 
 --- KOReader's data folder, made absolute ("." on e-readers).
 local function dataDir()
@@ -320,6 +321,7 @@ function Concordance:onReaderReady()
         if Plugin.annSync():onReaderReady(ui) > 0 then
             UIManager:scheduleIn(1, function() Plugin.annSync():askHeld() end)
         end
+        self:scheduleOpenSync()
     end
     -- After KOReader's own post-load work on the annotations (sorting, page numbers).
     if ui.registerPostReaderReadyCallback and ui.postReaderReadyCallback then
@@ -329,7 +331,25 @@ function Concordance:onReaderReady()
     end
 end
 
+--- Opening a book syncs, so the other devices' next sync puts it at the
+-- top of their history. Only while Wi-Fi is on already: never turns it on
+-- for this.
+function Concordance:scheduleOpenSync()
+    self:unscheduleOpenSync()
+    self.open_tick = function()
+        self.open_tick = nil
+        if NetworkMgr:isConnected() then self.trigger("open") end
+    end
+    UIManager:scheduleIn(OPEN_DELAY, self.open_tick)
+end
+
+function Concordance:unscheduleOpenSync()
+    if self.open_tick then UIManager:unschedule(self.open_tick) end
+    self.open_tick = nil
+end
+
 function Concordance:onCloseDocument()
+    self:unscheduleOpenSync() -- closed already: its own sync follows
     -- KOReader has saved the book's annotations: record its changes now,
     -- while they're still in memory.
     Plugin.bookSync():onClose(self.ui)

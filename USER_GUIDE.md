@@ -91,7 +91,7 @@ Concordance keeps KOReader the same on all your devices through your own server:
 | Handmade table of contents, hidden flows | WebDAV | Automatically |
 | Collections, favorites and reading history | WebDAV | Automatically |
 
-Automatic syncs run when a book is closed, on wake-up, when the network connects, and 20 seconds after KOReader starts. With **Sync in the file browser** set (every 5, 15, 30 or 60 minutes; never by default), they also run that often while the file browser is shown and Wi-Fi is on. They run in the background, so reading isn't interrupted. Without a network they're skipped and the next sync catches up, unless you turn on **Turn on Wi-Fi for automatic syncs**.
+Automatic syncs run when a book is opened (only if Wi-Fi is already on) or closed, on wake-up, when the network connects, and 20 seconds after KOReader starts. With **Sync in the file browser** set (every 5, 15, 30 or 60 minutes; never by default), they also run that often while the file browser is shown and Wi-Fi is on. They run in the background, so reading isn't interrupted. Without a network they're skipped and the next sync catches up, unless you turn on **Turn on Wi-Fi for automatic syncs**.
 
 ### Settings sync
 
@@ -132,7 +132,7 @@ Turn off KOReader's "Export annotations on book closing", and leave "Write highl
 
 - Mark a book finished, rate or review it, or edit its metadata on one device, and the others match.
 - Collections and favorites follow the book, not its folder, so devices can organise files differently. Each device keeps its own sort order.
-- Books read on another device appear in this device's History at the time they were read. The latest book read anywhere is the one KOReader reopens.
+- Books read on another device appear in this device's History at the time they were read: after that device has synced (on opening the book if its Wi-Fi is on, otherwise at its next sync) and this one syncs next. The latest book read anywhere is the one KOReader reopens.
 - A device's first sync doesn't overwrite what other devices already have.
 
 ### Menu
