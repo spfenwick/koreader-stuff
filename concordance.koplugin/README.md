@@ -80,7 +80,7 @@ Settings only sync when you ask (a settings sync can ask to restart
 KOReader).
 
 Statistics and highlights sync automatically (each unless turned off): when
-a book is closed, on wake-up, when the network connects, and 20 seconds
+a book is opened (only while Wi-Fi is on) or closed, on wake-up, when the network connects, and 20 seconds
 after KOReader starts; and, if "Sync in the file browser" is set, that often
 while the file browser is shown and Wi-Fi is on (it never turns Wi-Fi on).
 Without a network connection an automatic sync is
