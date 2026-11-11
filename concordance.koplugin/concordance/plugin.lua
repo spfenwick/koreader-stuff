@@ -463,6 +463,28 @@ local function cloudLinks()
     return ok and type(list) == "table" and list or {}
 end
 
+--- Before a sync: Cloud library's matches become links, and links this
+-- device made that it no longer makes are withdrawn. Only once it has
+-- read its catalog: before that it matches nothing, which says nothing.
+local function collectLinks()
+    local links = cloudLinks()
+    Identity.recordLinks(links)
+    local CloudLibrary = package.loaded["cloudlibrary/library"]
+    if type(CloudLibrary) ~= "table" or type(CloudLibrary.isLoaded) ~= "function"
+            or type(CloudLibrary.folderFiles) ~= "function" or type(CloudLibrary.inCatalog) ~= "function" then
+        return
+    end
+    local ok, loaded = pcall(CloudLibrary.isLoaded)
+    if not (ok and loaded) then return end
+    local ok_f, files = pcall(CloudLibrary.folderFiles)
+    if not ok_f or type(files) ~= "table" then
+        logger.warn("Concordance: asking Cloud library failed:", files)
+        return
+    end
+    local n = Identity.retractLinks(links, files, CloudLibrary.inCatalog)
+    if n > 0 then logger.info("Concordance: withdrew", n, "matches Cloud library no longer makes") end
+end
+
 --- Book files to read for book identity: the EPUBs book data knows about
 -- (books opened on this device), with the sidecar's MD5, and those in
 -- Cloud library's folder (downloaded, maybe never opened: no MD5 yet).
@@ -609,7 +631,7 @@ function Plugin.engine()
         id = {
             store = Plugin.idStore(),
             files = Plugin.identityFiles,
-            collect = function() Identity.recordLinks(cloudLinks()) end,
+            collect = collectLinks,
             scan = function(item)
                 -- In the subprocess.
                 return IdScan.scan(item.path, {

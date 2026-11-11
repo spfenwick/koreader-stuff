@@ -16,7 +16,14 @@ A record is a fact about a file, identified by its partial MD5:
              "link" (from another plugin: Cloud library matching a file
              without the catalog book's UUID by its title). A link only
              counts for an MD5 no file fact names, and when every link for
-             it names the same UUIDs (see idstore.lua)
+             it names the same UUIDs (see idstore.lua); "unlink" (the
+             device that made a link withdraws it: the match no longer
+             holds)
+    n        for a link or an unlink, which time round (absent: 0). An
+             unlink numbered n withdraws the links for its MD5 and UUIDs
+             numbered n or less; a link made after that is numbered n + 1.
+             So a link counts while its number is above every unlink's,
+             on every device, whatever order the records arrive in
     title, authors, ids (other identifiers: ISBN, calibre:<n>…): for
              display only
 
@@ -29,6 +36,11 @@ A segment is JSON Lines, compressed like the others:
 Facts don't change, so there are no times and no clears: the merged state
 is the union of every record. Readers reject an unknown major version and
 skip record types they don't know.
+
+Version 2 added unlinks and numbered links. A segment holding either says
+"v":2, so that a device still on version 1 (which would take an unlink for
+a fact read from a file) rejects it, and reads it once it's updated; other
+segments still say "v":1.
 --]]
 
 local Codec = require("concordance/codec")
@@ -36,10 +48,14 @@ local Codec = require("concordance/codec")
 local IdFormat = {}
 
 IdFormat.FORMAT = "statsync-id"
-IdFormat.VERSION = 1
+IdFormat.VERSION = 2 -- the newest this reads; segments are written as 1 when that's enough
 IdFormat.MINOR = 0
 --- Version number recorded with bad segments (apart from the other streams').
 IdFormat.BAD_VERSION = 300000 + IdFormat.VERSION * 1000 + IdFormat.MINOR
+
+--- The highest number a link or unlink can have: a match made and withdrawn
+-- this often (devices that disagree about it) stays withdrawn.
+IdFormat.MAX_N = 8
 
 IdFormat.MAX_UUIDS = 16
 IdFormat.MAX_IDS = 32
@@ -85,6 +101,11 @@ function IdFormat.validRecord(r)
     if type(r.uuids) ~= "table" or #r.uuids == 0 then return nil, "no uuids" end
     if not isList(r.uuids, IdFormat.MAX_UUIDS, IdFormat.isUuid) then return nil, "bad uuids" end
     if r.sig ~= nil and not isToken(r.sig) then return nil, "bad sig" end
+    if r.n ~= nil then
+        if type(r.n) ~= "number" or r.n % 1 ~= 0 or r.n < 0 or r.n > IdFormat.MAX_N then return nil, "bad n" end
+        if r.src ~= "link" and r.src ~= "unlink" then return nil, "n on a fact that isn't a link" end
+    end
+    if r.src == "unlink" and r.sig ~= nil then return nil, "sig on an unlink" end
     if not isText(r.title, 1024) or not isText(r.authors, 1024) then return nil, "bad title or authors" end
     if not isList(r.ids, IdFormat.MAX_IDS, function(x) return isText(x, 256) and x ~= "" end) then
         return nil, "bad ids"
@@ -96,9 +117,15 @@ end
 
 local enc = Codec.encodeString
 
-function IdFormat.headerLine(device_id, created)
+--- Does a segment holding this record need to say version 2?
+function IdFormat.needsV2(r)
+    return r.src == "unlink" or (r.n or 0) > 0
+end
+
+--- version: 2 when any record needs it (see needsV2), else 1.
+function IdFormat.headerLine(device_id, created, version)
     return Codec.encode{
-        t = "h", format = IdFormat.FORMAT, v = IdFormat.VERSION, minor = IdFormat.MINOR,
+        t = "h", format = IdFormat.FORMAT, v = version or 1, minor = IdFormat.MINOR,
         device = device_id, created = created,
     }
 end
@@ -119,10 +146,13 @@ function IdFormat.sortedUnique(items)
     return out
 end
 
---- The part of a record that identifies the fact (md5, src, uuids, sig),
--- in a fixed form: the same fact always gives the same key.
+--- The part of a record that identifies the fact (md5, src, uuids, sig,
+-- and n when it isn't 0), in a fixed form: the same fact always gives the
+-- same key.
 function IdFormat.factKey(r)
-    return table.concat({ r.md5, r.src, table.concat(IdFormat.sortedUnique(r.uuids), ","), r.sig or "" }, "|")
+    local key = table.concat({ r.md5, r.src, table.concat(IdFormat.sortedUnique(r.uuids), ","), r.sig or "" }, "|")
+    if (r.n or 0) > 0 then key = key .. "|" .. string.format("%d", r.n) end
+    return key
 end
 
 --- A record line (fixed key order; uuids sorted).
@@ -130,6 +160,7 @@ function IdFormat.recordLine(r)
     local parts = { string.format('{"t":"i","md5":%s,"src":%s,"uuids":%s', enc(r.md5), enc(r.src),
         list(IdFormat.sortedUnique(r.uuids))) }
     if r.sig then parts[#parts + 1] = ',"sig":' .. enc(r.sig) end
+    if (r.n or 0) > 0 then parts[#parts + 1] = string.format(',"n":%d', r.n) end
     if r.title then parts[#parts + 1] = ',"title":' .. enc(r.title) end
     if r.authors then parts[#parts + 1] = ',"authors":' .. enc(r.authors) end
     if r.ids and #r.ids > 0 then parts[#parts + 1] = ',"ids":' .. list(r.ids) end
@@ -158,9 +189,10 @@ function IdFormat.readSegment(path, handlers)
         local t = rec.t
         if lineno == 1 then
             if t ~= "h" or rec.format ~= IdFormat.FORMAT then err = "missing header"; break end
-            if rec.v ~= IdFormat.VERSION then err = "unsupported format version " .. tostring(rec.v); break end
+            if rec.v ~= 1 and rec.v ~= IdFormat.VERSION then err = "unsupported format version " .. tostring(rec.v); break end
             if not isToken(rec.device) then err = "bad device in header"; break end
             header = rec
+            header.needs_v2 = false
         elseif t == "h" then
             err = "second header"; break
         elseif t == "i" then
@@ -168,6 +200,7 @@ function IdFormat.readSegment(path, handlers)
             if not ok then err = verr; break end
             rec.uuids = IdFormat.sortedUnique(rec.uuids)
             rec.dev = header.device
+            if IdFormat.needsV2(rec) then header.needs_v2 = true end
             nrecords = nrecords + 1
             if handlers.record then handlers.record(rec) end
         elseif t == "end" then

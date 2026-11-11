@@ -211,6 +211,7 @@ function IdBuilder:size(seg) return #seg.records end
 function IdBuilder:add(seg)
     for _, r in ipairs(seg.records) do
         local line = IdFormat.recordLine(r)
+        if IdFormat.needsV2(r) then self.v2 = true end
         if not self.lines[line] then
             self.lines[line] = true
             self.n = self.n + 1
@@ -224,7 +225,7 @@ function IdBuilder:write(path, device_id, now)
     local sorted = {}
     for line in pairs(self.lines) do sorted[#sorted + 1] = line end
     table.sort(sorted)
-    local lines = { IdFormat.headerLine(device_id, now) }
+    local lines = { IdFormat.headerLine(device_id, now, self.v2 and 2 or 1) }
     for _, line in ipairs(sorted) do lines[#lines + 1] = line end
     lines[#lines + 1] = IdFormat.trailerLine(#sorted)
     return writeLines(path, lines)

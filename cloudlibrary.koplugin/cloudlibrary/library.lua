@@ -471,6 +471,30 @@ function Library.links()
     return out
 end
 
+--- Every book file in the library folder whose partial MD5 is known:
+-- { { path, md5 }, … }, sorted. With links() and inCatalog(), it lets
+-- Concordance withdraw a link for a file that's no longer matched.
+function Library.folderFiles()
+    local out = {}
+    for path, info in pairs(Library.file_info or {}) do
+        if type(info) == "table" and info.md5 then out[#out + 1] = { path = path, md5 = info.md5 } end
+    end
+    table.sort(out, function(a, b) return a.path < b.path end)
+    return out
+end
+
+--- Whether the catalog (as last read) has a book with this ID.
+function Library.inCatalog(id)
+    if type(id) ~= "string" then return false end
+    id = id:lower()
+    if Library.catalog_ids_of ~= Library.catalog then
+        local set = {}
+        for _i, b in ipairs(Library.catalog or {}) do set[b.id:lower()] = true end
+        Library.catalog_ids, Library.catalog_ids_of = set, Library.catalog
+    end
+    return Library.catalog_ids[id] == true
+end
+
 local STATUS_TEXT = { complete = _("Finished"), reading = _("Reading"), abandoned = _("On hold") }
 
 --- A line for a cloud book's details sheet: "Finished · ★★★★☆ · Last read

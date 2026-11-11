@@ -523,8 +523,8 @@ do
     -- Guards: unrelated books sharing a UUID by mistake aren't joined.
     local MR, MS = string.rep("5", 32), string.rep("6", 32)
     obs(MR, { status = "complete" })
-    local ch = facts(d, { { md5 = MR, uuids = { "0000aaaa-0000-4000-8000-000000000003" }, title = "One Book", authors = "Someone" },
-                          { md5 = MS, uuids = { "0000aaaa-0000-4000-8000-000000000003" }, title = "Another", authors = "Else" } })
+    local ch = facts(d, { { md5 = MR, uuids = { "0000aaaa-0000-4000-8000-000000000003" }, title = "One Book", authors = "Someone", sig = "g1" },
+                          { md5 = MS, uuids = { "0000aaaa-0000-4000-8000-000000000003" }, title = "Another", authors = "Else", sig = "g2" } })
     check(not ch[MR] and not ch[MS], "guarded group not joined")
     check(#d.store:plan(MS, { status = "reading" }) == 0, "guarded group: nothing applied")
 

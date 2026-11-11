@@ -26,6 +26,9 @@ the files in its folder (Library.localFiles, read for their identity like
 books opened here) and for the files it matched to a catalog book without
 the file naming the book's UUID (Library.links: by title, or a PDF): each
 becomes a "link" fact (Identity.recordLinks, at the start of each sync).
+A link this device made that Cloud library no longer makes, for a file
+still in its folder and a book still in its catalog, is withdrawn
+(Identity.retractLinks, with Library.folderFiles and Library.inCatalog).
 --]]
 
 local Identity = {
@@ -113,6 +116,54 @@ function Identity.recordLinks(list)
     end)
     if not ok then
         warn("recording matches failed:", n)
+        return 0
+    end
+    return n
+end
+
+--- Withdraws links this device made that the other plugin no longer
+-- makes. links: its matches now (as for recordLinks); files = { { path,
+-- md5 }, … }: every file it can speak for; known(uuid) -> true for a book
+-- it still lists. Returns the number withdrawn.
+function Identity.retractLinks(links, files, known)
+    if not deps or type(links) ~= "table" or type(files) ~= "table" or type(known) ~= "function" then return 0 end
+    local ok, n = pcall(function()
+        local opened = deps.files()
+        local IdFormat = require("concordance/idformat")
+        -- A file's links are under its sidecar's MD5 or its own: both.
+        local function md5s(item)
+            local out = {}
+            local side = type(item.path) == "string" and opened[item.path] and opened[item.path].md5
+            if type(side) == "string" and side ~= "" then out[#out + 1] = side end
+            if type(item.md5) == "string" and item.md5 ~= "" then out[#out + 1] = item.md5 end
+            return out
+        end
+        local present, current = {}, {}
+        for _, f in ipairs(files) do
+            for _, md5 in ipairs(md5s(f)) do present[md5] = true end
+        end
+        for _, l in ipairs(links) do
+            local uuids = {}
+            for _, u in ipairs(type(l.uuids) == "table" and l.uuids or {}) do
+                uuids[#uuids + 1] = IdFormat.normalizeUuid(u)
+            end
+            local key = table.concat(IdFormat.sortedUnique(uuids), "\n")
+            for _, md5 in ipairs(md5s(l)) do
+                current[md5] = current[md5] or {}
+                current[md5][key] = true
+            end
+        end
+        if next(present) == nil then return 0 end
+        return deps.id_store():retract{
+            device = deps.device_id(), present = present, current = current,
+            known = function(u)
+                local okk, res = pcall(known, u)
+                return okk and res == true
+            end,
+        }
+    end)
+    if not ok then
+        warn("withdrawing matches failed:", n)
         return 0
     end
     return n

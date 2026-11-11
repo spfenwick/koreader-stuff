@@ -103,6 +103,19 @@ differently from what is written below:
 
 ### Phase 3: identity (design changes, bigger)
 
+Done 11 November 2026, with tests; all suites pass. How it was built is in
+`concordance.koplugin/IDENTITY.md` ("Guards, as built now" and the notes on
+withdrawn links). Differences from the steps below:
+
+- **Step 12:** links and unlinks carry a number, so a withdrawn match can
+  be made again. A device only withdraws links it sent first.
+- **Step 13:** there are no timestamps on facts, so "latest fact" and
+  "superseded" can't be told. Instead each pair of files is judged on its
+  own (titles, body signature, two shared UUIDs, or a catalog ID), which
+  fixes A, B and C without them. The limit counts bodies (32), not files.
+- **Step 14:** a UUID named by files that aren't one joined book gives no
+  cloud-book state at all.
+
 11. **Finding 5:** use the title-only fallback only when the file has no
     author, or its author string contains the catalog's first author.
 12. **Findings 5, B:** make links retractable with a new "unlink" fact, so

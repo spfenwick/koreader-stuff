@@ -66,8 +66,30 @@ do
     bad('{"t":"i","md5":"m","src":"file","uuids":[]}\n' .. IdFormat.trailerLine(1), "record without UUIDs")
     bad(IdFormat.recordLine(r) .. "\n" .. IdFormat.trailerLine(2), "wrong trailer count")
     bad(IdFormat.recordLine(r), "missing trailer")
-    S.writeFile(path, '{"t":"h","format":"statsync-id","v":2,"device":"devA"}\n' .. IdFormat.trailerLine(0) .. "\n")
+    S.writeFile(path, '{"t":"h","format":"statsync-id","v":3,"device":"devA"}\n' .. IdFormat.trailerLine(0) .. "\n")
     check(IdFormat.readSegment(path) == nil, "newer major version rejected")
+
+    -- Version 2: unlinks and numbered links.
+    local link0 = { md5 = "m", src = "link", uuids = { U_LIB } }
+    local link1 = { md5 = "m", src = "link", uuids = { U_LIB }, n = 1 }
+    local unlink0 = { md5 = "m", src = "unlink", uuids = { U_LIB } }
+    check(IdFormat.factKey(link0) ~= IdFormat.factKey(link1) and IdFormat.factKey(link0) ~= IdFormat.factKey(unlink0)
+        and IdFormat.factKey(link0) == IdFormat.factKey{ md5 = "m", src = "link", uuids = { U_LIB }, n = 0 },
+        "fact key: a link's number matters, 0 is as none")
+    check(not IdFormat.needsV2(link0) and IdFormat.needsV2(link1) and IdFormat.needsV2(unlink0), "what needs version 2")
+    check(IdFormat.validRecord(link1) and IdFormat.validRecord(unlink0)
+        and not IdFormat.validRecord{ md5 = "m", src = "file", uuids = { U_LIB }, n = 1 }
+        and not IdFormat.validRecord{ md5 = "m", src = "link", uuids = { U_LIB }, n = IdFormat.MAX_N + 1 }
+        and not IdFormat.validRecord{ md5 = "m", src = "link", uuids = { U_LIB }, n = 1.5 }
+        and not IdFormat.validRecord{ md5 = "m", src = "unlink", uuids = { U_LIB }, sig = "s" },
+        "numbers only on links and unlinks, whole and in range")
+    S.writeFile(path, table.concat({ IdFormat.headerLine("devA", 1, 2), IdFormat.recordLine(link1),
+        IdFormat.recordLine(unlink0), IdFormat.trailerLine(2) }, "\n") .. "\n")
+    local got2 = {}
+    local h2 = IdFormat.readSegment(path, { record = function(rec) got2[#got2 + 1] = rec end })
+    check(h2 and h2.v == 2 and h2.needs_v2 and got2[1].n == 1 and got2[2].src == "unlink" and got2[2].n == nil,
+        "version 2 segment round trip")
+    check(IdFormat.headerLine("devA", 1):find('"v":1', 1, true), "segments say version 1 unless told otherwise")
     check(IdFormat.segmentSeq(IdFormat.segmentName(42)) == 42 and IdFormat.segmentSeq("book-0000000042.jsonl.zst") == nil,
         "segment names")
 end
@@ -307,24 +329,28 @@ do
     -- A book on its own.
     fact("solo", { U[5] }, "s6", "Solo", "Sol")
     -- Too many files under one UUID.
-    for i = 1, IdStore.MAX_GROUP + 1 do fact("m" .. i, { U[6] }, "s7", "Many", "Mo") end
+    for i = 1, IdStore.MAX_GROUP + 1 do fact(string.format("m%02d", i), { U[6] }, "sm" .. i, "Many", "Mo") end
+    -- Many rewrites of one book: one body, however many files.
+    for i = 1, IdStore.MAX_GROUP + 3 do fact(string.format("w%02d", i), { U[7] }, "sw", "Rewritten", "Rae") end
     local groups = G:groups()
     local by = {}
     for _, g in ipairs(groups) do by[g.md5s[1]] = g end
-    check(#groups == 4, "four groups of two or more (" .. #groups .. ")")
+    check(#groups == 5, "five groups of two or more (" .. #groups .. ")")
     check(by.x1 and #by.x1.md5s == 3 and by.x1.ok and by.x1.sigs == 1, "transitive: three files, one body")
     check(by.e1 and by.e1.ok and by.e1.sigs == 2, "two editions under one UUID")
-    check(by.u1 and not by.u1.ok and by.u1.why == "titles and authors differ", "unrelated books held")
-    check(by.m1 and not by.m1.ok, "oversized group held")
+    check(by.u1 and not by.u1.ok and by.u1.why == "titles differ", "unrelated books held")
+    check(by.m01 and not by.m01.ok, "oversized group held")
+    check(by.w01 and by.w01.ok and #by.w01.md5s == IdStore.MAX_GROUP + 3 and by.w01.bodies == 1,
+        "many rewrites of one body: joined")
     local c = G:counts()
-    check(c.versions == 1 and c.editions == 1 and c.held == 2, "counts by kind")
+    check(c.versions == 2 and c.editions == 1 and c.held == 2, "counts by kind")
 
     -- Position peers (level 2), from the joined groups.
     G:refreshGroups()
     local function same(list, want) return table.concat(list, ",") == want end
     check(same(G:positionPeers("x2"), "x1,x3"), "peers: the other versions with the same body")
     check(same(G:positionPeers("e1"), ""), "peers: another edition isn't one")
-    check(same(G:positionPeers("u1"), "") and same(G:positionPeers("m1"), ""), "peers: held groups give none")
+    check(same(G:positionPeers("u1"), "") and same(G:positionPeers("m01"), ""), "peers: held groups give none")
     check(same(G:positionPeers("solo"), "") and same(G:positionPeers("nope"), ""), "peers: none for a lone or unknown MD5")
     -- A sidecar's MD5 (no signature of its own) joins at level 1 only.
     G:recordScan({ path = "/g/replaced", md5 = "side", size = 1, mtime = 1 },
@@ -557,6 +583,194 @@ do
     check(Identity.fileAdded("/l/fresh.epub") == 0 and #scanned == 1, "not read twice")
     check(Identity.fileAdded("/l/fresh.pdf") == 0 and #scanned == 1, "files the scanner doesn't read are skipped")
     package.loaded["libs/libkoreader-lfs"] = real_lfs
+end
+
+-- Which files sharing a UUID are one book ---------------------------------------------------
+
+do
+    local J = newStore("J")
+    local U = {}
+    for i = 1, 20 do U[i] = string.format("00000000-0000-4000-9000-%012d", i) end
+    local function fact(md5, uuids, sig, title, authors)
+        J:recordScan({ path = "/j/" .. md5, md5 = md5, size = 1, mtime = 1 },
+            { md5 = md5, uuids = uuids, sig = sig, title = title, authors = authors }, "devJ")
+    end
+    -- A series from one template: a publisher's UUID on every volume, the
+    -- same author, each with a UUID of its own.
+    fact("v1", { U[1], U[2] }, "sv1", "Saga, Volume 1", "Ann")
+    fact("v2", { U[1], U[3] }, "sv2", "Saga, Volume 2", "Ann")
+    -- Title and author both corrected in Calibre: both UUIDs kept.
+    fact("t1", { U[4], U[5] }, "st1", "Teh Book", "Smith, J")
+    fact("t2", { U[4], U[5] }, "st2", "The Book: A Novel", "John Smith")
+    -- Retitled, one UUID, but the same text.
+    fact("b1", { U[6] }, "sb", "Working Title", "Bo")
+    fact("b2", { U[6] }, "sb", "Final Title", "Bo")
+    -- A new edition, retitled, one UUID, other text: taken for another book.
+    fact("n1", { U[7] }, "sn1", "First Edition", "Ned")
+    fact("n2", { U[7] }, "sn2", "Second Edition", "Ned")
+    -- One file that doesn't fit leaves the others joined.
+    fact("o1", { U[8] }, "so1", "Same", "Oz")
+    fact("o2", { U[8] }, "so2", "Same", "Oz")
+    fact("o3", { U[8] }, "so3", "Something Else", "Oz")
+    -- A file without a title joins on its UUID.
+    fact("q1", { U[9] }, "sq1", "Titled", "Q")
+    fact("q2", { U[9] }, "sq2", nil, nil)
+    J:refreshGroups()
+    local of, held = {}, {}
+    for _, g in ipairs(J:groups()) do
+        for _, m in ipairs(g.md5s) do
+            if g.ok then of[m] = table.concat(g.md5s, ",") else held[m] = g.why end
+        end
+    end
+    check(of.v1 == nil and of.v2 == nil and held.v1 == "titles differ", "a series sharing a publisher's UUID: not joined")
+    check(of.t1 == "t1,t2", "title and author both edited, two UUIDs shared: joined")
+    check(of.b1 == "b1,b2", "retitled, the same text: joined")
+    check(of.n1 == nil and held.n1 == "titles differ", "retitled, one UUID, other text: not joined")
+    check(of.o1 == "o1,o2" and of.o3 == nil and held.o3 == "titles differ", "the file that doesn't fit stays out, the rest join")
+    check(of.q1 == "q1,q2", "a file without a title joins on its UUID")
+    -- A catalog's own ID for the book (a link names it) joins whatever the titles.
+    J:link({ { md5 = "pdf", uuids = { U[7] }, title = "Second Edition" } }, "devJ")
+    J:refreshGroups()
+    of = {}
+    for _, g in ipairs(J:groups()) do
+        if g.ok then for _, m in ipairs(g.md5s) do of[m] = table.concat(g.md5s, ",") end end
+    end
+    check(of.n1 == "n1,n2,pdf", "a catalog's ID for the book: its files join whatever their titles (" .. tostring(of.n1) .. ")")
+    -- A UUID on very many files is some tool's constant: it joins nothing.
+    local K = newStore("K")
+    for i = 1, IdStore.MAX_CARRIERS + 1 do
+        K:recordScan({ path = "/k/" .. i, md5 = "k" .. i, size = 1, mtime = 1 },
+            { md5 = "k" .. i, uuids = { U[20] }, sig = "sk" .. i, title = "Same Title" }, "devK")
+    end
+    K:refreshGroups()
+    local kg = K:groups()
+    check(#kg == 1 and not kg[1].ok and #K:positionPeers("k1") == 0, "a UUID on very many files joins nothing")
+end
+
+-- Links withdrawn and made again -------------------------------------------------------------
+
+do
+    local U = {}
+    for i = 1, 9 do U[i] = string.format("00000000-0000-4000-a000-%012d", i) end
+    local A, B = newStore("RA"), newStore("RB")
+    local function groupOf(store, md5)
+        store:refreshGroups()
+        for _, g in ipairs(store:groups()) do
+            if g.ok then for _, m in ipairs(g.md5s) do if m == md5 then return table.concat(g.md5s, ",") end end end
+        end
+    end
+    local function always() return true end
+    A:recordScan({ path = "/r/e", md5 = "e", size = 1, mtime = 1 }, { md5 = "e", uuids = { U[1] }, sig = "s", title = "Book" }, "devA")
+    check(A:link({ { md5 = "p", uuids = { U[1] }, title = "Book" } }, "devA") == 1 and groupOf(A, "p") == "e,p", "linked")
+    local function uuidsOf(store, md5) return table.concat((store:uuids({ [md5] = true }))[md5] or {}, ",") end
+    check(uuidsOf(A, "p") == U[1], "a linked file's UUIDs")
+
+    -- Nothing to withdraw while the match is still made, the file isn't
+    -- there to speak for, or the book isn't in the catalog just now.
+    check(A:retract{ device = "devA", present = { p = true }, current = { p = { [U[1]] = true } }, known = always } == 0,
+        "still matched: kept")
+    check(A:retract{ device = "devA", present = {}, current = {}, known = always } == 0, "file not there: kept")
+    check(A:retract{ device = "devA", present = { p = true }, current = {}, known = function() return false end } == 0,
+        "book not in the catalog just now: kept")
+    check(A:retract{ device = "devOther", present = { p = true }, current = {}, known = always } == 0,
+        "another device's link: not this one's to withdraw")
+    -- No longer matched: withdrawn.
+    check(A:retract{ device = "devA", present = { p = true }, current = {}, known = always } == 1, "withdrawn")
+    check(A:retract{ device = "devA", present = { p = true }, current = {}, known = always } == 0, "only once")
+    check(groupOf(A, "p") == nil and uuidsOf(A, "p") == "", "a withdrawn link joins nothing and names no UUID")
+
+    -- Sent as version 2, and the same on a device that gets the records in
+    -- another order.
+    local segA = TMP .. "/RA.jsonl"
+    local exp = A:export{ device_id = "devA", out_path = segA, now = 1, max_records = 100 }
+    check(exp and exp.records == 3 and S.readFile(segA):find('"v":2', 1, true) and S.readFile(segA):find('"src":"unlink"', 1, true),
+        "the unlink is sent, in a version 2 segment")
+    A:markExported(segA, "devA", "id-0000000001.jsonl.zst", 1, nil, 1)
+    local recs = {}
+    IdFormat.readSegment(segA, { record = function(r) recs[#recs + 1] = r end })
+    local rev = TMP .. "/RA-reversed.jsonl"
+    local lines = { IdFormat.headerLine("devA", 1, 2) }
+    for i = #recs, 1, -1 do lines[#lines + 1] = IdFormat.recordLine(recs[i]) end
+    lines[#lines + 1] = IdFormat.trailerLine(#recs)
+    S.writeFile(rev, table.concat(lines, "\n") .. "\n")
+    check(B:importSegment(rev, "devA", "id-0000000001.jsonl.zst", 1, nil, 1), "imported")
+    check(groupOf(B, "p") == nil and uuidsOf(B, "p") == "", "withdrawn on the other device too, whatever the order")
+
+    -- Matched again: a link numbered above the unlink counts.
+    check(B:link({ { md5 = "p", uuids = { U[1] }, title = "Book" } }, "devB") == 1 and groupOf(B, "p") == "e,p",
+        "matched again: linked again")
+    check(B:link({ { md5 = "p", uuids = { U[1] }, title = "Book" } }, "devB") == 0, "and only once")
+    local segB = TMP .. "/RB.jsonl"
+    B:export{ device_id = "devB", out_path = segB, now = 2, max_records = 100 }
+    check(S.readFile(segB):find('"n":1', 1, true), "the new link carries its number")
+    A:importSegment(segB, "devB", "id-0000000001.jsonl.zst", 1, nil, 2)
+    check(groupOf(A, "p") == "e,p", "and counts where the unlink was made")
+    -- That link is the other device's: this one leaves it alone.
+    check(A:retract{ device = "devA", present = { p = true }, current = {}, known = always } == 0,
+        "the newer link is another device's")
+
+    -- Devices that keep disagreeing: it stays withdrawn in the end.
+    local C = newStore("RC")
+    local made = 0
+    for _ = 1, IdFormat.MAX_N + 3 do
+        made = made + C:link({ { md5 = "x", uuids = { U[2] } } }, "devC")
+        C:retract{ device = "devC", present = { x = true }, current = {}, known = always }
+    end
+    check(made == IdFormat.MAX_N + 1 and C:link({ { md5 = "x", uuids = { U[2] } } }, "devC") == 0,
+        "made and withdrawn too often: stays withdrawn")
+
+    -- A database from before unlinks gets the new column.
+    local old_path = TMP .. "/old-id.sqlite3"
+    local oc = S.SQ3.open(old_path)
+    oc:exec([[CREATE TABLE id_facts (md5 TEXT NOT NULL, fact TEXT NOT NULL, src TEXT NOT NULL, uuids TEXT NOT NULL,
+        sig TEXT, title TEXT, authors TEXT, ids TEXT, device TEXT NOT NULL, PRIMARY KEY (md5, fact)) WITHOUT ROWID;]])
+    oc:exec("INSERT INTO id_facts VALUES ('p', 'p|link|" .. U[3] .. "|', 'link', '" .. U[3] .. "', NULL, 'T', NULL, NULL, 'devO');")
+    oc:exec("INSERT INTO id_facts VALUES ('e', 'e|file|" .. U[3] .. "|s', 'file', '" .. U[3] .. "', 's', 'T', NULL, NULL, 'devO');")
+    oc:close()
+    local O = IdStore.new{ sq3 = S.SQ3, state_path = old_path }
+    check(groupOf(O, "p") == "e,p", "an older database: its links still count")
+    check(O:retract{ device = "devO", present = { p = true }, current = {}, known = always } == 1 and groupOf(O, "p") == nil,
+        "and can be withdrawn")
+
+    -- Through the interface: a file's links are found under its sidecar's
+    -- MD5 or its own.
+    local Identity = require("concordance/identity")
+    local BookStore = require("concordance/bookstore")
+    local R = newStore("RI")
+    Identity.setup{
+        id_store = function() return R end,
+        book_store = function() return BookStore.new{ sq3 = S.SQ3, state_path = TMP .. "/RI.sqlite3" } end,
+        device_id = function() return "devI" end, device_names = function() return {} end,
+        files = function() return { ["/c/opened.pdf"] = { md5 = "side" } } end,
+        handles = function() return false end, scan = function() end, refresh = function() end,
+        logger = { warn = function(...) print("identity warning:", ...) end },
+    }
+    local links = { { path = "/c/opened.pdf", md5 = "own1", uuids = { U[4] } }, { path = "/c/other.pdf", md5 = "own2", uuids = { U[5] } } }
+    check(Identity.recordLinks(links) == 2, "two links recorded")
+    local folder = { { path = "/c/opened.pdf", md5 = "own1" }, { path = "/c/other.pdf", md5 = "own2" } }
+    local in_catalog = function(u) return u == U[4] or u == U[5] end
+    check(Identity.retractLinks(links, folder, in_catalog) == 0, "all still matched: nothing withdrawn")
+    check(Identity.retractLinks({ links[2] }, folder, in_catalog) == 1, "the match that's gone is withdrawn")
+    local rc = R:open()
+    check(rc:rowexec("SELECT count(*) FROM id_facts WHERE src = 'unlink' AND md5 = 'side'") == 1,
+        "under the sidecar's MD5, where the link was")
+    rc:close()
+    check(Identity.retractLinks({}, {}, in_catalog) == 0 and Identity.retractLinks({}, { folder[2] }, function() error("x") end) == 0,
+        "no files, or a lookup that fails: nothing withdrawn")
+
+    -- A UUID named by files that aren't one book is no book's state.
+    local SB = BookStore.new{ sq3 = S.SQ3, state_path = TMP .. "/RS.sqlite3" }
+    local SI = newStore("RS")
+    SI:recordScan({ path = "/s/1", md5 = "s1", size = 1, mtime = 1 }, { md5 = "s1", uuids = { U[6] }, sig = "a", title = "One" }, "d")
+    SI:recordScan({ path = "/s/2", md5 = "s2", size = 1, mtime = 1 }, { md5 = "s2", uuids = { U[6] }, sig = "b", title = "Two" }, "d")
+    SI:recordScan({ path = "/s/3", md5 = "s3", size = 1, mtime = 1 }, { md5 = "s3", uuids = { U[7] }, sig = "c", title = "Three" }, "d")
+    SI:refreshGroups()
+    local sc = SB:open()
+    sc:exec("INSERT INTO book_merged (md5, prop, updated, device, deleted, hash, value) VALUES ('s1', 'rating', 1, 'd', 0, 'h', '5');")
+    sc:exec("INSERT INTO book_merged (md5, prop, updated, device, deleted, hash, value) VALUES ('s3', 'rating', 1, 'd', 0, 'h', '3');")
+    sc:close()
+    local sts = SB:statesByUuid(IdStore.usedFacts)
+    check(sts[U[6]] == nil and sts[U[7]] and sts[U[7]].rating == 3, "an ID shared by different books gives no state")
 end
 
 S.finish("concordance identity tests")

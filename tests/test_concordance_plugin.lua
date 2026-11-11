@@ -559,6 +559,23 @@ local iconn = P.idStore():open()
 check(iconn:rowexec("SELECT count(*) FROM id_facts WHERE md5 = 'pdfmd5' AND src = 'link'") == 1,
     "Cloud library's matches recorded as links")
 iconn:close()
+-- The match is no longer made (the file is still there, the book still in
+-- the catalog): the next sync withdraws the link.
+local cl = package.loaded["cloudlibrary/library"]
+cl.links = function() return {} end
+cl.folderFiles = function() return { { path = TMP .. "/cloud-book.pdf", md5 = "pdfmd5" } } end
+cl.inCatalog = function(u) return u == U end
+cl.isLoaded = function() return false end
+P.engine().deps.id.collect()
+iconn = P.idStore():open()
+check(iconn:rowexec("SELECT count(*) FROM id_facts WHERE src = 'unlink'") == 0, "catalog not read: no link withdrawn")
+iconn:close()
+cl.isLoaded = function() return true end
+P.engine().deps.id.collect()
+iconn = P.idStore():open()
+check(iconn:rowexec("SELECT count(*) FROM id_facts WHERE md5 = 'pdfmd5' AND src = 'unlink'") == 1,
+    "a match Cloud library no longer makes is withdrawn")
+iconn:close()
 package.loaded["cloudlibrary/library"] = nil
 
 -- ZenOS's Home is a page over the file browser: history and collections

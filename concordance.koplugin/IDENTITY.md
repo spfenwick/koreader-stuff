@@ -53,9 +53,35 @@ smallest shared UUID.
 Non-UUID identifiers (ISBN, `calibre:<n>`, Amazon, Google) never join: an
 ISBN is shared by different files. They're recorded for display only.
 
-Guards: a group isn't joined, and is logged, if its files' titles and
-first authors both differ after normalising, or if it reaches more than
-8 MD5s.
+Guards, as first built: a group wasn't joined if its files' titles and
+first authors both differed after normalising, or if it reached more than
+8 MD5s. That judged the whole group by every fact ever recorded: books by
+one author sharing a publisher's UUID were joined, a book whose title and
+author were both corrected never was, and a ninth rewrite parted all the
+versions.
+
+Guards, as built now (2026-11-11, `computeGroups` in
+`concordance/idstore.lua`): each pair of files sharing a UUID is judged on
+its own. They're the same book when
+
+- their titles agree after normalising (or one has none), or
+- they have the same body signature, or
+- they share two or more UUIDs (Calibre gives a book two and keeps both
+  when it rewrites the file; a template's UUID shared by a series is one),
+  or
+- the shared UUID is a catalog's own ID for the book: a link names it.
+
+Otherwise (one shared UUID, different titles, different text) they're
+taken for different books. Groups are what the accepted pairs connect, so
+one file that doesn't fit stays out and the rest still join. Authors no
+longer count. This is stricter for one case: a retitled new edition that
+shares a single UUID with the old one, and has no link, isn't joined.
+
+Two size limits remain. A group of more than 32 bodies isn't joined (files
+with the same signature count once, so rewrites of one text never reach
+it). A UUID carried by more than 200 files joins nothing.
+
+Status shows the sets of files that share UUIDs but weren't all joined.
 
 ### The body signature
 
@@ -96,6 +122,23 @@ major version rejected):
   book ID and body signature". Facts don't change, so the merged state is
   a grow-only set: no timestamps, no deletions, order-independent and
   idempotent by construction.
+- Links can be withdrawn (2026-11-11), still as a grow-only set. A link
+  or unlink carries a number `n` (left out when 0). An `unlink` numbered n
+  withdraws the links for its MD5 and UUIDs numbered n or less; a link
+  made after that is numbered n + 1. A link counts while its number is
+  above every unlink's, so every device agrees whatever order the records
+  arrive in. Numbers stop at 8: a match made and withdrawn that often
+  stays withdrawn. A segment holding an unlink or a numbered link says
+  `"v":2`: a device on the first version would take an unlink for a fact
+  read from a file, so it rejects the segment and reads it once updated.
+  Other segments still say `"v":1`.
+- When a link is withdrawn: at the start of a sync, once Cloud library has
+  read its catalog, a link this device made is withdrawn if the file is
+  still in the folder, the book is still in the catalog, and Cloud library
+  no longer makes the match (`Identity.retractLinks`, with
+  `Library.folderFiles` and `Library.inCatalog`). A device only withdraws
+  links it sent first: one whose catalog is behind can't undo another's.
+  Statistics already folded into one row by the link stay there.
 - `src`: `file` (read from the file with that MD5), `sidecar` (see below)
   or `link` (supplied by another plugin, e.g. Cloud library matching a
   PDF by title; built with step 6). For one MD5, `file` wins over
@@ -357,6 +400,8 @@ they load in doesn't matter:
   as planned (`usedFacts`): only for an MD5 with no `file` or `sidecar`
   fact, and only when its links agree. A link has no signature, so it
   joins at level 1 only (book data, statistics), never annotations.
+- `bookState` (changed 2026-11-11): a UUID named by files that aren't all
+  one joined book gives no state, as it's no one book's ID.
 - `bookState`: every file whose used facts name the UUID, plus their
   joined versions; each of status, rating and last opened (`hist`) is
   the winning record across them (`BookStore:statesByUuid`). Cached until

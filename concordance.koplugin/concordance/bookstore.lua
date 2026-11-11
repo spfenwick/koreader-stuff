@@ -581,6 +581,8 @@ end
 -- { [uuid] = { status, rating, last_read, last_device } }. A UUID's book is
 -- every file whose identity facts name it, with their joined versions; each
 -- property is the winner across them. used = IdStore.usedFacts(conn).
+-- A UUID named by files that aren't all one joined book (different books
+-- sharing an ID) is no book's: it's left out.
 -- Only UUIDs with a status, rating or last read time are listed.
 function BookStore:statesByUuid(usedFacts)
     local HIST = BookFormat.HISTORY
@@ -613,11 +615,18 @@ function BookStore:statesByUuid(usedFacts)
         end
         local out = {}
         for uuid, direct in pairs(carriers) do
-            local all = {}
+            local all, books, one = {}, 0, nil
             for md5 in pairs(direct) do
                 all[md5] = true
                 for _, m in ipairs(grp[md5] and members[grp[md5]] or {}) do all[m] = true end
+                -- Which book this file is: its group, or itself alone.
+                local book = grp[md5] or md5
+                if book ~= one then
+                    one = one or book
+                    if book ~= one then books = 2 end
+                end
             end
+            if books == 2 then all = {} end
             local best = {}
             for md5 in pairs(all) do
                 for prop, m in pairs(recs[md5] or {}) do

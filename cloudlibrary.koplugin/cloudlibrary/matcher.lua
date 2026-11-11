@@ -18,7 +18,9 @@ How a file matches a book, in order:
    its book UUID into the EPUB; Calibre-Web uses it as the OPDS entry ID);
 2. title and first author (from the EPUB, or from KOReader's OPDS file name
    "Author - Title.ext");
-3. title alone, if exactly one catalog book has that title.
+3. title alone, if exactly one catalog book has that title, and the file
+   doesn't name another author: it names none, or the book's first author
+   is somewhere in what it names ("A, B - Title" for a book by B).
 Each catalog book matches at most one file.
 Only files directly in the folder are considered.
 ]]
@@ -61,7 +63,8 @@ local function readEpub(path)
     arc:close()
     if not opf then return nil end
     local info = { uuids = {}, authors = {} }
-    for value in opf:gmatch("<dc:identifier[^>]*>%s*([^<]-)%s*</dc:identifier>") do
+    -- With or without the dc: prefix, as Concordance reads them.
+    for value in opf:gmatch("<[%w]*:?identifier[^>]*>%s*([^<]-)%s*</[%w]*:?identifier>") do
         -- Calibre 6 writes the bare UUID, Calibre 9 "uuid:...", others "urn:uuid:...".
         value = Feed.unescape(value):lower():gsub("^urn:", ""):gsub("^uuid:", "")
         if value:match(UUID) then table.insert(info.uuids, value) end
@@ -136,13 +139,14 @@ end
 --- Returns { [uuid] = path }, { unmatched local paths }, { [uuid] = true }
 -- for those matched by title.
 function Matcher.match(folder, files, books)
-    local by_uuid, by_title_author, by_title = {}, {}, {}
+    local by_uuid, by_title_author, by_title, first_author = {}, {}, {}, {}
     for _i, b in ipairs(books) do
         by_uuid[b.id:lower()] = b.id
         -- Normalised when stored, if read from the store.
         local t = b.match_title or normalize(b.title)
         if t ~= "" then
             local a = b.match_author or normalize(b.authors and b.authors[1])
+            first_author[b.id] = a
             by_title_author[t .. "\0" .. a] = by_title_author[t .. "\0" .. a] or b.id
             if by_title[t] == nil then by_title[t] = b.id else by_title[t] = false end
         end
@@ -166,8 +170,21 @@ function Matcher.match(folder, files, books)
                 if id then break end
             end
             -- File names may hold several authors ("A, B - Title"), so fall
-            -- back to the title when only one catalog book has it.
-            if not id then id = by_title[t] or nil end
+            -- back to the title when only one catalog book has it. Not when
+            -- the file names someone else: that's another book.
+            local only = not id and by_title[t] or nil
+            if only then
+                local want = first_author[only] or ""
+                local named, agrees = false, want == ""
+                for _j, author in ipairs(info.authors or {}) do
+                    local a = normalize(author)
+                    if a ~= "" then
+                        named = true
+                        if want ~= "" and (" " .. a .. " "):find(" " .. want .. " ", 1, true) then agrees = true end
+                    end
+                end
+                if not named or agrees then id = only end
+            end
         end
         if id and not matched[id] then
             matched[id] = path

@@ -524,6 +524,43 @@ do
     eq(matched[catalog[6].id], nil, "missing book not matched")
     eq(#unmatched, 2, "files not in the catalog")
 
+    -- Title alone, only when the file doesn't name someone else.
+    do
+        local tf = TMP .. "/titles"
+        os.execute("mkdir -p '" .. tf .. "'")
+        local cat = {
+            { id = "00000000-0000-4000-8000-0000000000d1", title = "Dune", authors = { "Frank Herbert" } },
+            { id = "00000000-0000-4000-8000-0000000000d2", title = "Emma", authors = { "Jane Austen" } },
+            { id = "00000000-0000-4000-8000-0000000000d3", title = "Ulysses", authors = { "James Joyce" } },
+            { id = "00000000-0000-4000-8000-0000000000d4", title = "Nameless", authors = {} },
+        }
+        for _i, name in ipairs({ "Some Other Writer - Dune.pdf", "Emma.pdf", "Ann Editor, James Joyce - Ulysses.pdf",
+                                 "Whoever - Nameless.pdf" }) do
+            local tfile = io.open(tf .. "/" .. name, "w"); tfile:write("x"); tfile:close()
+        end
+        local tm, tun, tby = Matcher.match(tf, {}, cat)
+        eq(tm[cat[1].id], nil, "title alone: not when the file names another author")
+        eq(tm[cat[2].id], tf .. "/Emma.pdf", "title alone: a file naming no author")
+        eq(tm[cat[3].id], tf .. "/Ann Editor, James Joyce - Ulysses.pdf", "title alone: the book's author among those named")
+        eq(tm[cat[4].id], tf .. "/Whoever - Nameless.pdf", "title alone: a catalog book without an author")
+        eq(#tun, 1, "the other author's file is left unmatched")
+        check(tby[cat[2].id] and tby[cat[3].id], "matched by title")
+    end
+    -- Identifiers without the dc: prefix are read too.
+    do
+        local pf = TMP .. "/prefix"
+        os.execute("mkdir -p '" .. pf .. "'")
+        writeEpub(pf .. "/plain.epub", [[<identifier>urn:uuid:00000000-0000-4000-8000-0000000000e1</identifier>
+<dc:title>Whatever</dc:title>]])
+        local pstore = Store.open(TMP .. "/db/prefix.sqlite3", false)
+        Matcher.scan(pf, pstore)
+        local pm, _pu, pby = Matcher.match(pf, pstore:localFiles(),
+            { { id = "00000000-0000-4000-8000-0000000000e1", title = "Catalog Title", authors = { "X" } } })
+        check(pm["00000000-0000-4000-8000-0000000000e1"] == pf .. "/plain.epub"
+            and not pby["00000000-0000-4000-8000-0000000000e1"], "an identifier without the dc: prefix matches by UUID")
+        pstore:close()
+    end
+
     -- Unscanned files still match by name.
     local m2 = Matcher.match(folder, {}, catalog)
     eq(m2[catalog[2].id] ~= nil, true, "file name match without a scan")
@@ -1911,6 +1948,16 @@ do
     package.loaded["concordance/identity"].bookState = function() error("boom") end
     eq(Virtual.stateText(A_ID), nil, "a Concordance error leaves the line out")
     package.loaded["concordance/identity"] = nil
+    -- For Concordance to withdraw links: every file with its MD5, and what's in the catalog.
+    Library.file_info["/lib/stray.pdf"] = { md5 = "ms" }
+    Library.file_info["/lib/unread.pdf"] = {}
+    local ff = Library.folderFiles()
+    eq(#ff, 3, "folder files: those with an MD5")
+    eq(ff[3].path .. " " .. ff[3].md5, "/lib/stray.pdf ms", "folder files: unmatched ones too")
+    check(Library.inCatalog(A_ID:lower()) and Library.inCatalog(B_ID:upper()) and not Library.inCatalog("nope")
+        and not Library.inCatalog(nil), "in the catalog, whatever the case")
+    Library.catalog = {}
+    check(not Library.inCatalog(A_ID), "another catalog: looked up afresh")
     Library.catalog, Library.matched, Library.by_title, Library.file_info, Library.on_device = unpack(saved)
 end
 
