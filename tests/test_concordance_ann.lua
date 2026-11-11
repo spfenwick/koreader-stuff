@@ -47,6 +47,21 @@ local function loadReaderAnnotation()
 end
 local ReaderAnnotation = loadReaderAnnotation()
 
+--- KOReader's ReaderView:resetHighlightBoxesCache (its AnnotationsModified
+-- handler), unmodified: readerview.lua needs too much to load, so just
+-- that function is taken from it.
+local function loadResetHighlightBoxesCache()
+    local f = assert(io.open(S.koreader .. "/frontend/apps/reader/modules/readerview.lua"))
+    local text = f:read("*a")
+    f:close()
+    local body = assert(text:match("\nfunction ReaderView:resetHighlightBoxesCache%(items%)\n.-\nend\n"),
+        "ReaderView:resetHighlightBoxesCache not found")
+    local RV = {}
+    assert(loadstring("local ReaderView = ...\n" .. body))(RV)
+    return RV.resetHighlightBoxesCache
+end
+local resetHighlightBoxesCache = loadResetHighlightBoxesCache()
+
 -- XPointers here look like /body/DocFragment[F]/body/p[P]/text().O; page = F.
 local function xp(f, p, o) return string.format("/body/DocFragment[%d]/body/p[%d]/text().%d", f, p, o) end
 local function parseXp(x)
@@ -116,10 +131,24 @@ function Dev:open(md5, kind, opts)
     ui.annotation = setmetatable({ ui = ui, document = ui.document, view = {},
                                    annotations = deepcopy(self:sidecar(md5, kind)) }, { __index = ReaderAnnotation })
     ui.annotation:updateAnnotations(true, true)
+    -- The view, with a box cached for each highlight, as once pages are drawn.
+    ui.view = { ui = ui, document = ui.document, highlight = { page_boxes = {} },
+                resetHighlightBoxesCache = resetHighlightBoxesCache }
+    for i, item in ipairs(ui.annotation.annotations) do
+        if item.drawer then
+            local page = ui.document:getPageFromXPointer(item.pos0)
+            local boxes = ui.view.highlight.page_boxes[page] or {}
+            boxes[#boxes + 1] = { index = i }
+            ui.view.highlight.page_boxes[page] = boxes
+        end
+    end
     local dev = self
     ui.handleEvent = function(_, ev)
         table.insert(dev.events, ev)
-        if ev.name == "AnnotationsModified" then ui.annotation:onAnnotationsModified(ev.args) end
+        if ev.name == "AnnotationsModified" then
+            ui.annotation:onAnnotationsModified(ev.args)
+            ui.view:resetHighlightBoxesCache(ev.args)
+        end
     end
     self.ui = ui
     self.held_on_open = self.sync:onReaderReady(ui)
@@ -361,6 +390,7 @@ do -- live: the open book gets changes after a sync, unless the user is busy
     A:open(M2, "rolling"); A:highlight(3, 1, 0, 3); tick(); A:close()
     B:import(A:export(), A.id)
     check(#B.ui.annotation.annotations == 3, "remote addition applied next to an unsent local one")
+    check(next(B.ui.view.highlight.page_boxes) == nil, "applying mid-read drops every cached highlight box")
     B:close()
     A:import(B:export(), B.id)
     A:open(M2, "rolling")

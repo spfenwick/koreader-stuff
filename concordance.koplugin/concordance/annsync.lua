@@ -134,9 +134,14 @@ function AnnSync:apply(ui, force)
     -- KOReader's own refresh after outside changes: page numbers, then sort.
     if ui.annotation.updateAnnotations then ui.annotation:updateAnnotations(true, true) end
     local hl1, notes1 = counts(ui.annotation)
+    -- The view's cached highlight boxes hold list indexes, and any of them
+    -- may have moved: drop them all (it redraws them as needed).
+    if ui.view and ui.view.resetHighlightBoxesCache then ui.view:resetHighlightBoxesCache() end
     -- index_modified: not an edit (KOReader would stamp datetime_updated),
-    -- and the file browser's "has annotations" is refreshed.
-    touched.index_modified = true
+    -- and the file browser's "has annotations" is refreshed. ReaderView
+    -- shifts the indexes of boxes at or after it, so it must be a number:
+    -- past the end, it shifts nothing.
+    touched.index_modified = #list + 1
     touched.nb_highlights_added = hl1 - hl0
     touched.nb_notes_added = notes1 - notes0
     if ui.handleEvent then
