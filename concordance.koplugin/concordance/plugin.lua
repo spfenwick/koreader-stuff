@@ -345,14 +345,20 @@ local function cloudPath(uuids)
     return ok and path or nil
 end
 
---- After books read elsewhere went into the history: the file browser and,
--- under ZenOS, Home show the new order (Home rebuilds now if it's shown,
--- else when it's next opened).
+--- After books read elsewhere went into the history: the file browser, an
+-- open History list and, under ZenOS, Home show the new order (Home rebuilds
+-- now if it's shown, else when it's next opened).
 local function refreshAfterHistory(paths)
     local FileManager = package.loaded["apps/filemanager/filemanager"]
     local fm = type(FileManager) == "table" and FileManager.instance
     if not fm then return end
     if fm.file_chooser then fm.file_chooser:refreshPath() end
+    -- The History list builds its items once, when opened.
+    local history = fm.history
+    if type(history) == "table" and history.booklist_menu and type(history.updateItemTable) == "function" then
+        local ok, err = pcall(history.updateItemTable, history)
+        if not ok then logger.warn("Concordance: refreshing the History list failed:", err) end
+    end
     local SharedState = package.loaded["common/shared_state"]
     local home = fm.zenos and type(SharedState) == "table" and type(SharedState.get) == "function"
         and SharedState.get(fm.zenos, "home")
