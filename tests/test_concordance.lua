@@ -1052,4 +1052,21 @@ do
         and NetJob.metaTag{} == nil, "metaTag")
 end
 
+-- The statistics plugin's schema version ------------------------------------------------
+
+do
+    local d = device("schema")
+    check(d.store:statsSchemaProblem() == nil, "KOReader's current statistics schema is supported")
+    local c = d:open()
+    c:exec("PRAGMA user_version=20991231;")
+    c:close()
+    local warned = 0
+    d.store.log = { warn = function() warned = warned + 1 end }
+    local conn, why, kind = d.store:openStats()
+    check(conn == nil and kind == "schema" and why:find("20991231"), "a newer schema is left alone")
+    check(d.store:statsSchemaProblem() and warned == 1, "the problem reported, the warning logged once")
+    local _, err = d.store:export{ device_id = "x", out_path = TMP .. "/schema.jsonl", now = 1, max_events = 10 }
+    check(err and err:find("not supported"), "nothing exported from it")
+end
+
 S.finish("concordance unit tests")

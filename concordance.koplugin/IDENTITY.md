@@ -325,7 +325,9 @@ As built:
 KOReader's progress sync keys by MD5 too, on its own server, so this is a
 hook into the progress sync plugin (kosync.koplugin) rather than Concordance's
 data. As built (`concordance/progresshook.lua`, installed at start when that
-plugin is enabled): its client's `get_progress` is wrapped. When the book's
+plugin is enabled): its client's `get_progress` is wrapped, provided it
+still takes `(self, username, password, document, callback)` (checked with
+`debug.getinfo`; otherwise not wrapped, and a warning logged). When the book's
 MD5 has level-2 peers (`IdStore:positionPeers`: same joined group, same body
 signature), their positions are fetched too, one request each after this
 MD5's, and the newest by the server's timestamp is handed back as if the

@@ -219,42 +219,74 @@ function HistSync:apply(force)
     local cap = open and top and top.file == open and top.time or nil
     local lfs = self:_lfs()
     local n, seen, moved = 0, {}, {}
-    for _, w in ipairs(order) do
-        local idx = rh.getIndexByFile and rh:getIndexByFile(w.path)
+    local function markSeen(w)
+        for _, md5 in ipairs(w.md5s) do seen[#seen + 1] = { md5 = md5, values = { [HIST] = todo[md5].time } } end
+    end
+    local function indexOf(path)
+        local idx = rh.getIndexByFile and rh:getIndexByFile(path)
         if not idx then
-            for i, e in ipairs(rh.hist) do if e.file == w.path then idx = i; break end end
+            for i, e in ipairs(rh.hist) do if e.file == path then idx = i; break end end
         end
+        return idx
+    end
+    -- Books on this device go in through ReadHistory:addItem, as KOReader
+    -- puts in books it opens (at the time given, access time touched); cloud
+    -- entries, which addItem won't take (no file), by hand.
+    local files, entries = {}, {}
+    for _, w in ipairs(order) do
+        local idx = indexOf(w.path)
         local have = idx and tonumber(rh.hist[idx].time)
-        local done = true
         if have and have >= w.time then
-            -- Already there, as new or newer.
+            markSeen(w) -- already there, as new or newer
         elseif w.path == open or (cap and w.time >= cap) then
-            done = false -- after the open book is closed
+            -- after the open book is closed
+        elseif rh.addItem and self:_isFile(w.path) then
+            files[#files + 1] = w
         else
-            local exists = self:_isFile(w.path)
-            if idx then table.remove(rh.hist, idx) end
-            local at = rh.getIndexByTime and rh:getIndexByTime(w.time, (w.path:gsub(".*/", ""))) or 1
-            if not rh.getIndexByTime then
-                while rh.hist[at] and (tonumber(rh.hist[at].time) or 0) >= w.time do at = at + 1 end
-            end
-            table.insert(rh.hist, at, entryFor(w.path, w.time, exists))
-            moved[#moved + 1] = w.path
-            if exists then
-                -- The access time, for sorting by last read (as KOReader does).
-                local a = lfs.attributes(w.path)
-                if a and lfs.touch and (a.access or 0) < w.time then
-                    pcall(lfs.touch, w.path, w.time, a.modification)
-                end
-            end
-            n = n + 1
+            entries[#entries + 1] = w
         end
-        if done then
-            for _, md5 in ipairs(w.md5s) do seen[#seen + 1] = { md5 = md5, values = { [HIST] = todo[md5].time } } end
+    end
+    local manual = false
+    for _, w in ipairs(entries) do
+        local exists = self:_isFile(w.path)
+        local idx = indexOf(w.path)
+        if idx then table.remove(rh.hist, idx) end
+        local at = rh.getIndexByTime and rh:getIndexByTime(w.time, (w.path:gsub(".*/", ""))) or 1
+        if not rh.getIndexByTime then
+            while rh.hist[at] and (tonumber(rh.hist[at].time) or 0) >= w.time do at = at + 1 end
+        end
+        table.insert(rh.hist, at, entryFor(w.path, w.time, exists))
+        if exists then
+            -- The access time, for sorting by last read (as KOReader does).
+            local a = lfs.attributes(w.path)
+            if a and lfs.touch and (a.access or 0) < w.time then
+                pcall(lfs.touch, w.path, w.time, a.modification)
+            end
+        end
+        moved[#moved + 1] = w.path
+        markSeen(w)
+        manual = true
+        n = n + 1
+    end
+    -- The last one saves the history (trimmed to its size, as KOReader does).
+    local flushed = false
+    for i, w in ipairs(files) do
+        local last = i == #files
+        local ok, added = pcall(rh.addItem, rh, w.path, w.time, not last)
+        if not ok then
+            self.log.warn("Concordance: adding to the history failed:", added)
+        elseif not added then
+            -- Not taken (ZenOS's incognito mode): tried again next sync.
+            self.log.dbg("Concordance: history: not taken now:", w.path)
+        else
+            moved[#moved + 1] = w.path
+            markSeen(w)
+            n = n + 1
+            if last then flushed = true end
         end
     end
     if n > 0 then
-        if rh.updateDateTimeString then rh:updateDateTimeString() end
-        if rh._reduce then rh:_reduce() end
+        if manual and rh.updateDateTimeString then rh:updateDateTimeString() end
         -- ZenOS's "last read" order is cached while the history's length and
         -- first and last entries (the tables) stay the same, so a book put
         -- in the middle went unnoticed. A new first entry (same contents)
@@ -264,7 +296,12 @@ function HistSync:apply(force)
             for k, v in pairs(rh.hist[1]) do first[k] = v end
             rh.hist[1] = first
         end
-        if rh._flush then rh:_flush() end
+        -- Only cloud entries changed, or the last addItem didn't save: there's
+        -- no public call that only saves the history.
+        if not flushed then
+            if rh._reduce then rh:_reduce() end
+            if rh._flush then rh:_flush() end
+        end
         pcall(self.deps.refresh_ui or function() self.deps.finder:_refreshUI() end, moved)
         self.log.info("Concordance: put", n, "books read elsewhere into the history")
     end

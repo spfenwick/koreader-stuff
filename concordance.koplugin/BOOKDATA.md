@@ -254,8 +254,13 @@ file's access time ("sort by last read").
   last saw (`book_local`) is put into the history at its time, unless the
   history already has it as new or newer. Its file's access time is set
   too. Then `book_local` holds the merged value, so a book removed here
-  isn't put back until a newer opening arrives. The history is saved with
-  KOReader's own `_reduce` and `_flush` (which also sets `lastfile`).
+  isn't put back until a newer opening arrives. Files go in through
+  `ReadHistory:addItem(file, time)`, the last of them saving the history
+  (trimmed to its size; this also sets `lastfile`). A book `addItem`
+  doesn't take (ZenOS's incognito mode) waits for the next sync. Cloud
+  entries, which `addItem` won't take since there's no file, are put in by
+  hand, and when only they changed the history is saved with KOReader's
+  own `_reduce` and `_flush`.
 - **Where the book is**: a file the sync knows for the book or one of its
   versions (`book_files`, `coll_files`); else, through Cloud library
   (`package.loaded["cloudlibrary/library"].pathForUuids`, when it's

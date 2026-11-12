@@ -107,6 +107,13 @@ function Store:openState()
     return conn
 end
 
+--- The statistics plugin's schema versions (its DB_SCHEMA_VERSION, kept in
+-- PRAGMA user_version) whose book and page_stat_data tables this module
+-- reads and writes. A database at any other version is left alone: an
+-- older one is the statistics plugin's to migrate first, a newer one may
+-- have changed underneath us.
+Store.STATS_SCHEMAS = { [20221111] = true }
+
 function Store:openStats()
     local conn = self:_open(self.stats_path)
     local ok, has_book = pcall(conn.rowexec, conn,
@@ -115,7 +122,26 @@ function Store:openStats()
         conn:close()
         return nil, "statistics database not initialised"
     end
+    local vok, version = pcall(conn.rowexec, conn, "PRAGMA user_version;")
+    version = vok and num(version) or nil
+    if not Store.STATS_SCHEMAS[version] then
+        conn:close()
+        local why = "statistics database schema " .. tostring(version) .. " not supported"
+        if self.log and self._warned_schema ~= version then
+            self._warned_schema = version
+            self.log.warn("Concordance:", why, "- statistics sync is off")
+        end
+        return nil, why, "schema"
+    end
     return conn
+end
+
+--- Why the statistics database can't be synced although it's there (its
+-- schema isn't one this module knows), or nil.
+function Store:statsSchemaProblem()
+    local ok, conn, why, kind = pcall(self.openStats, self)
+    if ok and conn then conn:close() end
+    if ok and kind == "schema" then return why end
 end
 
 local function packn(...) return { n = select("#", ...), ... } end

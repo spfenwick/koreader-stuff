@@ -473,12 +473,11 @@ end
 function Plugin.installProgressHook()
     local ok, Client = pcall(require, "KOSyncClient")
     if not ok or type(Client) ~= "table" or type(Client.get_progress) ~= "function" then return false end
-    require("concordance/progresshook").install(Client, {
+    return (require("concordance/progresshook").install(Client, {
         peers = function(md5) return Plugin.idStore():positionPeers(md5) end,
         schedule = function(fn) UIManager:nextTick(fn) end,
         logger = logger,
-    })
-    return true
+    }))
 end
 
 --- Book files in Cloud library's folder that are catalog books, when
@@ -600,6 +599,11 @@ function Plugin.engine()
             if opts.stats ~= false and stats_settings and stats_settings.is_enabled == false then
                 if opts.ann == false then return false, "reading statistics are disabled" end
                 opts.stats = false -- highlights and bookmarks only
+            end
+            local schema_problem = opts.stats ~= false and store:statsSchemaProblem()
+            if schema_problem then
+                if opts.ann == false then return false, schema_problem end
+                opts.stats = false -- the statistics plugin changed its database: leave it alone
             end
             if not NetworkMgr:isConnected() then return false, "offline" end
             return true

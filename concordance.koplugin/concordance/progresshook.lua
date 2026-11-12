@@ -34,10 +34,31 @@ function ProgressHook.pick(own, others)
     return best or own
 end
 
+--- Whether get_progress still looks like the one this wraps:
+-- (self, username, password, document, callback). Returns true, or false
+-- and why. A changed signature would put our arguments in the wrong places.
+function ProgressHook.compatible(fn)
+    if type(fn) ~= "function" then return false, "no get_progress" end
+    local ok, info = pcall(debug.getinfo, fn, "u")
+    -- Without nparams (not LuaJIT or Lua 5.2+) there's nothing to check.
+    if not ok or type(info) ~= "table" or info.nparams == nil then return true end
+    if info.nparams ~= 5 or info.isvararg then
+        return false, "get_progress takes " .. tostring(info.nparams) .. (info.isvararg and "+" or "")
+            .. " parameters, expected 5"
+    end
+    return true
+end
+
 --- Wraps Client.get_progress (once). deps: peers(md5) -> { md5, … },
 -- schedule(fn) (run fn soon, outside the current request), logger.
+-- Returns true if it's in place now, else false and why.
 function ProgressHook.install(Client, deps)
-    if Client._concordance_get_progress then return false end
+    if Client._concordance_get_progress then return false, "already installed" end
+    local fits, why = ProgressHook.compatible(Client.get_progress)
+    if not fits then
+        if deps.logger then deps.logger.warn("Concordance: progress sync changed, not finding other versions' positions:", why) end
+        return false, why
+    end
     local orig = Client.get_progress
     Client._concordance_get_progress = orig
     local log = deps.logger

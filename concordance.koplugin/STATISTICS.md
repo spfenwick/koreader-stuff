@@ -16,6 +16,13 @@ It keeps working (Concordance doesn't change it), but the two syncs disagree
 about deletions: the built-in one propagates them, this one never does, so
 mixing them gives confusing results.
 
+Concordance reads and writes the statistics plugin's tables (`book`,
+`page_stat_data`) directly, so it only touches a database at a schema
+version it knows (`PRAGMA user_version`, `Store.STATS_SCHEMAS`: 20221111).
+At any other version statistics aren't synced (a warning is logged), and
+highlights and bookmarks still are. When KOReader moves to a new schema,
+check the tables' columns and add the version.
+
 ## What's on the server
 
 ```

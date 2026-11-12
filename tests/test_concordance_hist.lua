@@ -48,6 +48,25 @@ end
 function RH:_reduce() while #self.hist > self.size do table.remove(self.hist) end end
 function RH:_flush() self.flushes = self.flushes + 1 end
 function RH:updateDateTimeString() end
+-- As KOReader's: with a time, only an existing file, put in at that time.
+function RH:addItem(file, ts, no_flush)
+    if self.incognito then return end -- ZenOS's incognito mode wraps it so
+    if ts and lfs.attributes(file, "mode") ~= "file" then return end
+    local index = self:getIndexByFile(file)
+    if ts and index and self.hist[index].time == ts then return end
+    local now = ts or clock
+    lfs.touch(file, now, lfs.attributes(file, "modification"))
+    if index then table.remove(self.hist, index) end
+    index = ts and self:getIndexByTime(ts) or 1
+    table.insert(self.hist, index, { file = file, time = now, text = file:gsub(".*/", ""),
+                                      dim = false, select_enabled = true, mandatory = "t" })
+    self.added = (self.added or 0) + 1
+    if not no_flush then
+        self:_reduce()
+        self:_flush()
+    end
+    return true
+end
 -- Test helpers
 function RH:open(file, t)
     local i = self:getIndexByFile(file)
@@ -184,6 +203,7 @@ do
     check(B.rh:files() == "three,two,one", "B has A's books in time order: " .. B.rh:files())
     check(B.rh:timeOf(b1) == A.rh:timeOf(a1), "at the time it was read")
     check(B.rh:entry(b3).select_enabled and not B.rh:entry(b3).dim, "an ordinary entry")
+    check(B.rh.added == 2 and B.rh:entry(b3).mandatory, "files go in through ReadHistory:addItem")
     local flushes = B.rh.flushes
     check(round(A, B) == 0, "nothing more to send")
     check(B.rh.flushes == flushes, "nothing written again")
@@ -303,6 +323,24 @@ do
     local flushes = F.rh.flushes
     round(E, F)
     check(F.rh:files() == "b4,b3" and F.rh.flushes == flushes, "the ones that didn't fit aren't tried again")
+end
+
+-- Saved once; ZenOS's incognito mode: waits -----------------------------------------------------
+do
+    local G, H = newDev("G"), newDev("H")
+    local g1, g2 = G:book("one"), G:book("two")
+    local h1, h2 = H:book("one"), H:book("two")
+    G.rh:open(g1, clock); tick(10)
+    G.rh:open(g2, clock); tick(10)
+    H.rh.incognito = true
+    round(G, H)
+    check(H.rh:files() == "", "incognito: not put into the history: " .. H.rh:files())
+    H.rh.incognito = false
+    local flushes = H.rh.flushes
+    round(G, H)
+    check(H.rh:files() == "two,one" and H.rh:timeOf(h1) == G.rh:timeOf(g1) and H.rh:timeOf(h2) == G.rh:timeOf(g2),
+        "incognito off: put in at the next sync: " .. H.rh:files())
+    check(H.rh.flushes == flushes + 1, "the history saved once")
 end
 
 S.finish("concordance history tests")

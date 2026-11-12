@@ -401,6 +401,13 @@ do
     }), "hook installed")
     check(not ProgressHook.install(Client, { peers = function() return {} end, schedule = function() end }),
         "installed once only")
+    if debug.getinfo(function(_a) end, "u").nparams then
+        local Changed = { get_progress = function(_self, _u, _k, _doc, _cb, _extra) end }
+        local before = Changed.get_progress
+        check(not ProgressHook.install(Changed, { peers = function() return {} end, schedule = function() end })
+            and Changed.get_progress == before, "not installed over a changed signature")
+        check(not ProgressHook.compatible(function(...) end), "a vararg get_progress isn't taken as the same")
+    end
     local function run()
         while #queue > 0 do table.remove(queue, 1)() end
     end
