@@ -386,6 +386,18 @@ do -- a bad segment changes nothing and isn't marked seen
     cs:close()
 end
 
+do -- pruneBad forgets bad segments from an older reader, and ones since imported
+    local B = device("B")
+    B.store:recordBad("X", "id-1.jsonl.zst", 10, "e", "unsupported format version 2", 301000) -- older reader
+    B.store:recordBad("X", "id-2.jsonl.zst", 10, "e", "truncated", 302000) -- still bad
+    B.store:recordBad("X", "id-3.jsonl.zst", 10, "e", "truncated", 302000) -- then imported
+    B.store:markSeen("X", { { name = "id-3.jsonl.zst", size = 11, etag = "f", events = 1 } }, 1)
+    B.store:pruneBad({ 302000 })
+    local bad = B.store:badSegments(302000)
+    check(bad.X and bad.X["id-2.jsonl.zst"] and not bad.X["id-3.jsonl.zst"], "pruneBad keeps only what's still bad")
+    check(next(B.store:badSegments(301000)) == nil, "pruneBad drops an older version's")
+end
+
 do -- our totals query is KOReader's
     local norm = function(s) return (s:gsub("%s+", " "):gsub("^ ", ""):gsub(" $", "")) end
     local theirs = S.koreaderTotalsQuery()

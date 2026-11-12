@@ -347,6 +347,19 @@ function Store:recordBad(device_id, name, size, etag, reason, version)
     end)
 end
 
+--- Forgets bad segments recorded by an older reader (`versions`: the
+-- version numbers still in use, every stream's) and ones since imported.
+function Store:pruneBad(versions)
+    local conn = self:openState()
+    return withConn(conn, function()
+        local list = {}
+        for _, v in ipairs(versions) do list[#list + 1] = string.format("%d", v) end
+        conn:exec("DELETE FROM bad_segments WHERE version IS NULL OR version NOT IN (" .. table.concat(list, ",") .. ");"
+            .. " DELETE FROM bad_segments WHERE EXISTS (SELECT 1 FROM seen_segments s"
+            .. " WHERE s.device_id = bad_segments.device_id AND s.name = bad_segments.name);")
+    end)
+end
+
 --- "Rebuild from server": forget which segments were imported (and which
 -- were bad), so the next sync imports everything again.
 function Store:forgetSeen()

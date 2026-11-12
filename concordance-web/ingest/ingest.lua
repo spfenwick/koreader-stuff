@@ -199,6 +199,11 @@ for _, st in ipairs(STREAMS) do
     summary.records[st.name] = n_records
 end
 
+-- Bad segments an older image recorded (one that read fewer format versions)
+-- would otherwise stay on the status page after being imported.
+stores.stats:pruneBad({ Codec.VERSION * 1000 + Codec.MINOR, AnnFormat.BAD_VERSION,
+                        BookFormat.BAD_VERSION, IdFormat.BAD_VERSION })
+
 if id_changed then
     local changed = stores.id:refreshGroups()
     if next(changed) then stores.book:regroup(changed) end
