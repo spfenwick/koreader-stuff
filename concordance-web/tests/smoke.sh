@@ -61,10 +61,15 @@ fi
 versions=$(curl -sf "$base/versions")
 if echo "$versions" | grep -q '1a2b3c4d-0000-4000-8000-000000000001' && echo "$versions" | grep -q '2 texts'; then
     echo "200 versions listed"
-    if echo "$versions" | grep -q 'joined by its title and authors'; then
+    if echo "$versions" | grep -q 'class="level-title"'; then
         echo "200 file joined by title listed"
     else
         echo "versions: Frankenstein's older copy not joined by title" >&2; fail=1
+    fi
+    if echo "$versions" | grep -q 'class="level-id"'; then
+        echo "200 files sharing only the book ID grouped"
+    else
+        echo "versions: Pride and Prejudice's editions not grouped by book ID" >&2; fail=1
     fi
     if echo "$versions" | grep -q 'Matched to its catalog book by Cloud library'; then
         echo "200 file linked by Cloud library listed"

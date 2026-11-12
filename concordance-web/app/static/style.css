@@ -279,3 +279,9 @@ table.month td.today { box-shadow: inset 0 0 0 2px var(--accent); }
 .versions table { margin-bottom: 8px; }
 .versions td code { word-break: break-all; }
 .s-unknown { background: var(--surface-2); color: var(--text-2); }
+
+/* Versions: a book's files, grouped by how they're joined */
+.levels-key { margin: 0 0 12px; padding-left: 20px; max-width: 80ch; }
+.levels-key li { margin: 4px 0; }
+.versions tr.level-head th { background: var(--surface-2); color: var(--text); font-size: .85rem; padding: 6px 12px; }
+.versions tr.level-head th .muted { font-weight: 400; }

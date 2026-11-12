@@ -6,11 +6,13 @@
 </div>
 
 <p class="muted">
-  Files Concordance's book identity joined as one book, because they carry the same book ID (a UUID in the EPUB).
-  Status, rating, review and custom metadata are shared by every version.
-  A file no device has read (gone before book identity read it, or without a book ID, such as a PDF) joins the book with exactly its title and authors, for reading statistics only.
-  Files with the same text (the same letter below) also share their reading position, through KOReader's progress sync.
+  Files Concordance's book identity joined as one book. What they share depends on how they're joined:
 </p>
+<ul class="muted levels-key">
+  <li><strong>Same text</strong>: the same book ID (a UUID in the EPUB) and the same body text. They share everything: highlights and notes, handmade TOC and flows, reading position (through KOReader's progress sync), and everything below.</li>
+  <li><strong>Same book ID</strong>: another edition, or a file whose text no device has read yet. They share status, rating, review and custom metadata, and reading statistics.</li>
+  <li><strong>Same title and authors</strong>: no device has read the file (gone before book identity read it, or without a book ID, such as a PDF). Reading statistics only.</li>
+</ul>
 {% set unread = books | length - same - differ %}
 {% set parts = [] %}
 {% if same %}{% set _ = parts.append(same ~ ' with the same text in every file') %}{% endif %}
@@ -32,20 +34,28 @@
       <th scope="col">Title in the file</th><th scope="col">Partial MD5</th><th scope="col">Text</th>
       <th scope="col">Reported by</th><th scope="col" class="num">Read</th><th scope="col" class="num">Highlights</th>
     </tr></thead>
-    <tbody>
-    {% for e in book.editions %}
-    <tr>
-      <td>{{ e.title or '—' }}{% if 'sidecar' in e.sources and 'file' not in e.sources %}<div class="small muted">Kept by a book's settings after its file was replaced</div>{% endif %}{% if 'link' in e.sources and 'file' not in e.sources and 'sidecar' not in e.sources %}<div class="small muted">Matched to its catalog book by Cloud library (by title, or not an EPUB)</div>{% endif %}{% if e.by_title %}<div class="small muted">No device has read this file: joined by its title and authors, for reading statistics</div>{% endif %}</td>
-      <td><code>{{ e.md5 }}</code></td>
-      <td>{% if e.text %}<span class="chip" title="Body signature {{ e.sig[:12] }}…">{{ e.text }}</span>{% else %}<span class="muted" title="No device has read this file's text">—</span>{% endif %}</td>
-      <td>{% for d in e.reported_by | sort %}{{ device_names.get(d) or d }}{{ ', ' if not loop.last }}{% else %}<span class="muted">—</span>{% endfor %}</td>
-      <td class="num">{{ e.read_time | duration if e.read_time else '' }}</td>
-      <td class="num">{{ book.highlights | selectattr('md5', 'equalto', e.md5) | list | length or '' }}</td>
-    </tr>
-    {% endfor %}
+    {% for g in book.levels %}
+    <tbody class="level-{{ g.level }}">
+    <tr class="level-head"><th scope="rowgroup" colspan="6">
+      {%- if g.level == 'pos' %}Same text{% if g.texts %} ({{ g.texts | join(', ') }}){% endif %}<span class="muted"> · share highlights, TOC, flows and reading position</span>
+      {%- elif g.level == 'id' %}Same book ID{% if book.levels | selectattr('level', 'equalto', 'pos') | list %}, not the same text{% endif %}<span class="muted"> · share status, rating, review and metadata, and statistics</span>
+      {%- elif g.level == 'title' %}Same title and authors<span class="muted"> · share reading statistics only</span>
+      {%- else %}The book's file{% endif %}</th></tr>
+      {% for e in g.editions %}
+      <tr>
+        <td>{{ e.title or '—' }}{% if 'sidecar' in e.sources and 'file' not in e.sources %}<div class="small muted">Kept by a book's settings after its file was replaced</div>{% endif %}{% if 'link' in e.sources and 'file' not in e.sources and 'sidecar' not in e.sources %}<div class="small muted">Matched to its catalog book by Cloud library (by title, or not an EPUB)</div>{% endif %}</td>
+        <td><code>{{ e.md5 }}</code></td>
+        <td>{% if e.text %}<span class="chip" title="Body signature {{ e.sig[:12] }}…">{{ e.text }}</span>{% else %}<span class="muted" title="No device has read this file's text">—</span>{% endif %}</td>
+        <td>{% for d in e.reported_by | sort %}{{ device_names.get(d) or d }}{{ ', ' if not loop.last }}{% else %}<span class="muted">—</span>{% endfor %}</td>
+        <td class="num">{{ e.read_time | duration if e.read_time else '' }}</td>
+        <td class="num">{{ book.highlights | selectattr('md5', 'equalto', e.md5) | list | length or '' }}</td>
+      </tr>
+      {% endfor %}
     </tbody>
+    {% endfor %}
   </table>
-  <p class="small muted">Joined by {% for u in book.joined_by %}<code>{{ u }}</code>{{ ', ' if not loop.last }}{% else %}a chain of shared IDs{% endfor %}</p>
+  {% if book.joined_by %}<p class="small muted">Book ID shared: {% for u in book.joined_by %}<code>{{ u }}</code>{{ ', ' if not loop.last }}{% endfor %}</p>
+  {% elif book.levels | rejectattr('level', 'in', ['own', 'title']) | list %}<p class="small muted">Joined by a chain of shared book IDs</p>{% endif %}
 </section>
 {% else %}
 <p class="empty">No book is known in more than one version yet. Versions appear here when devices that have a book's different files have synced highlights and books.</p>

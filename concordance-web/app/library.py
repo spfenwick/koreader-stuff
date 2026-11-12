@@ -194,6 +194,11 @@ class Edition:
     reported_by: set = field(default_factory=set)  # device IDs that sent a fact
     text: str | None = None  # "A", "B", …: files with the same text share a letter
     by_title: bool = False  # no identity record: joined by title and authors
+    # How it's joined to the book's other files (see Book.levels): "pos" (same
+    # book ID and text), "id" (same book ID), "title", or "own" (the recorded
+    # file only title-joined files were joined to). pos_set: its id_pos group.
+    level: str = "own"
+    pos_set: str | None = None
 
 
 @dataclass
@@ -306,6 +311,28 @@ class Book:
             for u in e.uuids:
                 seen[u] = seen.get(u, 0) + 1
         return sorted(u for u, n in seen.items() if n > 1)
+
+    @property
+    def levels(self) -> list[dict]:
+        """Its files grouped by how they're joined (IDENTITY.md, "Two levels"):
+        each set sharing positions, then the rest sharing the book ID, then
+        files joined by title. Each: level, texts (letters), editions."""
+        out: list[dict] = []
+        by_set: dict[str, dict] = {}
+        rest: dict[str, dict] = {}
+        for e in self.editions:  # most read first, so are its groups
+            if e.level == "pos":
+                g = by_set.get(e.pos_set)
+                if g is None:
+                    g = by_set[e.pos_set] = {"level": "pos", "texts": [], "editions": []}
+                    out.append(g)
+            else:
+                g = rest.setdefault(e.level, {"level": e.level, "texts": [], "editions": []})
+            g["editions"].append(e)
+            if e.text and e.text not in g["texts"]:
+                g["texts"].append(e.text)
+        order = {"own": 0, "id": 1, "title": 2}
+        return out + sorted(rest.values(), key=lambda g: order[g["level"]])
 
     @property
     def texts(self) -> int:
@@ -464,6 +491,8 @@ class Library:
         group_of: dict[str, str] = {}
         for md5, grp in state.execute("SELECT md5, grp FROM id_groups"):
             group_of[md5] = grp
+        in_group = set(group_of)
+        pos_of = dict(state.execute("SELECT md5, grp FROM id_pos"))
         recorded = {md5 for (md5,) in state.execute("SELECT DISTINCT md5 FROM id_facts")}
         by_title = title_groups(group_of, recorded, list(stats.execute(
             "SELECT DISTINCT md5, title, authors FROM book WHERE md5 IS NOT NULL")))
@@ -492,6 +521,9 @@ class Library:
             letters: dict[str, str] = {}
             for e in eds:  # the most-read file's text is A
                 e.uuids = file_uuids.get(e.md5, set())
+                e.pos_set = pos_of.get(e.md5)
+                e.level = ("title" if e.md5 in by_title else "pos" if e.pos_set
+                           else "id" if e.md5 in in_group else "own")
                 if e.sig:
                     e.text = letters.setdefault(e.sig, chr(ord("A") + len(letters)))
             for e in eds:  # the most-read file's identifiers first
