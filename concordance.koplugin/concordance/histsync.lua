@@ -29,6 +29,7 @@ the next sync, which closing the book starts.
 --]]
 
 local BookFormat = require("concordance/bookformat")
+local Problems = require("concordance/problems")
 
 local HistSync = {}
 HistSync.__index = HistSync
@@ -101,6 +102,7 @@ function HistSync:refresh(done)
     local ok, rh = pcall(self._rh, self)
     if not ok then
         self.log.warn("Concordance: reading the history failed:", rh)
+        Problems.report("hist:read", "Reading KOReader's history failed", rh)
         if done then done() end
         return
     end
@@ -213,7 +215,12 @@ function HistSync:apply(force)
     table.sort(order, function(a, b) return a.path < b.path end)
 
     local rh = self:_rh()
-    rh.hist = rh.hist or {}
+    if type(rh.hist) ~= "table" then
+        self.log.warn("Concordance: KOReader's history has no list of books (ReadHistory.hist)")
+        Problems.report("hist:list", "The reading history isn't synced: KOReader's history has changed",
+            "ReadHistory.hist is missing")
+        return nil, "no history"
+    end
     local open = self:_openBook()
     local top = rh.hist[1]
     local cap = open and top and top.file == open and top.time or nil
@@ -242,6 +249,11 @@ function HistSync:apply(force)
             -- after the open book is closed
         elseif rh.addItem and self:_isFile(w.path) then
             files[#files + 1] = w
+        elseif not rh.addItem and self:_isFile(w.path) then
+            self.log.warn("Concordance: ReadHistory:addItem is missing, adding books by hand")
+            Problems.report("hist:addItem", "KOReader's history has changed (ReadHistory:addItem is missing)",
+                "books are added by hand")
+            entries[#entries + 1] = w
         else
             entries[#entries + 1] = w
         end
@@ -275,6 +287,7 @@ function HistSync:apply(force)
         local ok, added = pcall(rh.addItem, rh, w.path, w.time, not last)
         if not ok then
             self.log.warn("Concordance: adding to the history failed:", added)
+            Problems.report("hist:add", "Putting books read elsewhere into the history failed", added)
         elseif not added then
             -- Not taken (ZenOS's incognito mode): tried again next sync.
             self.log.dbg("Concordance: history: not taken now:", w.path)
@@ -291,7 +304,13 @@ function HistSync:apply(force)
         -- no public call that only saves the history.
         if not flushed then
             if rh._reduce then rh:_reduce() end
-            if rh._flush then rh:_flush() end
+            if rh._flush then
+                rh:_flush()
+            else
+                self.log.warn("Concordance: ReadHistory:_flush is missing, the history isn't saved")
+                Problems.report("hist:flush", "Books read elsewhere can't be saved into the history: KOReader's history has changed",
+                    "ReadHistory:_flush is missing")
+            end
         end
         -- Read back from the file just saved, so every entry is a new table.
         -- ZenOS's "last read" order is cached while the history's length and
@@ -300,9 +319,16 @@ function HistSync:apply(force)
         -- entries as they are through the re-read.)
         if rh.reload then
             local ok, err = pcall(rh.reload, rh, true)
-            if not ok then self.log.warn("Concordance: re-reading the history failed:", err) end
+            if not ok then
+                self.log.warn("Concordance: re-reading the history failed:", err)
+                Problems.report("hist:reload", "Re-reading KOReader's history failed", err)
+            end
         end
-        pcall(self.deps.refresh_ui or function() self.deps.finder:_refreshUI() end, moved)
+        local rok, rerr = pcall(self.deps.refresh_ui or function() self.deps.finder:_refreshUI() end, moved)
+        if not rok then
+            self.log.warn("Concordance: redrawing after the history changed failed:", rerr)
+            Problems.report("hist:redraw", "Redrawing the file browser after the history changed failed", rerr)
+        end
         self.log.info("Concordance: put", n, "books read elsewhere into the history")
     end
     store:appliedMany(seen)
@@ -315,6 +341,7 @@ function HistSync:afterSync()
     local ok, n, why = pcall(self.apply, self)
     if not ok then
         self.log.warn("Concordance: applying the history failed:", n)
+        Problems.report("hist:apply", "Applying the reading history failed", n)
     elseif not n and why == "busy" then
         self:_applyLater(0)
     end
@@ -332,7 +359,10 @@ function HistSync:_applyLater(tries)
         if ok and not n and why == "busy" and tries + 1 < HistSync.RETRY_TRIES then
             return self:_applyLater(tries + 1)
         end
-        if not ok then self.log.warn("Concordance: applying the history failed:", n) end
+        if not ok then
+            self.log.warn("Concordance: applying the history failed:", n)
+            Problems.report("hist:apply", "Applying the reading history failed", n)
+        end
         self.retrying = false
     end)
 end

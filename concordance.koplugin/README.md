@@ -63,8 +63,8 @@ Tools → Concordance, in both the file browser and the reader:
 - **Sync in the file browser**: every 5, 15, 30 or 60 minutes, or never (the
   default).
 - **Turn on Wi-Fi for automatic syncs** (off by default).
-- **Status**: server and folders, last syncs and errors, devices seen, books known in more than one version,
-  what was sent and received, this device's ID.
+- **Status**: problems since KOReader started (see below), server and folders, last syncs and errors,
+  devices seen, books known in more than one version, what was sent and received, this device's ID.
 - **Troubleshooting** → **Rebuild from server** (imports every device's
   files again; nothing is deleted), **Reset device ID** (for a device
   restored from a backup of another one).
@@ -175,6 +175,15 @@ and the updater's setting (`concordance_updates` in
 
 Logs: statistics and highlights messages start with `StatSync:`, the rest
 with `Concordance:`, in KOReader's `crash.log`. Passwords are never logged.
+
+Problems are also shown on screen: when something Concordance relies on in
+KOReader or ZenOS is missing or has changed (checked at start and when the
+first book is opened, and whenever it's used), or a job on this device fails
+with an error. One message covers the problems found together, each problem
+is shown once per KOReader session, and Status lists them all. Network
+trouble (offline, a server error, a bad file from another device) isn't
+shown this way: it's in Status's last error, and in the result of a sync
+started from the menu. The code is in `concordance/problems.lua`.
 
 ## Updates
 

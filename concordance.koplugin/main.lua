@@ -148,6 +148,8 @@ function Concordance:init()
         self.ui.menu:registerToMainMenu(self)
     end
     Plugin.onDone = function(status, run) self.showResult(status, run) end
+    require("concordance/problems").enable()
+    Plugin.checkKOReader()
     Plugin.installProgressHook()
     Plugin.setupIdentity()
     if not started then
@@ -314,6 +316,7 @@ end
 
 function Concordance:onReaderReady()
     local ui = self.ui
+    pcall(Plugin.checkReader, ui)
     local function ready()
         Plugin.bookSync():onReaderReady(ui)
         local md5 = ui.doc_settings and ui.doc_settings:readSetting("partial_md5_checksum")
@@ -610,6 +613,14 @@ function Concordance:showStatus()
         T(_("Facts sent last time: %1, received: %2"), st.id_uploaded or 0, st.id_imported or 0),
         T(_("Files imported: %1, unreadable: %2"), counts.id_seen or "?", counts.id_bad or "?"),
     }
+    local problems = require("concordance/problems").statusLines()
+    table.insert(lines, 1, "")
+    if #problems == 0 then
+        table.insert(lines, 1, _("Problems since KOReader started: none"))
+    else
+        for i = #problems, 1, -1 do table.insert(lines, 1, "• " .. problems[i]) end
+        table.insert(lines, 1, _("Problems since KOReader started (often from a KOReader or ZenOS update):"))
+    end
     UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
 end
 

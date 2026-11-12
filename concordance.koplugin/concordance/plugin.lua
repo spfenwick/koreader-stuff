@@ -14,6 +14,7 @@ local NetworkMgr = require("ui/network/manager")
 local UIManager = require("ui/uimanager")
 local ffiutil = require("ffi/util")
 local logger = require("logger")
+local Problems = require("concordance/problems")
 
 local AnnStore = require("concordance/annstore")
 local AnnSync = require("concordance/annsync")
@@ -367,10 +368,42 @@ local coll_sync
 local function zenHome()
     local FileManager = package.loaded["apps/filemanager/filemanager"]
     local fm = type(FileManager) == "table" and FileManager.instance
+    if not fm then return nil end
     local SharedState = package.loaded["common/shared_state"]
-    local home = fm and fm.zenos and type(SharedState) == "table" and type(SharedState.get) == "function"
-        and SharedState.get(fm.zenos, "home")
-    return type(home) == "table" and home or nil
+    -- ZenOS is there (its plugin or its shared state), but Home can't be found.
+    local zen = fm.zenos ~= nil or SharedState ~= nil
+    if not zen then return nil end
+    local why
+    local config = type(fm.zenos) == "table" and fm.zenos.config
+    local features = type(config) == "table" and config.features
+    if type(features) == "table" and features.home_page ~= true then
+        return nil -- Home switched off in ZenOS's settings
+    end
+    if fm.zenos == nil then
+        why = "the file browser has no zenos field"
+    elseif type(SharedState) ~= "table" or type(SharedState.get) ~= "function" then
+        why = "common/shared_state.get is missing"
+    else
+        local ok, home = pcall(SharedState.get, fm.zenos, "home")
+        if not ok then
+            why = tostring(home)
+        elseif type(home) ~= "table" then
+            why = "no \"home\" in its shared state"
+        else
+            for _i, name in ipairs({ "isActiveOnTop", "rebuildActive", "invalidateBookCache" }) do
+                if type(home[name]) ~= "function" then
+                    why = "home." .. name .. " is missing"
+                    break
+                end
+            end
+            if not why then return home end
+            -- Still use what's there.
+            Problems.report("zenos:home", "ZenOS's Home may not update after a sync: ZenOS has changed", why)
+            return home
+        end
+    end
+    Problems.report("zenos:home", "ZenOS's Home may not update after a sync: ZenOS has changed", why)
+    return nil
 end
 
 --- No menu or dialog is open, so collections and the history can be
@@ -381,6 +414,10 @@ local function uiIdle()
     if home and type(home.isActiveOnTop) == "function" then
         local ok, on_top = pcall(home.isActiveOnTop)
         if ok and on_top == true then return true end
+        if not ok then
+            logger.warn("Concordance: asking ZenOS's Home whether it's shown failed:", on_top)
+            Problems.report("zenos:isActiveOnTop", "Syncs may wait while ZenOS's Home is shown", on_top)
+        end
     end
     return CollSync.uiIdle()
 end
@@ -398,6 +435,14 @@ function Plugin.collSync()
             if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
         end,
         idle = uiIdle,
+        saved_ids = function()
+            local data = require("luasettings"):open(DataStorage:getSettingsDir() .. "/collection.lua").data
+            local out = {}
+            for name, c in pairs(data or {}) do
+                out[name] = type(c) == "table" and type(c.settings) == "table" and c.settings.concordance_id or nil
+            end
+            return out
+        end,
     }
     return coll_sync
 end
@@ -421,20 +466,49 @@ local function refreshAfterHistory(paths)
     local FileManager = package.loaded["apps/filemanager/filemanager"]
     local fm = type(FileManager) == "table" and FileManager.instance
     if not fm then return end
-    if fm.file_chooser then fm.file_chooser:refreshPath() end
+    if fm.file_chooser then
+        if type(fm.file_chooser.refreshPath) == "function" then
+            local ok, err = pcall(fm.file_chooser.refreshPath, fm.file_chooser)
+            if not ok then
+                logger.warn("Concordance: refreshing the file browser failed:", err)
+                Problems.report("ui:refreshPath", "Redrawing the file browser after a sync failed", err)
+            end
+        else
+            Problems.report("ui:refreshPath", "The file browser may not update after a sync: KOReader has changed",
+                "FileChooser:refreshPath is missing")
+        end
+    end
     -- The History list builds its items once, when opened.
     local history = fm.history
-    if type(history) == "table" and history.booklist_menu and type(history.updateItemTable) == "function" then
-        local ok, err = pcall(history.updateItemTable, history)
-        if not ok then logger.warn("Concordance: refreshing the History list failed:", err) end
+    if type(history) == "table" and history.booklist_menu then
+        if type(history.updateItemTable) == "function" then
+            local ok, err = pcall(history.updateItemTable, history)
+            if not ok then
+                logger.warn("Concordance: refreshing the History list failed:", err)
+                Problems.report("ui:history", "Redrawing the open History list failed", err)
+            end
+        else
+            Problems.report("ui:history", "The open History list may not update after a sync: KOReader has changed",
+                "FileManagerHistory:updateItemTable is missing")
+        end
     end
     local home = zenHome()
     if home and type(home.rebuildActive) == "function" then
         if type(home.invalidateBookCache) == "function" then
-            for _, path in ipairs(paths or {}) do pcall(home.invalidateBookCache, path, true) end
+            for _, path in ipairs(paths or {}) do
+                local iok, ierr = pcall(home.invalidateBookCache, path, true)
+                if not iok then
+                    logger.warn("Concordance: telling ZenOS's Home about a book failed:", ierr)
+                    Problems.report("zenos:invalidate", "ZenOS's Home may show old details of a book", ierr)
+                    break
+                end
+            end
         end
         local ok, err = pcall(home.rebuildActive)
-        if not ok then logger.warn("Concordance: rebuilding ZenOS Home failed:", err) end
+        if not ok then
+            logger.warn("Concordance: rebuilding ZenOS Home failed:", err)
+            Problems.report("zenos:rebuild", "Redrawing ZenOS's Home after a sync failed", err)
+        end
     end
 end
 
@@ -472,12 +546,65 @@ end
 -- sync plugin isn't enabled. Returns true if the hook is in place.
 function Plugin.installProgressHook()
     local ok, Client = pcall(require, "KOSyncClient")
-    if not ok or type(Client) ~= "table" or type(Client.get_progress) ~= "function" then return false end
+    if not ok or type(Client) ~= "table" then return false end -- progress sync not enabled
+    if type(Client.get_progress) ~= "function" then
+        logger.warn("Concordance: KOSyncClient.get_progress is missing, not finding other versions' positions")
+        Problems.report("progress:signature", "Progress sync for other versions of a book is off: KOReader's progress sync has changed",
+            "KOSyncClient.get_progress is missing")
+        return false
+    end
     return (require("concordance/progresshook").install(Client, {
         peers = function(md5) return Plugin.idStore():positionPeers(md5) end,
         schedule = function(fn) UIManager:nextTick(fn) end,
         logger = logger,
     }))
+end
+
+--- Checks, once per KOReader process, what Concordance relies on in KOReader
+-- outside a book (concordance/problems.lua reports what's missing).
+-- Parameter counts include self.
+local checked_koreader = false
+function Plugin.checkKOReader()
+    if checked_koreader then return end
+    checked_koreader = true
+    local function mod(name)
+        local ok, m = pcall(require, name)
+        return ok and m or ("can't be loaded: " .. tostring(m))
+    end
+    local n = 0
+    n = n + Problems.requires("ReadHistory", mod("readhistory"),
+        { addItem = 4, reload = 2, _flush = 1, _reduce = 1, getIndexByFile = 2, getIndexByTime = 3,
+          updateDateTimeString = 1 },
+        { hist = "table" })
+    n = n + Problems.requires("ReadCollection", mod("readcollection"),
+        { _read = 1, write = 1, addCollection = 2, renameCollection = 3, removeCollection = 2, addItem = 3 },
+        { coll = "table", coll_settings = "table" })
+    n = n + Problems.requires("FileChooser", mod("ui/widget/filechooser"), { refreshPath = 1 })
+    n = n + Problems.requires("FileManagerHistory", mod("apps/filemanager/filemanagerhistory"), { updateItemTable = 1 })
+    n = n + Problems.requires("UIManager", mod("ui/uimanager"), { getTopmostVisibleWidget = 1 })
+    n = n + Problems.requires("DocSettings", mod("docsettings"),
+        { readSetting = 2, saveSetting = 3, getCustomMetadataFile = 1 })
+    if n > 0 then logger.warn("Concordance:", n, "things it relies on in KOReader are missing or changed") end
+end
+
+--- The same for the reader, once, on the first book opened.
+local checked_reader = false
+function Plugin.checkReader(ui)
+    if checked_reader or not (ui and ui.document) then return end
+    checked_reader = true
+    local n = 0
+    n = n + Problems.requires("ReaderAnnotation", ui.annotation,
+        { updateAnnotations = 3, setNeedsUpdateFlag = 1 }, { annotations = "table" })
+    n = n + Problems.requires("ReaderView", ui.view, { resetHighlightBoxesCache = 1 })
+    n = n + Problems.requires("ReaderFooter", ui.view and ui.view.footer, { maybeUpdateFooter = 1 })
+    n = n + Problems.requires("ReaderHandMade", ui.handmade,
+        { updateHandmagePages = 1, setupFlows = 2, setupToc = 2 })
+    local stats = ui.statistics
+    if stats then
+        n = n + Problems.requires("ReaderStatistics", stats, { insertDB = 1, getPageTimeTotalStats = 2 },
+            { settings = "table" })
+    end
+    if n > 0 then logger.warn("Concordance:", n, "things it relies on in KOReader's reader are missing or changed") end
 end
 
 --- Book files in Cloud library's folder that are catalog books, when
@@ -624,7 +751,10 @@ function Plugin.engine()
             }
         end,
         spawn = function(fn)
-            local pid, err = ffiutil.runInSubProcess(fn)
+            local pid, err = ffiutil.runInSubProcess(function(...)
+                Problems.disable() -- no UI in the subprocess
+                return fn(...)
+            end)
             if not pid then return nil, err end
             UIManager:preventStandby()
             return { pid = pid }
@@ -643,14 +773,35 @@ function Plugin.engine()
             -- Same call the statistics plugin makes on suspend and on its
             -- periodic save: writes the page times it holds in memory.
             local stats = statsPlugin()
-            if stats and type(stats.insertDB) == "function" then stats:insertDB() end
+            if not stats then return end
+            if type(stats.insertDB) == "function" then
+                stats:insertDB()
+            else
+                logger.warn("Concordance: the statistics plugin has no insertDB, the latest page times wait")
+                Problems.report("stats:insertDB", "The latest reading times wait for the next sync: KOReader's statistics plugin has changed",
+                    "ReaderStatistics:insertDB is missing")
+            end
         end,
         afterImport = function(ids)
             -- Imported events for the open book: refresh the cached totals
             -- the statistics plugin uses for its estimates (as initData does).
             local stats = statsPlugin()
-            local id = stats and stats.id_curr_book
-            if id and ids[id] and type(stats.getPageTimeTotalStats) == "function" then
+            if not stats then return end
+            local enabled = type(stats.settings) == "table" and stats.settings.is_enabled
+            local why
+            if type(stats.getPageTimeTotalStats) ~= "function" then
+                why = "ReaderStatistics:getPageTimeTotalStats is missing"
+            elseif enabled and stats.is_doc and stats.id_curr_book == nil then
+                why = "ReaderStatistics.id_curr_book is missing"
+            end
+            if why then
+                logger.warn("Concordance: can't refresh the open book's statistics:", why)
+                Problems.report("stats:fields", "The open book's reading estimates miss time read elsewhere until it's reopened: KOReader's statistics plugin has changed",
+                    why)
+                return
+            end
+            local id = stats.id_curr_book
+            if id and ids[id] then
                 stats.book_read_pages, stats.book_read_time = stats:getPageTimeTotalStats(id)
                 if stats.book_read_pages and stats.book_read_pages > 0 then
                     stats.avg_time = stats.book_read_time / stats.book_read_pages

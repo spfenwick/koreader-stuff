@@ -59,6 +59,7 @@ local IdFormat = require("concordance/idformat")
 local Codec = require("concordance/codec")
 local NetJob = require("concordance/netjob")
 local Pack = require("concordance/pack")
+local Problems = require("concordance/problems")
 
 local Engine = {}
 Engine.__index = Engine
@@ -104,7 +105,7 @@ function Engine:refreshIdentity(which)
     which = which or {}
     local ok, changed = pcall(d.id.store.refreshGroups, d.id.store)
     if not ok then
-        self.log.warn("StatSync: updating book versions failed:", changed)
+        self:_problem("engine:versions", "Updating book versions failed", "StatSync: updating book versions failed:", changed)
         return nil
     end
     local book_affected, ann_pending = {}, {}
@@ -112,12 +113,12 @@ function Engine:refreshIdentity(which)
     if which.book ~= false and d.book and d.book.store.regroup then
         local rok, all = pcall(d.book.store.regroup, d.book.store, changed)
         if rok then book_affected = all
-        else self.log.warn("StatSync: applying book data to new versions failed:", all) end
+        else self:_problem("engine:book-versions", "Applying book data to new versions of books failed", "StatSync: applying book data to new versions failed:", all) end
     end
     if which.ann ~= false and d.ann and d.ann.store.regroup then
         local aok, pending = pcall(d.ann.store.regroup, d.ann.store, changed)
         if aok then ann_pending = pending
-        else self.log.warn("StatSync: applying annotations to new versions failed:", pending) end
+        else self:_problem("engine:ann-versions", "Applying highlights to new versions of books failed", "StatSync: applying annotations to new versions failed:", pending) end
     end
     return changed, book_affected, ann_pending
 end
@@ -209,6 +210,13 @@ local function ensureDir(dir)
     end
 end
 
+--- Logs a failure (as before: "StatSync: <what failed:>", err) and reports
+-- it to the user (concordance/problems.lua).
+function Engine:_problem(key, text, logtext, err)
+    self.log.warn(logtext, err)
+    Problems.report(key, text, err)
+end
+
 function Engine:_fail(run, msg)
     run.error = msg
     self.log.warn("StatSync: sync failed:", msg)
@@ -231,7 +239,7 @@ function Engine:_export(run)
     local d = self.deps
     if run.stats then
         local fok, ferr = pcall(d.flush)
-        if not fok then self.log.warn("StatSync: flushing statistics failed:", ferr) end
+        if not fok then self:_problem("engine:stats-flush", "Saving reading statistics before a sync failed", "StatSync: flushing statistics failed:", ferr) end
     end
 
     ensureDir(d.work_dir)
@@ -284,7 +292,10 @@ function Engine:_export(run)
             device_id = run.device_id, out_path = run.pending_path, now = d.now(), max_events = d.max_events,
             force_diff = run.full_list or run.full_list_skipped, -- still once a day
         }
-        if eerr then return self:_fail(run, "export: " .. tostring(eerr)) end
+        if eerr then
+            Problems.report("engine:export", "Reading the statistics database failed", eerr)
+            return self:_fail(run, "export: " .. tostring(eerr))
+        end
         run.export_skipped = why
         run.export = exp
     end
@@ -298,7 +309,7 @@ function Engine:_export(run)
     local ann_params
     if run.ann then
         local cok, cerr = pcall(d.ann.collect)
-        if not cok then self.log.warn("StatSync: recording annotation changes failed:", cerr) end
+        if not cok then self:_problem("engine:ann-collect", "Recording highlight changes failed", "StatSync: recording annotation changes failed:", cerr) end
         run.ann_pending_path = d.work_dir .. "/ann-pending.jsonl"
         run.ann_packed_path = run.ann_pending_path .. ".zst"
         os.remove(run.ann_pending_path)
@@ -322,7 +333,7 @@ function Engine:_export(run)
     if run.ann and d.book then
         run.book = true
         local cok, cerr = pcall(d.book.collect)
-        if not cok then self.log.warn("StatSync: recording book data changes failed:", cerr) end
+        if not cok then self:_problem("engine:book-collect", "Recording book status and details failed", "StatSync: recording book data changes failed:", cerr) end
         run.book_pending_path = d.work_dir .. "/book-pending.jsonl"
         run.book_packed_path = run.book_pending_path .. ".zst"
         os.remove(run.book_pending_path)
@@ -348,7 +359,7 @@ function Engine:_export(run)
         if d.id.collect then
             -- Facts other plugins have for us (Cloud library's matches).
             local cok, cerr = pcall(d.id.collect)
-            if not cok then self.log.warn("StatSync: book identity: collecting matches failed:", cerr) end
+            if not cok then self:_problem("engine:id-matches", "Book identity: collecting matches failed", "StatSync: book identity: collecting matches failed:", cerr) end
         end
         run.id_pending_path = d.work_dir .. "/id-pending.jsonl"
         run.id_packed_path = run.id_pending_path .. ".zst"
@@ -382,10 +393,10 @@ function Engine:_export(run)
                 scan_items = todo
                 scan_seconds = run.interactive and d.id_scan_seconds_interactive or d.id_scan_seconds
             elseif not tok then
-                self.log.warn("StatSync: book identity: choosing files to read failed:", todo)
+                self:_problem("engine:id-choose", "Book identity: choosing files to read failed", "StatSync: book identity: choosing files to read failed:", todo)
             end
         elseif not fok then
-            self.log.warn("StatSync: book identity: listing book files failed:", files)
+            self:_problem("engine:id-list", "Book identity: listing book files failed", "StatSync: book identity: listing book files failed:", files)
         end
         run.scan_items = scan_items
     end
@@ -561,7 +572,7 @@ function Engine:_collect(run)
             run.uploaded = up.name
             if not run.export.more then d.store:markClean(run.export.fp) end
         else
-            self.log.warn("StatSync: recording the upload failed:", merr)
+            self:_problem("engine:record-upload", "Recording a statistics upload failed", "StatSync: recording the upload failed:", merr)
         end
     elseif run.export and not run.error then
         run.upload_error = result.upload_error or "upload didn't finish"
@@ -579,7 +590,7 @@ function Engine:_collect(run)
                 run.ann_uploaded_records = n
                 run.ann_uploaded = aup.name
             else
-                self.log.warn("StatSync: recording the annotation upload failed:", n)
+                self:_problem("engine:record-ann-upload", "Recording a highlights upload failed", "StatSync: recording the annotation upload failed:", n)
             end
         elseif run.ann_export and not run.error then
             run.ann_upload_error = result.ann_upload_error or "upload didn't finish"
@@ -598,7 +609,7 @@ function Engine:_collect(run)
                 run.book_uploaded_records = n
                 run.book_uploaded = bup.name
             else
-                self.log.warn("StatSync: recording the book data upload failed:", n)
+                self:_problem("engine:record-book-upload", "Recording a book data upload failed", "StatSync: recording the book data upload failed:", n)
             end
         elseif run.book_export and not run.error then
             run.book_upload_error = result.book_upload_error or "upload didn't finish"
@@ -617,7 +628,7 @@ function Engine:_collect(run)
                 run.id_uploaded_records = n
                 run.id_uploaded = iup.name
             else
-                self.log.warn("StatSync: recording the book identity upload failed:", n)
+                self:_problem("engine:record-id-upload", "Recording a book identity upload failed", "StatSync: recording the book identity upload failed:", n)
             end
         elseif run.id_export and not run.error then
             run.id_upload_error = result.id_upload_error or "upload didn't finish"
@@ -634,7 +645,7 @@ function Engine:_collect(run)
                     run.id_scanned = run.id_scanned + 1
                     run.id_new_facts = run.id_new_facts + n
                 else
-                    self.log.warn("StatSync: book identity of", item.path, "not recorded:", n)
+                    self:_problem("engine:id-record", "Book identity: recording a book failed", "StatSync: book identity of " .. tostring(item.path) .. " not recorded:", n)
                 end
                 if sc.why then self.log.dbg("StatSync: book identity of", item.path, "not read:", sc.why) end
             end
@@ -689,7 +700,7 @@ function Engine:_packs(run, result)
         -- Its records are this device's own: nothing to import.
         local ok, err = pcall(d.store.markSeen, d.store, run.device_id,
             { { name = p.name, size = p.size, etag = p.etag, exact = true } }, d.now())
-        if not ok then self.log.warn("StatSync: recording pack", p.name, "failed:", err) end
+        if not ok then self:_problem("engine:record-pack", "Recording a downloaded pack failed", "StatSync: recording pack " .. tostring(p.name) .. " failed:", err) end
         self.log.info("StatSync: packed segments", p.first, "to", p.last, "into", p.name)
     end
     local deleted = 0
@@ -801,6 +812,7 @@ function Engine:_import(run)
     else
         -- Database trouble: stop; nothing is marked, the next sync retries.
         for i = run.qi, #run.queue do os.remove(run.queue[i].path) end
+        Problems.report("engine:import", "Writing into a database failed", err)
         return self:_fail(run, "import: " .. tostring(err))
     end
     d.schedule(0, function() self:_step(run, "import") end)
@@ -820,7 +832,7 @@ function Engine:_finish(run)
     end
     if next(run.affected) and d.afterImport then
         local ok, err = pcall(d.afterImport, run.affected)
-        if not ok then self.log.warn("StatSync: refreshing statistics failed:", err) end
+        if not ok then self:_problem("engine:stats-refresh", "Refreshing the open book's statistics failed", "StatSync: refreshing statistics failed:", err) end
     end
     if run.id and d.id.store.refreshGroups then
         local changed, book_affected, ann_pending = self:refreshIdentity{
@@ -843,25 +855,25 @@ function Engine:_finish(run)
             run.stats_joined = res.removed
             if next(res.affected) and d.afterImport then
                 local aok, aerr = pcall(d.afterImport, res.affected)
-                if not aok then self.log.warn("StatSync: refreshing statistics failed:", aerr) end
+                if not aok then self:_problem("engine:stats-refresh", "Refreshing the open book's statistics failed", "StatSync: refreshing statistics failed:", aerr) end
             end
         else
-            self.log.warn("StatSync: joining the statistics of book versions failed:", ok and err or res)
+            self:_problem("engine:stats-join", "Joining the statistics of book versions failed", "StatSync: joining the statistics of book versions failed:", ok and err or res)
         end
     end
     if run.ann and d.ann.afterSync then
         local ok, err = pcall(d.ann.afterSync, run)
-        if not ok then self.log.warn("StatSync: applying annotations failed:", err) end
+        if not ok then self:_problem("engine:ann-apply", "Applying highlights and bookmarks failed", "StatSync: applying annotations failed:", err) end
     end
     if run.book and d.book.afterSync then
         local ok, err = pcall(d.book.afterSync, run)
-        if not ok then self.log.warn("StatSync: applying book data failed:", err) end
+        if not ok then self:_problem("engine:book-apply", "Applying book status and details failed", "StatSync: applying book data failed:", err) end
     end
     if run.missing_own then
         -- Not this device's folder after all (see netjob.lua): don't take it
         -- as where segments go, so the right one, once set, isn't new.
         local ok, err = pcall(d.store.forgetLocation, d.store)
-        if not ok then self.log.warn("StatSync: forgetting the folder failed:", err) end
+        if not ok then self:_problem("engine:forget", "Forgetting the old server folder failed", "StatSync: forgetting the folder failed:", err) end
     end
     local st = self.status
     if run.dates_unreliable then

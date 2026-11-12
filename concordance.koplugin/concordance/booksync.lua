@@ -19,6 +19,7 @@ data side is concordance/bookstore.lua.
 --]]
 
 local BookFormat = require("concordance/bookformat")
+local Problems = require("concordance/problems")
 
 local BookSync = {}
 BookSync.__index = BookSync
@@ -298,7 +299,12 @@ function BookSync:_writeMeta(path, ds, ops, ui)
                 ui.doc_props.display_title = ui.doc_props.title or (path:match("([^/]+)%.[^./]*$") or path)
             end
         end
-        if ui.doc_settings.getCustomMetadataFile then ui.doc_settings:getCustomMetadataFile(true) end
+        if ui.doc_settings.getCustomMetadataFile then
+            ui.doc_settings:getCustomMetadataFile(true)
+        else
+            Problems.report("book:getCustomMetadataFile", "Book details received may not show until the book is reopened: KOReader has changed",
+                "DocSettings:getCustomMetadataFile is missing")
+        end
     end
     self:_broadcast("InvalidateMetadataCache", path)
     return true
@@ -307,7 +313,11 @@ end
 --- Puts the handmade TOC or hidden flows ops into the open book.
 function BookSync:_applyHandmade(ui, ops)
     local hm = ui.handmade
-    if not hm then return false end
+    if not hm then
+        Problems.report("book:handmade-missing", "Handmade tables of contents aren't applied: KOReader has changed",
+            "ReaderUI.handmade is missing")
+        return false
+    end
     local toc, flows = false, false
     for _, op in ipairs(ops) do
         local what = op.prop:match("^(%a+)%.")
@@ -325,6 +335,12 @@ function BookSync:_applyHandmade(ui, ops)
     if not (toc or flows) then return false end
     -- What KOReader does once the book is ready.
     local ok, err = pcall(function()
+        for _i, name in ipairs({ "updateHandmagePages", "setupFlows", "setupToc" }) do
+            if type(hm[name]) ~= "function" then
+                Problems.report("book:handmade-" .. name, "A handmade table of contents received may not show until the book is reopened: KOReader has changed",
+                    "ReaderHandMade:" .. name .. " is missing")
+            end
+        end
         if hm.updateHandmagePages then hm:updateHandmagePages() end
         if hm.setupFlows then hm:setupFlows(true) end
         if hm.setupToc then hm:setupToc(true) end
@@ -333,10 +349,27 @@ function BookSync:_applyHandmade(ui, ops)
             ui:handleEvent(Event:new("UpdateToc"))
             if flows then ui:handleEvent(Event:new("InitScrollPageStates")) end
         end
-        if flows and ui.annotation and ui.annotation.setNeedsUpdateFlag then ui.annotation:setNeedsUpdateFlag() end
-        if ui.view and ui.view.footer and ui.view.footer.maybeUpdateFooter then ui.view.footer:maybeUpdateFooter() end
+        if flows and ui.annotation then
+            if ui.annotation.setNeedsUpdateFlag then
+                ui.annotation:setNeedsUpdateFlag()
+            else
+                Problems.report("book:setNeedsUpdateFlag", "Hidden flows received may show wrong page numbers in highlights until the book is reopened: KOReader has changed",
+                    "ReaderAnnotation:setNeedsUpdateFlag is missing")
+            end
+        end
+        if ui.view and ui.view.footer then
+            if ui.view.footer.maybeUpdateFooter then
+                ui.view.footer:maybeUpdateFooter()
+            else
+                Problems.report("book:maybeUpdateFooter", "The status bar may not update after a handmade table of contents is received: KOReader has changed",
+                    "ReaderFooter:maybeUpdateFooter is missing")
+            end
+        end
     end)
-    if not ok then self.log.warn("Concordance: updating the handmade table of contents failed:", err) end
+    if not ok then
+        self.log.warn("Concordance: updating the handmade table of contents failed:", err)
+        Problems.report("book:handmade", "Updating the open book's handmade table of contents failed", err)
+    end
     return true
 end
 
@@ -444,7 +477,10 @@ function BookSync:_eachFile(paths, fn, done)
                 return
             end
             local ok, err = pcall(fn, p)
-            if not ok then self.log.warn("Concordance: book data of", p, "failed:", err) end
+            if not ok then
+                self.log.warn("Concordance: book data of", p, "failed:", err)
+                Problems.report("book:write", "Writing book status and details into a book that isn't open failed", err)
+            end
         end
         self.deps.schedule(0, step)
     end
@@ -535,14 +571,20 @@ function BookSync:onReaderReady(ui)
         end
         self:apply(ui, true)
     end)
-    if not ok then self.log.warn("Concordance: book data on open failed:", err) end
+    if not ok then
+        self.log.warn("Concordance: book data on open failed:", err)
+        Problems.report("book:open", "Bringing an opened book's status and details up to date failed", err)
+    end
 end
 
 --- The book is closing (KOReader has saved its settings).
 function BookSync:onClose(ui)
     if not self.deps.enabled() then return end
     local ok, err = pcall(self.observe, self, ui)
-    if not ok then self.log.warn("Concordance: recording book data on close failed:", err) end
+    if not ok then
+        self.log.warn("Concordance: recording book data on close failed:", err)
+        Problems.report("book:close", "Recording a book's status and details on closing failed", err)
+    end
     if self.loaded and self.loaded.ui == ui then self.loaded = nil end
 end
 
@@ -580,7 +622,10 @@ function BookSync:_applyLater(tries)
         if ok and not n and why == "busy" and tries + 1 < BookSync.RETRY_TRIES then
             return self:_applyLater(tries + 1)
         end
-        if not ok then self.log.warn("Concordance: applying book data failed:", n) end
+        if not ok then
+            self.log.warn("Concordance: applying book data failed:", n)
+            Problems.report("book:apply", "Applying book status and details failed", n)
+        end
         self.retrying = false
     end)
 end

@@ -14,6 +14,7 @@ opened with that engine.
 --]]
 
 local AnnFormat = require("concordance/annformat")
+local Problems = require("concordance/problems")
 
 local AnnSync = {}
 AnnSync.__index = AnnSync
@@ -42,6 +43,12 @@ end
 --- The open book's identity: { md5, kind, title, authors, path }, or nil and why.
 function AnnSync:bookOf(ui)
     if not (ui and ui.document and ui.annotation and type(ui.annotation.annotations) == "table") then
+        if ui and ui.document then
+            local why = not ui.annotation and "ReaderUI.annotation is missing"
+                or "ReaderAnnotation.annotations is missing"
+            self.log.warn("Concordance: can't read the open book's highlights:", why)
+            Problems.report("ann:fields", "Highlights aren't synced: KOReader's highlights have changed", why)
+        end
         return nil, "no book with annotations open"
     end
     local ds = ui.doc_settings
@@ -132,11 +139,21 @@ function AnnSync:apply(ui, force)
         end
     end
     -- KOReader's own refresh after outside changes: page numbers, then sort.
-    if ui.annotation.updateAnnotations then ui.annotation:updateAnnotations(true, true) end
+    if ui.annotation.updateAnnotations then
+        ui.annotation:updateAnnotations(true, true)
+    else
+        Problems.report("ann:updateAnnotations", "Highlights received may be out of order until the book is reopened: KOReader has changed",
+            "ReaderAnnotation:updateAnnotations is missing")
+    end
     local hl1, notes1 = counts(ui.annotation)
     -- The view's cached highlight boxes hold list indexes, and any of them
     -- may have moved: drop them all (it redraws them as needed).
-    if ui.view and ui.view.resetHighlightBoxesCache then ui.view:resetHighlightBoxesCache() end
+    if ui.view and ui.view.resetHighlightBoxesCache then
+        ui.view:resetHighlightBoxesCache()
+    elseif ui.view then
+        Problems.report("ann:resetHighlightBoxesCache", "Highlights received may be drawn in the wrong place until the book is reopened: KOReader has changed",
+            "ReaderView:resetHighlightBoxesCache is missing")
+    end
     -- index_modified: not an edit (KOReader would stamp datetime_updated),
     -- and the file browser's "has annotations" is refreshed. ReaderView
     -- shifts the indexes of boxes at or after it, so it must be a number:
@@ -172,6 +189,7 @@ function AnnSync:onReaderReady(ui)
     end)
     if not ok then
         self.log.warn("StatSync: annotations on open failed:", held)
+        Problems.report("ann:open", "Bringing an opened book's highlights up to date failed", held)
         return 0
     end
     return held
@@ -184,6 +202,7 @@ function AnnSync:onClose(ui)
     local ok, res = pcall(self.observe, self, ui)
     if not ok then
         self.log.warn("StatSync: recording annotation changes on close failed:", res)
+        Problems.report("ann:close", "Recording a book's highlight changes on closing failed", res)
         return 0
     end
     return res and res.held or 0
@@ -303,6 +322,7 @@ function AnnSync:writeAll(done)
                 written, held = written + n, held + h
             else
                 self.log.warn("StatSync: writing annotations into", w.path, "failed:", n)
+                Problems.report("ann:write", "Writing highlights into a book that isn't open failed", n)
             end
         end
         self.deps.schedule(0, step)
@@ -332,7 +352,10 @@ function AnnSync:_applyLater(tries)
         if ok and not n and why == "busy" and tries + 1 < AnnSync.RETRY_TRIES then
             return self:_applyLater(tries + 1)
         end
-        if not ok then self.log.warn("StatSync: applying annotations failed:", n) end
+        if not ok then
+            self.log.warn("StatSync: applying annotations failed:", n)
+            Problems.report("ann:apply", "Applying highlights and bookmarks failed", n)
+        end
         self.retrying = false
     end)
 end
@@ -467,10 +490,16 @@ function AnnSync:scan(done)
                 i = i + 1
                 if not files[i] then return end
                 local fok, ferr = pcall(scanFile, files[i])
-                if not fok then self.log.warn("StatSync: reading annotations of", files[i], "failed:", ferr) end
+                if not fok then
+                    self.log.warn("StatSync: reading annotations of", files[i], "failed:", ferr)
+                    Problems.report("ann:scan-file", "Reading a book's highlights failed", ferr)
+                end
             end
         end)
-        if not ok then self.log.warn("StatSync: annotation scan failed:", err) end
+        if not ok then
+            self.log.warn("StatSync: annotation scan failed:", err)
+            Problems.report("ann:scan", "Reading the highlights of books in the history failed", err)
+        end
         if ok and files[i] then
             deps.schedule(0, step)
             return

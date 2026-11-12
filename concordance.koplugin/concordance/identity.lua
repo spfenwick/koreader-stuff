@@ -58,14 +58,23 @@ function Identity.revision()
     return rev
 end
 
-local function warn(...)
-    if deps and deps.logger then deps.logger.warn("Concordance identity:", ...) end
+local function warn(what, ...)
+    if deps and deps.logger then deps.logger.warn("Concordance identity:", what, ...) end
+    local n = select("#", ...)
+    local detail = n > 0 and tostring((select(n, ...))) or nil
+    require("concordance/problems").report("identity:" .. tostring(what),
+        "Book identity (shared with Cloud library): " .. tostring(what):gsub(":$", ""), detail)
 end
 
 local function load()
     if states and states_rev == rev then return states end
     local IdStore = require("concordance/idstore")
-    local ok, res = pcall(function() return deps.book_store():statesByUuid(IdStore.usedFacts) end)
+    local ok, res = pcall(function()
+        -- On a new device the identity tables may not exist yet: opening
+        -- the identity store creates them.
+        if deps.id_store then deps.id_store():open():close() end
+        return deps.book_store():statesByUuid(IdStore.usedFacts)
+    end)
     if not ok then
         warn("reading book states failed:", res)
         res = {}

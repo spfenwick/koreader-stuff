@@ -12,6 +12,8 @@ pull, asking before jumping, pushing) stays the progress sync plugin's.
 Read-only: pushes still go to this file's MD5 only. Main process.
 --]]
 
+local Problems = require("concordance/problems")
+
 local ProgressHook = {}
 
 --- The position to hand back: the newest by the server's timestamp; with
@@ -49,6 +51,19 @@ function ProgressHook.compatible(fn)
     return true
 end
 
+--- What's wrong with a successful answer that has no position, or nil:
+-- "nothing stored" ({} or a message) is normal; a position under another
+-- name, or not a number, means the answer has changed.
+function ProgressHook.oddBody(body)
+    if type(body) ~= "table" then return nil end
+    if body.percentage ~= nil and not tonumber(body.percentage) then
+        return "percentage is a " .. type(body.percentage)
+    end
+    if body.percentage == nil and (body.progress ~= nil or body.timestamp ~= nil or body.device ~= nil) then
+        return "a position without a percentage"
+    end
+end
+
 --- Wraps Client.get_progress (once). deps: peers(md5) -> { md5, … },
 -- schedule(fn) (run fn soon, outside the current request), logger.
 -- Returns true if it's in place now, else false and why.
@@ -57,6 +72,7 @@ function ProgressHook.install(Client, deps)
     local fits, why = ProgressHook.compatible(Client.get_progress)
     if not fits then
         if deps.logger then deps.logger.warn("Concordance: progress sync changed, not finding other versions' positions:", why) end
+        Problems.report("progress:signature", "Progress sync for other versions of a book is off: KOReader's progress sync has changed", why)
         return false, why
     end
     local orig = Client.get_progress
@@ -67,6 +83,7 @@ function ProgressHook.install(Client, deps)
         local ok, peers = pcall(deps.peers, document)
         if not ok then
             if log then log.warn("Concordance: progress: looking up other versions failed:", peers) end
+            Problems.report("progress:peers", "Progress sync: looking up other versions of a book failed", peers)
             peers = nil
         end
         if type(document) ~= "string" or not peers or #peers == 0 then
@@ -83,7 +100,10 @@ function ProgressHook.install(Client, deps)
                     log.info("Concordance: progress: newest from another version of the book,", body.document)
                 end
                 local cok, err = pcall(callback, own_ok, body)
-                if not cok and log then log.warn("Concordance: progress: progress sync's callback failed:", err) end
+                if not cok then
+                    if log then log.warn("Concordance: progress: progress sync's callback failed:", err) end
+                    Problems.report("progress:callback", "Progress sync failed after Concordance found a position", err)
+                end
             end
             local function nextPeer()
                 i = i + 1
@@ -95,11 +115,16 @@ function ProgressHook.install(Client, deps)
                         if pok and type(body) == "table" and tonumber(body.percentage) then
                             body.document = body.document or md5
                             found[#found + 1] = body
+                        elseif pok and ProgressHook.oddBody(body) then
+                            if log then log.warn("Concordance: progress: the server's answer has changed shape") end
+                            Problems.report("progress:shape", "Progress sync's answers have changed: other versions' positions aren't used",
+                                ProgressHook.oddBody(body))
                         end
                         nextPeer()
                     end)
                     if not rok then
                         if log then log.warn("Concordance: progress: request failed:", err) end
+                        Problems.report("progress:request", "Progress sync: asking for another version's position failed", err)
                         nextPeer()
                     end
                 end)

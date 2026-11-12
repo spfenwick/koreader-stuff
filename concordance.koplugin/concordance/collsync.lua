@@ -27,6 +27,7 @@ forgotten, and the book is put back in its collections if it comes back.
 --]]
 
 local BookFormat = require("concordance/bookformat")
+local Problems = require("concordance/problems")
 
 local CollSync = {}
 CollSync.__index = CollSync
@@ -56,7 +57,23 @@ function CollSync:_lfs() return self:_mod("lfs", "libs/libkoreader-lfs") end
 --- KOReader's collections, read again if collection.lua changed.
 function CollSync:_rc()
     local rc = self:_mod("readcollection", "readcollection")
-    if rc._read then rc:_read() end
+    if rc._read then
+        rc:_read()
+    elseif not self._warned_read then
+        self._warned_read = true
+        self.log.warn("Concordance: ReadCollection:_read is missing, collections may be out of date")
+        Problems.report("coll:_read", "Collections may be out of date: KOReader's collections have changed",
+            "ReadCollection:_read is missing")
+    end
+    if type(rc.coll) ~= "table" or type(rc.coll_settings) ~= "table" then
+        if not self._warned_coll then
+            self._warned_coll = true
+            self.log.warn("Concordance: ReadCollection.coll or coll_settings is missing, collections aren't synced")
+        end
+        Problems.report("coll:tables", "Collections aren't synced: KOReader's collections have changed",
+            "ReadCollection." .. (type(rc.coll) ~= "table" and "coll" or "coll_settings") .. " is missing")
+        rc = setmetatable({ coll = false }, { __index = rc }) -- what follows treats it as no collections
+    end
     return rc
 end
 
@@ -112,6 +129,24 @@ function CollSync:_ids(rc, merged)
         dirty = true
     end
     return ids, dirty
+end
+
+--- After writing new IDs: are they in collection.lua? KOReader keeps the
+-- settings it doesn't know; if it stopped, every collection would look new
+-- after each save. deps.saved_ids() -> { [name] = id } (from the file).
+function CollSync:_checkSaved(ids)
+    if not self.deps.saved_ids or self._checked_saved then return end
+    local ok, saved = pcall(self.deps.saved_ids)
+    if not ok or type(saved) ~= "table" then return end
+    self._checked_saved = true
+    for id, name in pairs(ids) do
+        if id ~= FAV and saved[name] ~= id then
+            self.log.warn("Concordance: collection IDs aren't kept in collection.lua (", name, ")")
+            Problems.report("coll:ids", "Collections may be duplicated: KOReader doesn't keep Concordance's collection IDs",
+                "no ID saved for " .. tostring(name))
+            return
+        end
+    end
 end
 
 -- Where books are -------------------------------------------------------------------------
@@ -204,7 +239,10 @@ function CollSync:paths() return self:_paths() end
 function CollSync:refresh(done)
     local ok, rc = pcall(self._rc, self)
     if not ok or not rc.coll then
-        if not ok then self.log.warn("Concordance: reading collections failed:", rc) end
+        if not ok then
+            self.log.warn("Concordance: reading collections failed:", rc)
+            Problems.report("coll:read", "Reading KOReader's collections failed", rc)
+        end
         if done then done() end
         return
     end
@@ -230,7 +268,10 @@ function CollSync:findMd5s(paths, done)
             chunk[#chunk + 1] = todo[i]
         end
         local cok, err = pcall(self._md5s, self, chunk)
-        if not cok then self.log.warn("Concordance: finding books in collections failed:", err) end
+        if not cok then
+            self.log.warn("Concordance: finding books in collections failed:", err)
+            Problems.report("coll:find", "Finding the books in collections failed", err)
+        end
         if todo[i] then return self.deps.schedule(0, step) end
         if done then done() end
     end
@@ -250,7 +291,10 @@ function CollSync:observe()
     local rc = self:_rc()
     if not rc.coll then return 0 end
     local ids, dirty = self:_ids(rc, store:collections())
-    if dirty then rc:write() end
+    if dirty then
+        rc:write()
+        self:_checkSaved(ids)
+    end
     local now, device = self.deps.now(), self.deps.getDeviceId()
     local loc = store:localColl()
     local seen_colls = loc[COLLS] or {}
@@ -436,7 +480,11 @@ function CollSync:apply(force, only)
     if n > 0 then
         rc:write()
         self:observe() -- what's there now is this device's copy
-        pcall(self._refreshUI, self)
+        local rok, rerr = pcall(self._refreshUI, self)
+        if not rok then
+            self.log.warn("Concordance: redrawing after collections changed failed:", rerr)
+            Problems.report("coll:redraw", "Redrawing the file browser after collections changed failed", rerr)
+        end
         self.log.info("Concordance: applied", n, "collection changes")
     end
     return n
@@ -447,6 +495,7 @@ function CollSync:afterSync()
     local ok, n, why = pcall(self.apply, self)
     if not ok then
         self.log.warn("Concordance: applying collections failed:", n)
+        Problems.report("coll:apply", "Applying collections failed", n)
     elseif not n and why == "busy" then
         self:_applyLater(0)
     end
@@ -464,7 +513,10 @@ function CollSync:_applyLater(tries)
         if ok and not n and why == "busy" and tries + 1 < CollSync.RETRY_TRIES then
             return self:_applyLater(tries + 1)
         end
-        if not ok then self.log.warn("Concordance: applying collections failed:", n) end
+        if not ok then
+            self.log.warn("Concordance: applying collections failed:", n)
+            Problems.report("coll:apply", "Applying collections failed", n)
+        end
         self.retrying = false
     end)
 end
@@ -474,7 +526,10 @@ end
 function CollSync:onBookOpened(md5)
     if not self.deps.enabled() or type(md5) ~= "string" then return end
     local ok, err = pcall(self.apply, self, true, { [md5] = true })
-    if not ok then self.log.warn("Concordance: collections on open failed:", err) end
+    if not ok then
+        self.log.warn("Concordance: collections on open failed:", err)
+        Problems.report("coll:open", "Putting an opened book into its collections failed", err)
+    end
 end
 
 return CollSync

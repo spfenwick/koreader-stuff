@@ -114,6 +114,13 @@ end
 -- have changed underneath us.
 Store.STATS_SCHEMAS = { [20221111] = true }
 
+function Store.knownSchemas()
+    local list = {}
+    for v in pairs(Store.STATS_SCHEMAS) do list[#list + 1] = tostring(v) end
+    table.sort(list)
+    return table.concat(list, ", ")
+end
+
 function Store:openStats()
     local conn = self:_open(self.stats_path)
     local ok, has_book = pcall(conn.rowexec, conn,
@@ -131,6 +138,9 @@ function Store:openStats()
             self._warned_schema = version
             self.log.warn("Concordance:", why, "- statistics sync is off")
         end
+        require("concordance/problems").report("stats-schema",
+            "Reading statistics aren't synced: KOReader's statistics database has changed",
+            "schema " .. tostring(version) .. ", known: " .. Store.knownSchemas())
         return nil, why, "schema"
     end
     return conn
