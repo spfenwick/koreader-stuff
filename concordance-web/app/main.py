@@ -37,6 +37,7 @@ from .cwa import CWA, CWAError, plain_text
 from .library import STATUS_LABELS, Library
 from .settings import Settings
 from .sync import Syncer
+from .version import VERSION
 
 HERE = Path(__file__).resolve().parent
 READING_DIR = Path(os.environ.get("CONCORDANCE_READING_DIR", "/data/reading"))
@@ -63,7 +64,7 @@ def cover_url(book) -> str | None:
     return f"/cover/{book.id}" if cwa.cover_href(book.uuids, book.calibre_ids) else None
 
 
-env.globals.update(STATUS_LABELS=STATUS_LABELS, syncer=syncer, cover_url=cover_url)
+env.globals.update(STATUS_LABELS=STATUS_LABELS, syncer=syncer, cover_url=cover_url, VERSION=VERSION)
 
 
 def render(request: Request, name: str, **ctx) -> Response:

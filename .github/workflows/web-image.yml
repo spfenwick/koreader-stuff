@@ -2,6 +2,7 @@
 # Container Registry:
 #
 #   ghcr.io/<owner>/concordance-web:latest            the newest build from main
+#   ghcr.io/<owner>/concordance-web:web-X.Y.Z         Concordance web X.Y.Z (app/version.py)
 #   ghcr.io/<owner>/concordance-web:concordance-X.Y.Z    built with Concordance X.Y.Z's code
 #   ghcr.io/<owner>/concordance-web:sha-<commit>      every build
 #
@@ -54,6 +55,9 @@ jobs:
           v=$(sed -n 's/^ *version = "\([0-9][0-9.]*\)".*/\1/p' concordance.koplugin/_meta.lua)
           test -n "$v"
           echo "concordance=$v" >> "$GITHUB_OUTPUT"
+          w=$(sed -n 's/^VERSION = "\([0-9][0-9.]*\)".*/\1/p' concordance-web/app/version.py)
+          test -n "$w"
+          echo "web=$w" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -65,10 +69,12 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=web-${{ steps.version.outputs.web }},enable={{is_default_branch}}
             type=raw,value=concordance-${{ steps.version.outputs.concordance }},enable={{is_default_branch}}
             type=sha,format=long
           labels: |
             org.opencontainers.image.title=Concordance web
+            org.opencontainers.image.version=${{ steps.version.outputs.web }}
             org.opencontainers.image.description=Browse the books, highlights and reading statistics Concordance keeps on a WebDAV server
 
       - name: Build for testing

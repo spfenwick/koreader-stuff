@@ -62,8 +62,9 @@ docker run -d --name concordance-web -p 8080:8080 -e TZ=Pacific/Auckland \
   ghcr.io/spfenwick/concordance-web:latest
 ```
 
-Image tags: `latest` (newest build from main), `concordance-X.Y.Z` (built with
-that Concordance version's code), `sha-<commit>`.
+Image tags: `latest` (newest build from main), `web-X.Y.Z` (this app's version,
+shown at the bottom of every page), `concordance-X.Y.Z` (built with that
+Concordance version's code), `sha-<commit>`.
 
 | Setting | Default | |
 |---|---|---|

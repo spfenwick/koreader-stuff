@@ -98,7 +98,8 @@ code.nowrap { white-space: nowrap; word-break: normal; }
 .theme { background: none; border: 1px solid var(--border); color: var(--text-2); border-radius: 8px; padding: 5px 7px; cursor: pointer; display: flex; }
 
 /* Layout */
-.page { max-width: 1120px; margin: 0 auto; padding: 24px 16px 64px; }
+.page { max-width: 1120px; margin: 0 auto; padding: 24px 16px 40px; }
+.foot { max-width: 1120px; margin: 0 auto; padding: 0 16px 24px; text-align: center; }
 .page > section, .page > .two-col, .book > section, .book > details { margin-bottom: 28px; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; }

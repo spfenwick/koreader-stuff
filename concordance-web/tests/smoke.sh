@@ -49,6 +49,14 @@ for path in / /books "$book" "$book/highlights.md" /highlights "/highlights?q=wh
     echo "$code $path"
     [ "$code" = 200 ] || fail=1
 done
+# The app's version at the bottom of every page.
+web_version=$(sed -n 's/^VERSION = "\([0-9][0-9.]*\)".*/\1/p' "$(dirname "$0")/../app/version.py")
+if curl -sf "$base/" | grep -q "Concordance web $web_version<"; then
+    echo "200 version $web_version shown"
+else
+    echo "smoke: version $web_version not shown at the bottom of the page" >&2
+    fail=1
+fi
 # Versions: the two files of Pride and Prejudice, joined by their UUID, with different texts.
 versions=$(curl -sf "$base/versions")
 if echo "$versions" | grep -q '1a2b3c4d-0000-4000-8000-000000000001' && echo "$versions" | grep -q '2 texts'; then
