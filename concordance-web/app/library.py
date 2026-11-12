@@ -35,6 +35,18 @@ _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrst
 _PUNCT_OR_CONTROL = re.compile(r"[!-/:-@\[-`{-~\x00-\x1f\x7f]")
 
 
+def format_index(n) -> str:
+    """A series number as people write it: 3, 1.5 (not 3.0)."""
+    if isinstance(n, str):
+        try:
+            n = float(n)
+        except ValueError:
+            return n.strip()
+    if isinstance(n, float) and n.is_integer():
+        return str(int(n))
+    return f"{n:g}" if isinstance(n, float) else str(n)
+
+
 def title_key(title, authors) -> str | None:
     """What two files must share to be joined by title: the plugin's
     Store.titleKey (ASCII lowercase, punctuation and control characters as
@@ -210,6 +222,9 @@ class Book:
     collections: list[str] = field(default_factory=list)  # collection ids
     uuids: list[str] = field(default_factory=list)  # from book identity, for matching a catalog
     calibre_ids: list[int] = field(default_factory=list)
+    # What the library's catalog (Calibre-Web) says: desc, tags, series,
+    # series_index, series_pos. Set by the app; KOReader's own metadata wins.
+    catalog: dict = field(default_factory=dict, repr=False)
 
     @property
     def md5s(self) -> list[str]:
@@ -232,10 +247,48 @@ class Book:
         return [a.strip() for a in re.split(r"\n|;", self.authors) if a.strip()]
 
     @property
+    def series_name(self) -> str:
+        s = self.value("meta.series")
+        if isinstance(s, str) and s.strip():
+            return s.strip()
+        return self.catalog.get("series") or ""
+
+    @property
+    def series_index(self) -> str:
+        """Its number in the series, as written (3, 1.5), or "" if unknown."""
+        s = self.value("meta.series")
+        if isinstance(s, str) and s.strip():
+            idx = self.value("meta.series_index")
+            return format_index(idx) if isinstance(idx, (int, float, str)) and str(idx).strip() else ""
+        return self.catalog.get("series_index") or ""
+
+    @property
+    def series_order(self) -> float:
+        """Where it comes in its series, for sorting: its number, else its
+        place in the catalog's series list."""
+        try:
+            return float(self.series_index)
+        except ValueError:
+            pos = self.catalog.get("series_pos") if self.catalog.get("series") == self.series_name else None
+            return float(pos) if isinstance(pos, (int, float)) else float("inf")
+
+    @property
     def series(self) -> str:
-        s = self.value("meta.series") or ""
-        idx = self.value("meta.series_index")
+        s, idx = self.series_name, self.series_index
         return f"{s} #{idx}" if s and idx else s
+
+    @property
+    def tags(self) -> list[str]:
+        """Its tags: those set in KOReader (keywords), else the catalog's."""
+        kw = self.value("meta.keywords")
+        if isinstance(kw, str) and kw.strip():
+            out: list[str] = []
+            for t in re.split(r"[\n,;]", kw):
+                t = " ".join(t.split())
+                if t and t.casefold() not in (o.casefold() for o in out):
+                    out.append(t)
+            return out
+        return list(self.catalog.get("tags") or [])
 
     @property
     def description(self) -> str:
@@ -345,7 +398,7 @@ class Book:
         return sum(1 for e in self.editions if not e.sig)
 
     def search_text(self) -> str:
-        return f"{self.title}\n{self.authors}\n{self.series}".casefold()
+        return "\n".join([self.title, self.authors, self.series, *self.tags]).casefold()
 
 
 @dataclass

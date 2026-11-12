@@ -49,3 +49,11 @@
   </figcaption>
 </figure>
 {%- endmacro %}
+
+{% macro book_tabs(current) -%}
+<nav class="segmented" aria-label="Books by">
+  {%- for key, label in [('books', 'Books'), ('authors', 'Authors'), ('series', 'Series'), ('tags', 'Tags')] %}
+  <a href="/{{ key }}" {% if current == key %}aria-current="page"{% endif %}>{{ label }}</a>
+  {%- endfor %}
+</nav>
+{%- endmacro %}

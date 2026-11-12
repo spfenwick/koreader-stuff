@@ -165,11 +165,11 @@ Each sync is also a gesture under General ("Concordance: sync statistics and hig
 An optional web app that shows what Concordance keeps on your server. It runs as a Docker container on the machine with the WebDAV files and only reads them.
 
 - **Home**: reading time today, this week, month and year, streaks, a 12-month calendar, books in progress, recent highlights.
-- **Books**: filter by status or collection, search and sort; each book shows its review, rating, reading time, highlights by chapter (downloadable as Markdown) and sessions.
+- **Books**: filter by status, collection, author, series or tag, search and sort, with tabs listing Authors, Series and Tags; each book shows its review, rating, reading time, highlights by chapter (downloadable as Markdown) and sessions.
 - **Highlights**: every highlight and note, newest first, with search and a colour filter.
 - **Statistics**: per year or all time, by month, time of day and day of the week.
 - **Versions**: books known in more than one file, and how they were matched.
-- Covers and descriptions can come from your Calibre-Web Automated server.
+- Covers, descriptions, tags and series can come from your Calibre-Web Automated server.
 
 Start it with `docker compose up -d`, setting `READING_DIR` to your server's `<folder>/Reading`, then open `http://<server>:8080`. Set `WEB_USERNAME` and `WEB_PASSWORD` to require a password. See [concordance-web/README.md](concordance-web/README.md).
 

@@ -7,12 +7,13 @@
     {{ spine(book, 'large') }}
     <div>
       <h1>{{ book.title }}</h1>
-      {% if book.authors %}<p class="byline">{{ book.author_list | join(', ') }}</p>{% endif %}
+      {% if book.authors %}<p class="byline">{% for a in book.author_list %}<a href="/books?author={{ a | urlencode }}">{{ a }}</a>{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
       <p class="book-meta">
         {{ status_badge(book) }} {{ rating(book) }}
-        {% if book.series %}<span>{{ book.series }}</span>{% endif %}
+        {% if book.series %}<a href="/books?series={{ book.series_name | urlencode }}">{{ book.series }}</a>{% endif %}
         {% for cid in book.collections %}<a class="chip" href="/books?coll={{ cid }}">{{ collections[cid].name if cid in collections else cid }}</a>{% endfor %}
       </p>
+      {% if book.tags %}<p class="book-meta tags" aria-label="Tags">{% for t in book.tags %}<a class="chip tag" href="/books?tag={{ t | urlencode }}">{{ t }}</a>{% endfor %}</p>{% endif %}
       {{ progress(book) }}
     </div>
   </header>

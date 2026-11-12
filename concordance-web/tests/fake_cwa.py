@@ -5,6 +5,9 @@
 Serves /opds, /opds/books, /opds/books/letter/00 (two pages, with a "next"
 link) and /opds/cover/<id> (PNG, with ETags), for the books in
 make_fixture.lua that have UUIDs, plus books this library doesn't have.
+Books have tags (<category>); one has Calibre-Web's entry text (TAGS:,
+SERIES: lines before the description). /opds/series, /opds/series/letter/00
+and /opds/series/<id> list the series, as Calibre-Web Automated does.
 """
 
 import base64
@@ -21,6 +24,8 @@ BOOKS = [  # (calibre id, uuid, title, rgb)
     (14, "9f9f9f9f-0000-4000-8000-000000000099", "A book not read here", (90, 90, 90)),
 ]
 PAGE = 2
+TAGS = {11: ["Classics", "Romance"], 12: ["Classics", "Sea"], 13: ["Classics", "Gothic"]}
+SERIES = {1: ("Gothic Classics", [14, 13])}  # id -> (name, calibre ids in series order)
 
 
 def png(rgb, w=120, h=180):
@@ -44,7 +49,14 @@ def nav(title, href):
 
 
 def book(cid, uuid, title):
-    return (f"<entry><title>{title}</title><id>urn:uuid:{uuid}</id>"
+    cats = "".join(f'<category scheme="http://www.bisg.org/standards/bisac_subject/index.html" term="{t}" label="{t}"/>'
+                   for t in TAGS.get(cid, []))
+    cats += '<category scheme="custom_column:Shelf" term="Shelf" label="Upstairs"/>' if cid == 11 else ""
+    text = ""
+    if cid == 12:  # Calibre-Web's entry text
+        text = ('<content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">RATING: ★★★<br/>'
+                "TAGS: Classics, Sea<br/>SERIES: Sea Stories [1.00]<br/><p>Call me Ishmael.</p></div></content>")
+    return (f"<entry><title>{title}</title><id>urn:uuid:{uuid}</id>{cats}{text}"
             f'<link rel="http://opds-spec.org/image" href="/opds/cover/{cid}" type="image/png"/>'
             f'<link rel="http://opds-spec.org/image/thumbnail" href="/opds/cover/{cid}" type="image/png"/>'
             f'<link rel="http://opds-spec.org/acquisition" href="/opds/download/{cid}/epub/" type="application/epub+zip"/>'
@@ -73,7 +85,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(401, b"login", "text/plain", {"WWW-Authenticate": 'Basic realm="cwa"'})
         path, _, query = self.path.partition("?")
         if path == "/opds":
-            return self.send(200, feed("Calibre-Web", [nav("Alphabetical Books", "/opds/books"), nav("New", "/opds/new")]))
+            return self.send(200, feed("Calibre-Web", [nav("Alphabetical Books", "/opds/books"), nav("New", "/opds/new"),
+                                                       nav("Series", "/opds/series")]))
+        if path == "/opds/series":
+            return self.send(200, feed("Series", [nav("All", "/opds/series/letter/00"), nav("G", "/opds/series/letter/G")]))
+        if path == "/opds/series/letter/00":
+            return self.send(200, feed("All", [nav(name, f"/opds/series/{sid}") for sid, (name, _) in SERIES.items()]))
+        if path.startswith("/opds/series/") and path.rsplit("/", 1)[1].isdigit():
+            name, ids = SERIES.get(int(path.rsplit("/", 1)[1]), ("", []))
+            by_id = {c: (c, u, t) for c, u, t, _ in BOOKS}
+            return self.send(200, feed(name, [book(*by_id[c]) for c in ids]))
         if path == "/opds/books":
             return self.send(200, feed("Books", [nav("All", "/opds/books/letter/00"), nav("A", "/opds/books/letter/a")]))
         if path == "/opds/books/letter/00":

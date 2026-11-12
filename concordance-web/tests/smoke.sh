@@ -44,7 +44,7 @@ done
 book=$(curl -sf "$base/books" | grep -o '/book/[0-9a-f]\{32\}' | head -1)
 fail=0
 for path in / /books "$book" "$book/highlights.md" /highlights "/highlights?q=whale" /stats "/stats?year=all" \
-            /collections /versions /status /health; do
+            /collections /authors /series /tags "/books?author=Jane%20Austen" /versions /status /health; do
     code=$(curl -s -o /dev/null -w '%{http_code}' "$base$path")
     echo "$code $path"
     [ "$code" = 200 ] || fail=1
@@ -96,6 +96,28 @@ done
 cover=$(curl -sf "$base/books" | grep -o '/cover/[0-9a-f]\{32\}' | head -1)
 ctype=$(curl -s -o /dev/null -w '%{content_type}' "$base$cover")
 [ "$ctype" = image/png ] && echo "200 $cover" || { echo "cover $cover: $ctype" >&2; fail=1; }
+# Tags and series: from the catalog (entries, Calibre-Web's entry text, series
+# feeds) and from KOReader's own metadata (Middlemarch).
+has() { # page, text, what it shows
+    if curl -sf "$base$1" | grep -qF -- "$2"; then echo "200 $3"; else echo "$1: no \"$2\" ($3)" >&2; fail=1; fi
+}
+lacks() {
+    if curl -sf "$base$1" | grep -qF -- "$2"; then echo "$1: \"$2\" shouldn't be there ($3)" >&2; fail=1; else echo "200 $3"; fi
+}
+has /tags 'href="/books?tag=Gothic"' "catalog tag listed"
+has /tags 'href="/books?tag=Victorian"' "KOReader keyword listed"
+lacks /tags 'Upstairs' "custom column not taken as a tag"
+has /series 'Gothic Classics' "series from the series feeds"
+has /series 'Sea Stories' "series from the entry text"
+has /series 'Penguin Classics' "series set in KOReader"
+has /authors 'href="/books?author=Jane%20Austen"' "authors listed"
+has "/books?tag=gothic" 'Frankenstein' "books by tag"
+lacks "/books?tag=gothic" 'Moby' "only books with the tag"
+has "/books?series=Penguin%20Classics" 'Penguin Classics #2' "series number from KOReader"
+moby=$(curl -sf "$base/books?q=moby" | grep -o '/book/[0-9a-f]\{32\}' | head -1)
+has "$moby" 'Call me Ishmael.' "description from the entry text"
+lacks "$moby" 'TAGS:' "entry text's tag line not in the description"
+has "$moby" 'Sea Stories #1' "series number from the entry text"
 
 if [ "$fail" != 0 ]; then
     docker logs "$name" >&2

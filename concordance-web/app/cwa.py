@@ -9,7 +9,12 @@ identifier match by ID as well.
 Covers are fetched by the app (the browser never sees the CWA login), kept
 in <data dir>/covers/, and checked again with If-None-Match after a week.
 
-Book descriptions (Calibre's comments) are kept from the catalog too.
+Book descriptions (Calibre's comments) and tags are kept from the catalog
+too. Series aren't in a book's catalog entry (Calibre-Web Automated) or only
+in its text (Calibre-Web: "SERIES: name [1.00]"), so the series feeds
+(/opds/series/letter/00, then each series, its books in series order) are
+read as well. A book's place in its series feed gives the order; its number
+is only known from the entry text.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import re
 import threading
 import time
@@ -42,7 +48,12 @@ MAX_PAGES = 2000
 MAX_COVER = 10 * 1024 * 1024
 TIMEOUT = 30
 USER_AGENT = "concordance-web"
-CATALOG_VERSION = 2  # 2: with descriptions
+MAX_SERIES = 5000
+CATALOG_VERSION = 3  # 2: with descriptions; 3: with tags and series
+TAG_SCHEME = "http://www.bisg.org/standards/bisac_subject/index.html"
+# Calibre-Web's entry text puts these lines before the description.
+_PREAMBLE_RE = re.compile(r"^(?:RATING|TAGS|SERIES):", re.I)
+_SERIES_RE = re.compile(r"^SERIES:\s*(.+?)\s*\[([0-9.]+)\]\s*$", re.I | re.M)
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -71,6 +82,17 @@ def normalize_uuid(s: str) -> str | None:
     return s if UUID_RE.match(s) else None
 
 
+def format_index(s) -> str:
+    """A series number as people write it: 3, 1.5 (not 3.00 or 1.50)."""
+    try:
+        n = float(s)
+    except (TypeError, ValueError):
+        return str(s or "")
+    if not math.isfinite(n):
+        return str(s)
+    return str(int(n)) if n == int(n) else f"{n:g}"
+
+
 def image_type(data: bytes) -> str | None:
     if data[:3] == b"\xff\xd8\xff":
         return "image/jpeg"
@@ -93,8 +115,9 @@ class CWA:
         self.fetch_locks: dict[str, threading.Lock] = {}
         self.by_uuid: dict[str, str] = {}   # Calibre UUID -> cover href (absolute)
         self.by_id: dict[int, str] = {}     # Calibre book ID -> cover href
-        self.descs: dict[str, str] = {}     # Calibre UUID (or "id:<n>") -> description
-        self.desc_ids: dict[int, str] = {}  # Calibre book ID -> key in descs
+        # Calibre UUID (or "id:<n>") -> {"desc", "tags", "series", "series_index", "series_pos"}
+        self.info: dict[str, dict] = {}
+        self.info_ids: dict[int, str] = {}  # Calibre book ID -> key in info
         self.version = 0                    # of the saved catalog
         self.catalog_url = ""               # the server the catalog was read from
         self.read_at: float | None = None
@@ -201,15 +224,17 @@ class CWA:
             return
         self.crawling = True
         try:
-            by_uuid, by_id, descs, desc_ids, count = self._crawl()
+            by_uuid, by_id, info, info_ids, count = self._crawl()
             with self.lock:
                 self.by_uuid, self.by_id, self.books = by_uuid, by_id, count
-                self.descs, self.desc_ids, self.version = descs, desc_ids, CATALOG_VERSION
+                self.info, self.info_ids, self.version = info, info_ids, CATALOG_VERSION
                 self.catalog_url = self.url
                 self.read_at = time.time()
                 self.last_error = ""
             self._save_catalog()
-            log.info("CWA catalog: %d books, %d with covers, %d with descriptions", count, len(by_uuid), len(descs))
+            log.info("CWA catalog: %d books, %d with covers, %d with descriptions, %d with tags, %d in a series",
+                     count, len(by_uuid), sum(1 for i in info.values() if i.get("desc")),
+                     sum(1 for i in info.values() if i.get("tags")), sum(1 for i in info.values() if i.get("series")))
         except CWAError as e:
             self.last_error = str(e)
             log.warning("CWA catalog: %s", e)
@@ -231,55 +256,128 @@ class CWA:
             raise CWAError("No \"All\" entry in the catalog's alphabetical index.")
         by_uuid: dict[str, str] = {}
         by_id: dict[int, str] = {}
-        descs: dict[str, str] = {}
-        desc_ids: dict[int, str] = {}
+        info: dict[str, dict] = {}
+        info_ids: dict[int, str] = {}
         count = 0
-        seen_pages = set()
-        for _ in range(MAX_PAGES):
-            if url in seen_pages:
-                break
-            seen_pages.add(url)
-            feed = self._feed(url)
+        for page_url, feed in self._pages(url):
             for entry in feed.findall(ATOM + "entry"):
-                cover = thumb = None
-                calibre_id = None
-                is_book = False
-                for rel, href, _ in self._links(entry):
-                    if rel == THUMBNAIL:
-                        thumb = href
-                    elif rel == IMAGE:
-                        cover = href
-                    elif rel.startswith(ACQUISITION):
-                        is_book = True
-                        m = re.search(r"/download/(\d+)/", href)
-                        calibre_id = calibre_id or (int(m.group(1)) if m else None)
-                if not is_book:
+                book = self._book_entry(entry)
+                if book is None:
                     continue
                 count += 1
-                uuid = normalize_uuid(entry.findtext(ATOM + "id") or "")
-                desc = self._description(entry)
-                if desc and (uuid or calibre_id is not None):
-                    key = uuid or f"id:{calibre_id}"
-                    descs[key] = desc
+                key, uuid, calibre_id, cover = book
+                data = self._entry_info(entry)
+                if key and data:
+                    info[key] = data
                     if calibre_id is not None:
-                        desc_ids[calibre_id] = key
-                href = cover or thumb  # the full image: the thumbnail is small
-                if not href:
+                        info_ids[calibre_id] = key
+                if not cover:
                     continue
-                href = urllib.parse.urljoin(url, href)
+                href = urllib.parse.urljoin(page_url, cover)
                 if uuid:
                     by_uuid[uuid] = href
                 if calibre_id is not None:
                     by_id[calibre_id] = href
+        try:
+            self._crawl_series(root_url, root, info, info_ids)
+        except CWAError as e:  # series hidden for this user, say: the rest still counts
+            log.info("CWA series: %s", e)
+        return by_uuid, by_id, info, info_ids, count
+
+    def _pages(self, url: str):
+        """(url, feed) for each page of a paged feed, following "next" links."""
+        seen = set()
+        for _ in range(MAX_PAGES):
+            if url in seen:
+                return
+            seen.add(url)
+            feed = self._feed(url)
+            yield url, feed
             nxt = next((h for r, h, _ in self._links(feed) if r == "next"), None)
             if not nxt:
-                break
+                return
             url = urllib.parse.urljoin(url, nxt)
-        return by_uuid, by_id, descs, desc_ids, count
+
+    def _book_entry(self, entry: ET.Element):
+        """(key, uuid, calibre id, cover href) for a book entry, or None for a
+        navigation entry. key is None for a book with neither UUID nor ID."""
+        cover = thumb = None
+        calibre_id = None
+        is_book = False
+        for rel, href, _ in self._links(entry):
+            if rel == THUMBNAIL:
+                thumb = href
+            elif rel == IMAGE:
+                cover = href
+            elif rel.startswith(ACQUISITION):
+                is_book = True
+                m = re.search(r"/download/(\d+)/", href)
+                calibre_id = calibre_id or (int(m.group(1)) if m else None)
+        if not is_book:
+            return None
+        uuid = normalize_uuid(entry.findtext(ATOM + "id") or "")
+        key = uuid or (f"id:{calibre_id}" if calibre_id is not None else None)
+        return key, uuid, calibre_id, cover or thumb  # the full image: the thumbnail is small
+
+    def _entry_info(self, entry: ET.Element) -> dict:
+        """What a book entry says besides its cover: desc, tags, series (if in its text)."""
+        data: dict = {}
+        text = self._entry_text(entry)
+        m = _SERIES_RE.search(text)
+        if m:
+            data["series"], data["series_index"] = m.group(1), format_index(m.group(2))
+        desc = "\n\n".join(p for p in text.split("\n\n") if not _PREAMBLE_RE.match(p))
+        if desc:
+            data["desc"] = desc
+        tags = []
+        for cat in entry.findall(ATOM + "category"):
+            scheme = cat.get("scheme") or ""
+            if scheme and scheme != TAG_SCHEME:  # custom columns, other vocabularies
+                continue
+            name = " ".join((cat.get("label") or cat.get("term") or "").split())
+            if name and name not in tags:
+                tags.append(name)
+        if tags:
+            data["tags"] = tags
+        return data
+
+    def _crawl_series(self, root_url: str, root: ET.Element, info: dict, info_ids: dict) -> None:
+        """Adds each book's series (and place in it) from the series feeds."""
+        series_url = self._section(root, root_url, "/series")
+        if not series_url:
+            return
+        index = self._feed(series_url)
+        url = self._section(index, series_url, "/series/letter/00")
+        if not url:
+            return
+        series: list[tuple[str, str]] = []  # (name, feed url)
+        for page_url, feed in self._pages(url):
+            for entry in feed.findall(ATOM + "entry"):
+                name = " ".join((entry.findtext(ATOM + "title") or "").split())
+                href = next((h for r, h, _ in self._links(entry) if r == "subsection"), None)
+                if name and href:
+                    series.append((name, urllib.parse.urljoin(page_url, href)))
+        for name, href in series[:MAX_SERIES]:
+            pos = 0
+            for _, feed in self._pages(href):
+                for entry in feed.findall(ATOM + "entry"):
+                    book = self._book_entry(entry)
+                    if book is None:
+                        continue
+                    pos += 1
+                    key, _, calibre_id, _ = book
+                    if not key:
+                        continue
+                    data = info.setdefault(key, {})
+                    if calibre_id is not None:
+                        info_ids.setdefault(calibre_id, key)
+                    if data.get("series") not in (None, name):
+                        data.pop("series_index", None)  # the entry text named another series
+                    data["series"], data["series_pos"] = name, pos
 
     @staticmethod
-    def _description(entry: ET.Element) -> str:
-        """The entry's description: <content> or <summary>, as text or (X)HTML."""
+    def _entry_text(entry: ET.Element) -> str:
+        """The entry's text: <content> or <summary>, as text or (X)HTML."""
         for tag in ("content", "summary"):
             el = entry.find(ATOM + tag)
             if el is None:
@@ -298,7 +396,7 @@ class CWA:
             data = {"version": self.version, "url": self.catalog_url, "read_at": self.read_at,
                     "books": self.books, "by_uuid": self.by_uuid,
                     "by_id": {str(k): v for k, v in self.by_id.items()},
-                    "descs": self.descs, "desc_ids": {str(k): v for k, v in self.desc_ids.items()}}
+                    "info": self.info, "info_ids": {str(k): v for k, v in self.info_ids.items()}}
         tmp = self.catalog_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data))
         tmp.replace(self.catalog_path)
@@ -311,8 +409,12 @@ class CWA:
             self.books = data.get("books", 0)
             self.by_uuid = dict(data.get("by_uuid", {}))
             self.by_id = {int(k): v for k, v in data.get("by_id", {}).items()}
-            self.descs = dict(data.get("descs", {}))
-            self.desc_ids = {int(k): v for k, v in data.get("desc_ids", {}).items()}
+            if "info" in data:
+                self.info = dict(data["info"])
+                self.info_ids = {int(k): v for k, v in data.get("info_ids", {}).items()}
+            else:  # version 2: descriptions only, until it's read again
+                self.info = {k: {"desc": v} for k, v in data.get("descs", {}).items()}
+                self.info_ids = {int(k): v for k, v in data.get("desc_ids", {}).items()}
             self.version = data.get("version", 1)
         except (OSError, ValueError, AttributeError):
             pass
@@ -328,7 +430,7 @@ class CWA:
         """Drops the catalog and kept covers (the server changed or was removed)."""
         with self.lock:
             self.by_uuid, self.by_id, self.books = {}, {}, 0
-            self.descs, self.desc_ids, self.version = {}, {}, 0
+            self.info, self.info_ids, self.version = {}, {}, 0
             self.catalog_url, self.read_at, self.last_error = "", None, ""
         self.catalog_path.unlink(missing_ok=True)
         if self.dir.exists():
@@ -351,18 +453,23 @@ class CWA:
                     return href
         return None
 
-    def description(self, uuids, calibre_ids) -> str:
+    def metadata(self, uuids, calibre_ids) -> dict:
+        """What the catalog says about a book: desc, tags, series, series_index,
+        series_pos (each only if known). Empty when it isn't in the catalog."""
         if not self.configured or self.catalog_url != self.url:
-            return ""
+            return {}
         with self.lock:
             for u in uuids:
-                if u in self.descs:
-                    return self.descs[u]
+                if u in self.info:
+                    return self.info[u]
             for i in calibre_ids:
-                key = self.desc_ids.get(i)
-                if key in self.descs:
-                    return self.descs[key]
-        return ""
+                key = self.info_ids.get(i)
+                if key in self.info:
+                    return self.info[key]
+        return {}
+
+    def description(self, uuids, calibre_ids) -> str:
+        return self.metadata(uuids, calibre_ids).get("desc", "")
 
     def matched(self, books) -> int:
         return sum(1 for b in books if self.cover_href(b.uuids, b.calibre_ids))

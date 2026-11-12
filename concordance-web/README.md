@@ -7,8 +7,10 @@ reads them.
 
 - **Home**: reading time today, this week, month and year, streaks, a
   calendar of the last 12 months, books being read, recent highlights.
-- **Books**: filter by status or collection, search, and sort. A book's page
-  has its review, rating, status, collections, reading time per day or week,
+- **Books**: filter by status, collection, author, series or tag, search, and
+  sort. Tabs beside it list the **Authors**, **Series** (each in series
+  order) and **Tags**, with their books. A book's page
+  has its review, rating, status, series, tags, collections, reading time per day or week,
   highlights by chapter (downloadable as Markdown), bookmarks, sessions and
   files.
 - **Highlights**: every highlight and note, newest first, with search and a
@@ -20,7 +22,7 @@ reads them.
   than one file, with how they were matched: the shared book ID, which
   files have the same text, which devices reported each file.
 - **Status**: devices, the last import, and files that couldn't be read.
-- **Settings**: book covers and descriptions from a Calibre-Web Automated
+- **Settings**: book covers, descriptions, tags and series from a Calibre-Web Automated
   (or Calibre-Web) server (see [Covers](#covers)).
 
 ## How it works
@@ -93,8 +95,12 @@ Concordance's book identity records it from each EPUB. Files carrying a
 `calibre:<id>` identifier match by ID too. Books without a match keep the
 coloured spine.
 
-Book descriptions come from the catalog too, and show on each book's page. A
-description edited in KOReader (custom metadata) comes first.
+Book descriptions and tags come from the catalog too. Series come from the
+catalog's series feeds (`/opds/series`), which list each series' books in
+order. Calibre-Web Automated doesn't put the series number in the catalog, so
+books are listed in that order without "#3". Calibre-Web's entry text does
+include the number. A description, series or tags (keywords) edited in
+KOReader (custom metadata) come first.
 
 - The app fetches covers itself and keeps them in `/cache/covers/`, so the
   browser never needs the CWA login. Each is checked for changes (by ETag)

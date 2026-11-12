@@ -21,7 +21,7 @@
     {% set path = request.url.path %}
     <nav aria-label="Main">
       <a href="/" {% if path == '/' %}aria-current="page"{% endif %}>Home</a>
-      <a href="/books" {% if path.startswith('/book') %}aria-current="page"{% endif %}>Books</a>
+      <a href="/books" {% if path.startswith('/book') or path in ('/authors', '/series', '/tags') %}aria-current="page"{% endif %}>Books</a>
       <a href="/highlights" {% if path.startswith('/highlights') %}aria-current="page"{% endif %}>Highlights</a>
       <a href="/stats" {% if path.startswith('/stats') or path.startswith('/day') %}aria-current="page"{% endif %}>Statistics</a>
       <a href="/collections" {% if path.startswith('/collections') %}aria-current="page"{% endif %}>Collections</a>

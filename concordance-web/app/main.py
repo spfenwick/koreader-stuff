@@ -21,7 +21,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs, quote, urlencode
 
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
@@ -64,7 +64,22 @@ def cover_url(book) -> str | None:
     return f"/cover/{book.id}" if cwa.cover_href(book.uuids, book.calibre_ids) else None
 
 
-env.globals.update(STATUS_LABELS=STATUS_LABELS, syncer=syncer, cover_url=cover_url, VERSION=VERSION)
+def books_url(request: Request, drop: str) -> str:
+    """This Books list without one of its filters."""
+    params = [(k, v) for k, v in request.query_params.multi_items() if k != drop and v]
+    return "/books" + ("?" + urlencode(params) if params else "")
+
+
+env.globals.update(STATUS_LABELS=STATUS_LABELS, syncer=syncer, cover_url=cover_url, books_url=books_url,
+                   VERSION=VERSION)
+
+
+def snapshot():
+    """library.snapshot(), with what the catalog says attached to each book."""
+    snap = library.snapshot()
+    for b in snap[0].values():
+        b.catalog = cwa.metadata(b.uuids, b.calibre_ids)
+    return snap
 
 
 def render(request: Request, name: str, **ctx) -> Response:
@@ -124,7 +139,7 @@ def month_calendar(by_md5, month: date, today: date) -> dict:
 # Pages ---------------------------------------------------------------------------------
 
 async def home(request: Request):
-    books, by_md5, _, annotations, daily, counts = library.snapshot()
+    books, by_md5, _, annotations, daily, counts = snapshot()
     today = date.today()
     try:
         month = date.fromisoformat(request.query_params.get("month", "") + "-01")
@@ -173,15 +188,55 @@ SORTS = {
     "time": ("Time read", lambda b: -b.read_time),
     "highlights": ("Highlights", lambda b: -len(b.highlights)),
     "rating": ("Rating", lambda b: (-(b.rating or 0), b.title.casefold())),
+    "series": ("Series", lambda b: (not b.series_name, b.series_name.casefold(), b.series_order, b.title.casefold())),
+}
+
+# The ways books are grouped (the tabs beside Books): page path -> (title,
+# the books' names for it, the /books filter it links to).
+GROUPS = {
+    "authors": ("Authors", lambda b: b.author_list, "author"),
+    "series": ("Series", lambda b: [b.series_name] if b.series_name else [], "series"),
+    "tags": ("Tags", lambda b: b.tags, "tag"),
+}
+GROUP_SORTS = {
+    "name": ("Name", lambda g: g["name"].casefold()),
+    "books": ("Books", lambda g: (-len(g["books"]), g["name"].casefold())),
+    "recent": ("Last opened", lambda g: (-(g["last_opened"] or 0), g["name"].casefold())),
+    "time": ("Time read", lambda g: (-g["read_time"], g["name"].casefold())),
 }
 
 
+def group_books(books, names_of) -> list[dict]:
+    """Books by each name names_of gives them (case aside: the name most
+    books use is shown)."""
+    groups: dict[str, dict] = {}
+    for b in books:
+        for name in names_of(b):
+            g = groups.setdefault(name.casefold(), {"names": {}, "books": [], "ids": set()})
+            g["names"][name] = g["names"].get(name, 0) + 1
+            if b.id not in g["ids"]:
+                g["ids"].add(b.id)
+                g["books"].append(b)
+    out = []
+    for g in groups.values():
+        name = max(g["names"], key=lambda n: (g["names"][n], n))
+        items = g["books"]
+        opened = [b.last_opened for b in items if b.last_opened]
+        out.append({"name": name, "books": items, "read_time": sum(b.read_time for b in items),
+                    "finished": sum(1 for b in items if b.status == "complete"),
+                    "last_opened": max(opened) if opened else None})
+    return out
+
+
 async def books_page(request: Request):
-    books, _, collections, _, _, _ = library.snapshot()
+    books, _, collections, _, _, _ = snapshot()
     q = request.query_params.get("q", "").strip()
     status = request.query_params.get("status", "")
     coll = request.query_params.get("coll", "")
-    sort = request.query_params.get("sort", "recent")
+    author = request.query_params.get("author", "").strip()
+    series = request.query_params.get("series", "").strip()
+    tag = request.query_params.get("tag", "").strip()
+    sort = request.query_params.get("sort", "") or ("series" if series else "recent")
     items = list(books.values())
     if q:
         terms = q.casefold().split()
@@ -192,10 +247,31 @@ async def books_page(request: Request):
         items = [b for b in items if b.status == status]
     if coll:
         items = [b for b in items if coll in b.collections]
+    if author:
+        items = [b for b in items if author.casefold() in (a.casefold() for a in b.author_list)]
+    if series:
+        items = [b for b in items if b.series_name.casefold() == series.casefold()]
+    if tag:
+        items = [b for b in items if tag.casefold() in (t.casefold() for t in b.tags)]
     items.sort(key=SORTS.get(sort, SORTS["recent"])[1])
-    return render(request, "books.html", books=items, q=q, status=status, coll=coll, sort=sort,
+    picked = [(label, key, value) for label, key, value in
+              (("Author", "author", author), ("Series", "series", series), ("Tag", "tag", tag)) if value]
+    return render(request, "books.html", books=items, q=q, status=status, coll=coll, sort=sort, picked=picked,
                   sorts=SORTS, collections=sorted(collections.values(), key=lambda c: c.name.casefold()),
                   total=len(books))
+
+
+async def groups_page(request: Request):
+    kind = request.url.path.strip("/")
+    title, names_of, param = GROUPS[kind]
+    books, *_ = snapshot()
+    sort = request.query_params.get("sort", "name")
+    groups = group_books(books.values(), names_of)
+    groups.sort(key=GROUP_SORTS.get(sort, GROUP_SORTS["name"])[1])
+    for g in groups:
+        g["books"].sort(key=SORTS["series"][1] if kind == "series" else SORTS["recent"][1])
+    return render(request, "groups.html", kind=kind, title=title, param=param, groups=groups,
+                  sort=sort, sorts=GROUP_SORTS, total=len(books), catalog=cwa.configured)
 
 
 def _book_chart(daily: dict[date, int], first: date, last: date):
@@ -220,7 +296,7 @@ def _book_chart(daily: dict[date, int], first: date, last: date):
 
 
 async def book_page(request: Request):
-    _, by_md5, collections, _, _, _ = library.snapshot()
+    _, by_md5, collections, _, _, _ = snapshot()
     book = by_md5.get(request.path_params["id"])
     if book is None:
         raise HTTPException(404, "No such book")
@@ -245,7 +321,7 @@ async def book_page(request: Request):
 
 
 async def book_markdown(request: Request):
-    _, by_md5, _, _, _, _ = library.snapshot()
+    _, by_md5, _, _, _, _ = snapshot()
     book = by_md5.get(request.path_params["id"])
     if book is None:
         raise HTTPException(404, "No such book")
@@ -275,7 +351,7 @@ COLORS = ("yellow", "orange", "red", "purple", "blue", "cyan", "green", "olive",
 
 
 async def highlights_page(request: Request):
-    _, _, _, annotations, _, _ = library.snapshot()
+    _, _, _, annotations, _, _ = snapshot()
     q = request.query_params.get("q", "").strip()
     color = request.query_params.get("color", "")
     notes = request.query_params.get("notes", "")
@@ -307,7 +383,7 @@ async def day_page(request: Request):
         d = date.fromisoformat(request.path_params["day"])
     except ValueError:
         raise HTTPException(404, "Not a date")
-    books, by_md5, _, annotations, daily, _ = library.snapshot()
+    books, by_md5, _, annotations, daily, _ = snapshot()
     stats = library.period_stats(ts(d), ts(d + timedelta(days=1)))
     read = {}
     for md5, (secs, pages) in stats["by_md5"].items():
@@ -324,7 +400,7 @@ async def day_page(request: Request):
 
 
 async def stats_page(request: Request):
-    books, by_md5, _, _, daily, counts = library.snapshot()
+    books, by_md5, _, _, daily, counts = snapshot()
     today = date.today()
     years = sorted({d.year for d in daily} | {today.year}, reverse=True)
     sel = request.query_params.get("year", str(today.year))
@@ -388,7 +464,7 @@ async def stats_page(request: Request):
 
 
 async def collections_page(request: Request):
-    _, _, collections, _, _, _ = library.snapshot()
+    _, _, collections, _, _, _ = snapshot()
     items = sorted(collections.values(), key=lambda c: (c.id != "favorites", c.name.casefold()))
     return render(request, "collections.html", collections=items)
 
@@ -402,7 +478,7 @@ def read_devices() -> list[dict]:
 
 
 async def versions_page(request: Request):
-    books, *_ = library.snapshot()
+    books, *_ = snapshot()
     items = sorted((b for b in books.values() if len(b.editions) > 1), key=lambda b: b.title.casefold())
     names = {d.get("id"): d.get("name") for d in read_devices()}
     return render(request, "versions.html", books=items, device_names=names,
@@ -424,7 +500,7 @@ async def status_page(request: Request):
             pass
         finally:
             conn.close()
-    *_, counts = library.snapshot()
+    *_, counts = snapshot()
     return render(request, "status.html", devices=devices, bad=bad, seen=seen, counts=counts,
                   state=syncer.state, reading_dir=READING_DIR, loaded_at=library.loaded_at, interval=INTERVAL)
 
@@ -435,7 +511,7 @@ async def sync_now(request: Request):
 
 
 async def cover(request: Request):
-    _, by_md5, _, _, _, _ = library.snapshot()
+    _, by_md5, _, _, _, _ = snapshot()
     book = by_md5.get(request.path_params["id"])
     href = book and cwa.cover_href(book.uuids, book.calibre_ids)
     if not href:
@@ -463,7 +539,7 @@ async def catalog_loop():
 
 
 async def settings_page(request: Request):
-    books, *_ = library.snapshot()
+    books, *_ = snapshot()
     notice = request.query_params.get("notice", "")
     return render(request, "settings.html", cwa=cwa, settings=settings, notice=notice,
                   error=request.query_params.get("error", ""),
@@ -569,6 +645,9 @@ app = Starlette(
     routes=[
         Route("/", home),
         Route("/books", books_page),
+        Route("/authors", groups_page),
+        Route("/series", groups_page),
+        Route("/tags", groups_page),
         Route("/book/{id}", book_page),
         Route("/book/{id}/highlights.md", book_markdown),
         Route("/highlights", highlights_page),

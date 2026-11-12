@@ -174,6 +174,14 @@ tr:last-child td { border-bottom: 0; }
 .s-abandoned { background: var(--badge-abandoned); color: var(--badge-abandoned-ink); }
 .stars { color: #c98500; letter-spacing: 1px; font-size: .9rem; }
 .chip { font-size: .78rem; border: 1px solid var(--border); border-radius: 99px; padding: 1px 8px; color: var(--text-2); }
+.chip.picked { display: inline-flex; align-items: center; gap: 6px; font-size: .85rem; padding: 4px 6px 4px 10px; background: var(--surface-2); }
+.chip.picked a { color: var(--muted); padding: 0 4px; line-height: 1; font-size: 1rem; }
+.chip.picked a:hover { color: var(--text); text-decoration: none; }
+.book-meta.tags { margin-top: 6px; }
+.group-name { display: block; font-weight: 600; color: var(--text); }
+.spines { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 6px; }
+.spines a:hover { text-decoration: none; }
+.spines .more { font-size: .8rem; padding-left: 4px; }
 .progress { display: flex; align-items: center; gap: 8px; font-size: .78rem; color: var(--muted); margin-top: 4px; }
 .progress-bar { width: 90px; height: 6px; background: var(--chart-l0); border-radius: 3px; overflow: hidden; }
 .progress-bar span { display: block; height: 100%; background: var(--chart-bar); border-radius: 0 3px 3px 0; }

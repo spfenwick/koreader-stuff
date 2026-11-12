@@ -258,6 +258,8 @@ do
     add(prop(by.dune.md5, "status", "reading", NOW - 25 * DAY, d1))
     add(prop(by.dune.md5, "hist", books_used[1].dune, books_used[1].dune, d1))
     add(prop(by.dune.md5, "meta.series", "Penguin Classics", NOW - 25 * DAY, d1))
+    add(prop(by.dune.md5, "meta.series_index", 2, NOW - 25 * DAY, d1))
+    add(prop(by.dune.md5, "meta.keywords", "Victorian\nProvincial life", NOW - 25 * DAY, d1))
     add(prop(by.pride.md5, "coll.favorites", true, NOW - 300 * DAY, d1))
     add(prop(by.frank.md5, "coll.favorites", true, NOW - 60 * DAY, d1))
     add(prop(by.pride.md5, "coll.5f1d2c3b4a596877", true, NOW - 200 * DAY, d1))

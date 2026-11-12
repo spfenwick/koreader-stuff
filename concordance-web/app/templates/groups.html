@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% from "_macros.html" import spine, book_tabs %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ title }} <span class="count">{{ groups | length }}</span></h1>
+  {{ book_tabs(kind) }}
+</div>
+{% if groups %}
+<div class="filters">
+  <nav class="segmented" aria-label="Sort by">
+    {%- for key, (label, _) in sorts.items() %}
+    <a href="/{{ kind }}?sort={{ key }}" {% if sort == key %}aria-current="page"{% endif %}>{{ label }}</a>
+    {%- endfor %}
+  </nav>
+</div>
+<table class="books groups">
+  <thead><tr><th scope="col">{{ title[:-1] if kind != 'series' else 'Series' }}</th><th scope="col" class="num">Books</th><th scope="col" class="num">Finished</th><th scope="col" class="num">Read</th><th scope="col" class="num">Last opened</th></tr></thead>
+  <tbody>
+  {% for g in groups %}
+  <tr>
+    <td>
+      <a class="group-name" href="/books?{{ param }}={{ g.name | urlencode }}">{{ g.name }}</a>
+      <span class="spines">
+        {%- for b in g.books[:8] %}<a href="/book/{{ b.id }}" title="{{ b.title }}{% if kind == 'series' and b.series_index %} (#{{ b.series_index }}){% endif %}">{{ spine(b, 'small') }}</a>{% endfor -%}
+        {%- if g.books | length > 8 %}<a class="more muted" href="/books?{{ param }}={{ g.name | urlencode }}">+{{ g.books | length - 8 }}</a>{% endif -%}
+      </span>
+    </td>
+    <td class="num">{{ g.books | length }}</td>
+    <td class="num">{{ g.finished or '' }}</td>
+    <td class="num">{{ g.read_time | duration if g.read_time else '' }}</td>
+    <td class="num muted">{{ g.last_opened | when }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">
+  {%- if kind == 'authors' %}No books with authors yet.
+  {%- else %}No {{ title | lower }} yet. They come from a book's metadata edited in KOReader{% if catalog %} or from your library's catalog (read once a day){% else %}, or from your library's catalog once a <a href="/settings">Calibre-Web server</a> is set{% endif %}.
+  {%- endif %}
+</p>
+{% endif %}
+{% endblock %}

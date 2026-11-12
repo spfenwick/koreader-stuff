@@ -8,13 +8,13 @@
 
 <section class="panel settings">
   <h2>Covers from Calibre-Web Automated</h2>
-  <p class="muted">Book covers and descriptions come from your CWA (or Calibre-Web) server's OPDS catalog, matched by the book's
-    Calibre UUID. The app fetches and keeps them, so your browser never needs the server's login.</p>
+  <p class="muted">Book covers, descriptions, tags and series come from your CWA (or Calibre-Web) server's OPDS catalog, matched by the book's
+    Calibre UUID. Series and tags you set in KOReader come first. The app fetches and keeps all this, so your browser never needs the server's login.</p>
 
   <form method="post" action="/settings" class="form" autocomplete="off">
     <label for="cwa_url">OPDS address</label>
     <input id="cwa_url" name="cwa_url" type="url" value="{{ settings.get('cwa_url') }}" placeholder="https://books.example.com/opds">
-    <p class="hint">The address you'd use in KOReader's OPDS catalog. Leave empty to turn covers off.</p>
+    <p class="hint">The address you'd use in KOReader's OPDS catalog. Leave empty to turn this off.</p>
 
     <label for="cwa_username">Username</label>
     <input id="cwa_username" name="cwa_username" type="text" value="{{ settings.get('cwa_username') }}" autocomplete="off">

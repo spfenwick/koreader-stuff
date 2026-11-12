@@ -1,12 +1,13 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_badge, rating, spine, progress %}
+{% from "_macros.html" import status_badge, rating, spine, progress, book_tabs %}
 {% block title %}Books{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>Books <span class="count">{{ books | length }}{% if books | length != total %} of {{ total }}{% endif %}</span></h1>
+  {{ book_tabs('books') }}
 </div>
 <form class="filters" method="get" action="/books">
-  <input type="search" name="q" value="{{ q }}" placeholder="Title, author or series" aria-label="Filter books">
+  <input type="search" name="q" value="{{ q }}" placeholder="Title, author, series or tag" aria-label="Filter books">
   <select name="status" aria-label="Status">
     <option value="">Any status</option>
     {% for key, label in STATUS_LABELS.items() %}<option value="{{ key }}" {% if status == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
@@ -21,8 +22,13 @@
   <select name="sort" aria-label="Sort by">
     {% for key, (label, _) in sorts.items() %}<option value="{{ key }}" {% if sort == key %}selected{% endif %}>Sort: {{ label }}</option>{% endfor %}
   </select>
+  {% for label, key, value in picked %}
+  <input type="hidden" name="{{ key }}" value="{{ value }}">
+  <span class="chip picked">{{ label }}: {{ value }}
+    <a href="{{ books_url(request, drop=key) }}" aria-label="Remove {{ label | lower }} filter">×</a></span>
+  {% endfor %}
   <button type="submit">Apply</button>
-  {% if q or status or coll %}<a href="/books" class="clear">Clear</a>{% endif %}
+  {% if q or status or coll or picked %}<a href="/books" class="clear">Clear</a>{% endif %}
 </form>
 
 <table class="books">
