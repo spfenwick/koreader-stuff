@@ -6,7 +6,8 @@ With a transport (see webdav.lua) rooted at <configured folder>/Reading:
 1. List devices/ (PROPFIND, Depth 1). Create the folders on first use, and
    this device's meta.json; write it again when it changed (params.rewrite_meta),
    on any sync.
-2. On a full listing (first sync, "Sync now", rebuild, and once a day): list
+2. On a full listing (first sync, "Sync now", rebuild, and once a day, or
+   once a week on a device that has sent nothing: see engine.lua): list
    every device folder too. This also deletes this device's leftover
    temporary uploads and finds segments out of sequence.
 3. Upload the new segment (if any) as the next sequence number, and check

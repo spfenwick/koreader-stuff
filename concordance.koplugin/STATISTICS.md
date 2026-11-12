@@ -102,7 +102,8 @@ files.)
   all. (Each device checks this first: after an upload, its own folder's
   date must have changed. rclone, for one, doesn't do this.) Once a day
   (and on a sync by hand) every device folder is listed in full, to find
-  anything out of sequence.
+  anything out of sequence; on a device that has sent nothing since, only
+  once a week (or when a pack's files are due for deletion).
 - **Failures fix themselves.** Nothing is marked as sent until the server
   shows the file with the right size, nor imported until it's in the
   database. A failed or skipped sync is caught up by the next one.

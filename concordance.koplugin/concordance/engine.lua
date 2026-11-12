@@ -71,6 +71,7 @@ local DEFAULTS = {
     max_book_records = 5000,   -- book data records per uploaded segment
     max_download_bytes = 32 * 1024 * 1024, -- per cycle
     full_list_interval = 24 * 3600, -- seconds between full listings of every device folder
+    full_list_max_interval = 7 * 24 * 3600, -- a full listing at least this often, even with nothing sent
     pack_grace = Pack.GRACE,   -- seconds between a pack appearing and its segments being deleted
     pack = true,               -- pack this device's small segments (see pack.lua)
     max_id_records = 5000,     -- identity records per uploaded segment
@@ -251,15 +252,37 @@ function Engine:_export(run)
         local last = self.status[key]
         return not last or d.now() - last >= d.full_list_interval
     end
-    run.full_list = run.interactive or (run.stats and due("last_full_list"))
-        or (run.ann and due("ann_last_full_list")) or nil
+    -- A device that has sent nothing since its last full listing has nothing
+    -- of its own to pack, so an automatic sync then only does one when a
+    -- pack's segments are due for deletion, or none has been done for
+    -- full_list_max_interval (strays and unreliable folder dates are still
+    -- caught, and changed names read). Otherwise the day starts again.
+    local function needed(key)
+        local st, last = self.status, self.status[key]
+        if not last or not st.full_listed_at or d.now() - st.full_listed_at >= d.full_list_max_interval then
+            return true
+        end
+        if st.last_upload and st.last_upload > last then return true end
+        for _, p in pairs(st.packs or {}) do
+            if not p.done and d.now() - p.t >= d.pack_grace then return true end
+        end
+        return false
+    end
+    run.due_keys = {}
+    if run.stats and due("last_full_list") then table.insert(run.due_keys, "last_full_list") end
+    if run.ann and due("ann_last_full_list") then table.insert(run.due_keys, "ann_last_full_list") end
+    run.full_list = run.interactive or nil
+    for _, key in ipairs(run.due_keys) do
+        if needed(key) then run.full_list = true end
+    end
+    run.full_list_skipped = not run.full_list and #run.due_keys > 0 or nil
     local t0 = os.clock()
     local exp
     if run.stats then
         local eerr, why
         exp, eerr, why = d.store:export{
             device_id = run.device_id, out_path = run.pending_path, now = d.now(), max_events = d.max_events,
-            force_diff = run.full_list,
+            force_diff = run.full_list or run.full_list_skipped, -- still once a day
         }
         if eerr then return self:_fail(run, "export: " .. tostring(eerr)) end
         run.export_skipped = why
@@ -688,11 +711,14 @@ function Engine:_packs(run, result)
     run.deleted_originals = deleted
     if deleted > 0 then self.log.info("StatSync: deleted", deleted, "segments now in packs") end
 
+    local uploaded = (result.uploaded and result.uploaded.verified) or (result.ann_uploaded and result.ann_uploaded.verified)
+        or (result.book_uploaded and result.book_uploaded.verified)
+        or (result.id_uploaded and result.id_uploaded.verified)
+    -- Something to pack at the next full listing (see _export); a full
+    -- listing packs what it uploaded itself.
+    if uploaded and not run.full_listed then self.status.last_upload = d.now() end
     -- This device's own folder must change date with its upload.
     if result.ok then
-        local uploaded = (result.uploaded and result.uploaded.verified) or (result.ann_uploaded and result.ann_uploaded.verified)
-            or (result.book_uploaded and result.book_uploaded.verified)
-            or (result.id_uploaded and result.id_uploaded.verified)
         self.status.own_check = uploaded and result.own_reliable and result.own_modified or nil
     end
     run.folders = result.folders
@@ -868,6 +894,10 @@ function Engine:_finish(run)
     if run.full_listed then
         if run.stats then st.last_full_list = run.full_listed end
         if run.ann then st.ann_last_full_list = run.full_listed end
+        st.full_listed_at = run.full_listed
+    elseif run.full_list_skipped and not run.full_list and not run.error then
+        -- Not needed (see _export): due again in a day.
+        for _, key in ipairs(run.due_keys or {}) do st[key] = d.now() end
     end
     if not run.error then
         st.last_success = d.now()

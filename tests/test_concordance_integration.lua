@@ -231,6 +231,35 @@ A.device_name, A.plugin_versions = nil, nil
 sync({ A })
 check(remoteMeta(A).deviceName == "Simulated A", "back to the old name")
 
+-- A full listing due, on a device that has sent nothing since the last one:
+-- skipped (the day starts again), unless something else needs one.
+do
+    local st, now = A.engine.status, os.time()
+    local function dueAgo(full_ago)
+        st.last_full_list, st.ann_last_full_list = now - 25 * 3600, now - 25 * 3600
+        st.full_listed_at = now - full_ago
+    end
+    dueAgo(2 * 86400)
+    st.last_upload = now - 30 * 3600
+    sync({ A })
+    check(not A.last_run.full_listed and st.last_full_list >= now and st.ann_last_full_list < now,
+        "nothing sent since the last full listing: skipped, due again in a day (statistics only: annotations' left)")
+    dueAgo(2 * 86400)
+    st.last_upload = now - 3600
+    sync({ A })
+    check(A.last_run.full_listed and st.full_listed_at >= now, "something sent since: full listing")
+    dueAgo(8 * 86400)
+    st.last_upload = nil
+    sync({ A })
+    check(A.last_run.full_listed, "none for a week: full listing even with nothing sent")
+    A.engine:request("manual", { interactive = true })
+    loop:run(300)
+    check(A.last_run.full_listed, "Sync now: always a full listing")
+    local full_at = st.full_listed_at
+    sync({ A })
+    check(not A.last_run.full_listed and st.full_listed_at == full_at, "not due: an ordinary sync")
+end
+
 -- 2. Interleaved reading -----------------------------------------------------------
 for round = 1, 4 do
     for i, d in ipairs({ A, B, C }) do

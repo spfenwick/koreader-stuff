@@ -137,7 +137,7 @@ identity in IDENTITY.md.
   import carries it forward inside its write transaction (nothing else can
   write then). `rowid` is only part of a change detector here: VACUUM
   renumbering just causes a full diff. A full diff also runs on every full
-  listing (daily, and on "Sync now"). A false "unchanged" needs the same row
+  listing ("Sync now"), and daily when one is due, even if it's skipped. A false "unchanged" needs the same row
   count, highest rowid and total duration with different data, which
   KOReader's writes (inserts, deletions, durations that only grow) don't
   produce.
@@ -179,7 +179,10 @@ identity in IDENTITY.md.
   nothing new that's one small request per device. A full listing of every
   folder runs on the first sync, on "Sync now" (and so on "Rebuild from
   cloud"), and once every 24 hours, and finds anything out of sequence
-  (gaps, stray files). Downloads are checked against the listed size when
+  (gaps, stray files). An automatic sync skips the daily one when the
+  device has sent nothing since the last (nothing of its own to pack), no
+  pack's segments are due for deletion, and it's been less than a week
+  (`full_list_max_interval`) since one ran; the day then starts again. Downloads are checked against the listed size when
   known; the trailer catches truncation either way.
 - A device imports **its own folder's** segments it doesn't know, which is
   how a device restored from an old backup gets its later data back.
