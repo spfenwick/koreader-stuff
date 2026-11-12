@@ -287,20 +287,20 @@ function HistSync:apply(force)
     end
     if n > 0 then
         if manual and rh.updateDateTimeString then rh:updateDateTimeString() end
-        -- ZenOS's "last read" order is cached while the history's length and
-        -- first and last entries (the tables) stay the same, so a book put
-        -- in the middle went unnoticed. A new first entry (same contents)
-        -- makes it sort again.
-        if rh.hist[1] then
-            local first = {}
-            for k, v in pairs(rh.hist[1]) do first[k] = v end
-            rh.hist[1] = first
-        end
         -- Only cloud entries changed, or the last addItem didn't save: there's
         -- no public call that only saves the history.
         if not flushed then
             if rh._reduce then rh:_reduce() end
             if rh._flush then rh:_flush() end
+        end
+        -- Read back from the file just saved, so every entry is a new table.
+        -- ZenOS's "last read" order is cached while the history's length and
+        -- first and last entries (the tables) stay the same, so a book moved
+        -- in the middle went unnoticed. (Cloud library's hooks keep cloud
+        -- entries as they are through the re-read.)
+        if rh.reload then
+            local ok, err = pcall(rh.reload, rh, true)
+            if not ok then self.log.warn("Concordance: re-reading the history failed:", err) end
         end
         pcall(self.deps.refresh_ui or function() self.deps.finder:_refreshUI() end, moved)
         self.log.info("Concordance: put", n, "books read elsewhere into the history")

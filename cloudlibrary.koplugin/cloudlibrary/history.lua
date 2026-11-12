@@ -133,22 +133,13 @@ local function remember(rh)
     if signature(list) ~= signature(old) then History.save("history_cloud", list) end
 end
 
---- Inserts an entry at its time position (the history is newest first).
 local function copy(t)
     local c = {}
     for k, v in pairs(t) do c[k] = v end
     return c
 end
 
--- ZenOS's "last read" sort keeps its own index of the history while the
--- history's length and first and last entries (the tables) stay the same,
--- so an entry changed in the middle went unnoticed: a deleted book's cloud
--- entry sorted by date added until the history was next reloaded. A new
--- first entry (same contents) makes ZenOS build its index again.
-local function historyChanged(rh)
-    if rh.hist[1] then rh.hist[1] = copy(rh.hist[1]) end
-end
-
+--- Inserts an entry at its time position (the history is newest first).
 local function insertAt(rh, file, time)
     local at = rh.getIndexByTime and rh:getIndexByTime(time, (file:gsub(".*/", ""))) or 1
     table.insert(rh.hist, at, {
@@ -302,8 +293,15 @@ function History.reconcile()
         changed = true
     end
     if changed then
-        historyChanged(rh)
         rh:_flush()
+        -- Read back from the file just saved, so every entry is a new table.
+        -- ZenOS's "last read" sort keeps its own index of the history while
+        -- the history's length and first and last entries (the tables) stay
+        -- the same, so an entry changed in the middle went unnoticed: a
+        -- deleted book's cloud entry sorted by date added until the history
+        -- was next reloaded. Our _read and clearMissing hooks keep cloud
+        -- entries as they are through the re-read.
+        rh:reload(true)
     end
 end
 

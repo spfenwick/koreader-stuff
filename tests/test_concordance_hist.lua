@@ -36,7 +36,19 @@ local function tick(n) clock = clock + (n or 1) end
 local RH = {}
 RH.__index = RH
 local function newRH() return setmetatable({ hist = {}, size = 500, flushes = 0 }, RH) end
-function RH:reload() end
+-- As KOReader's with force_read: the saved history read back, every entry
+-- a new table.
+function RH:reload(force_read)
+    if not force_read then return end
+    self.reloads = (self.reloads or 0) + 1
+    local fresh = {}
+    for i, v in ipairs(self.hist) do
+        local e = {}
+        for k, x in pairs(v) do e[k] = x end
+        fresh[i] = e
+    end
+    self.hist = fresh
+end
 function RH:getIndexByFile(file)
     for i, v in ipairs(self.hist) do if v.file == file then return i end end
 end
@@ -196,8 +208,8 @@ do
     round(A, B)
     check(A.rh:files() == "three,two,one", "A has B's book in time order: " .. A.rh:files())
     -- ZenOS caches the "last read" order while hist[1] is the same table.
-    check(A.rh.hist[1] ~= A_first and A.rh.hist[1].file == A_first.file
-        and A.rh.hist[1].time == A_first.time, "A's first entry replaced by a copy")
+    check(A.rh.reloads == 1 and A.rh.hist[1] ~= A_first and A.rh.hist[1].file == A_first.file
+        and A.rh.hist[1].time == A_first.time, "A's history read back after saving: new tables")
     check(A.refreshed and #A.refreshed == 1 and A.refreshed[1] == a2,
         "views refreshed for the book put into the history")
     check(B.rh:files() == "three,two,one", "B has A's books in time order: " .. B.rh:files())

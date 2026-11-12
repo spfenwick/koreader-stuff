@@ -1699,9 +1699,12 @@ do
         "deleted: the cloud entry again, before the reload")
     eq(ReadHistory:getIndexByFile(cloud1), 2, "in the same place")
     check(ReadHistory.hist[2] ~= moved, "moved entry is a new table")
+    check(not ReadHistory.hist[2].dim and not ReadHistory.hist[2].select_enabled,
+        "the cloud entry kept as one through the re-read")
     check(ReadHistory.hist[1] ~= first and ReadHistory.hist[1].file == down and ReadHistory.hist[1].time == 300,
-        "first entry replaced by a copy")
-    check(#ReadHistory.hist == len and ReadHistory.hist[#ReadHistory.hist] == last, "length and last unchanged")
+        "history read back after saving: a new first entry")
+    check(#ReadHistory.hist == len and ReadHistory.hist[#ReadHistory.hist] ~= last
+        and ReadHistory.hist[#ReadHistory.hist].file == last.file, "same length and entries, new tables")
     -- ZenOS's Home forgets the file and the cloud entry and is rebuilt.
     local forgot, rebuilt = {}, 0
     local real_fm = FileManager.instance
