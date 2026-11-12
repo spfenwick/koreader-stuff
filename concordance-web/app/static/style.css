@@ -66,6 +66,7 @@ h1 { font-size: 1.6rem; line-height: 1.25; margin: 0; font-weight: 650; letter-s
 h2 { font-size: 1.05rem; margin: 0 0 .6rem; font-weight: 650; }
 h3 { font-size: .95rem; margin: 1.4rem 0 .5rem; }
 code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text-2); word-break: break-all; }
+code.nowrap { white-space: nowrap; word-break: normal; }
 .muted { color: var(--muted); }
 .small { font-size: .85rem; }
 .count { color: var(--muted); font-weight: 450; font-size: .8em; margin-left: .3rem; }
