@@ -144,6 +144,7 @@ tr:last-child td { border-bottom: 0; }
 @media (max-width: 640px) {
   table.books th:nth-child(n+4), table.books td:nth-child(n+4) { display: none; }
   .page table { display: block; overflow-x: auto; }
+  table.devices th:nth-child(2), table.devices td:nth-child(2) { display: none; }
 }
 
 /* Books */
