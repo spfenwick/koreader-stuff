@@ -31,7 +31,8 @@
     <tbody>
     {% for d in devices %}
     <tr>
-      <td>{{ d.name or '—' }}</td><td><code class="nowrap">{{ d.id }}</code></td>
+      <td>{{ d.name or '—' }}{% set pv = plugin_versions.get(d.id) %}{% if pv %}
+        <span class="device-versions small muted">{% for p in pv %}<span{% if p.behind %} class="behind" title="Older than on another device"{% endif %}>{{ p.name }} {{ p.version }}</span>{{ ' · ' if not loop.last }}{% endfor %}</span>{% endif %}</td><td><code class="nowrap">{{ d.id }}</code></td>
       <td class="num">{{ d.counts.stats or 0 }}</td><td class="num">{{ d.counts.ann or 0 }}</td>
       <td class="num">{{ d.counts.book or 0 }}</td><td class="num">{{ d.counts.id or 0 }}</td>
       <td class="num">{{ seen.get(d.id, 0) }}</td>
@@ -42,7 +43,9 @@
     {% endfor %}
     </tbody>
   </table>
-  <p class="muted small">Counts are files on the server. A device's packs replace its small files a week after they're made, so these go down as well as up.</p>
+  <p class="muted small">Names are each device's "Device hostname" from KOReader's progress sync settings, or its model when that isn't set.
+    Versions are shown once a device has synced with a Concordance that sends them; <span class="behind">highlighted</span> ones are older than on another device.
+    Counts are files on the server. A device's packs replace its small files a week after they're made, so these go down as well as up.</p>
 </section>
 
 {% if bad %}
@@ -51,7 +54,7 @@
   <p class="muted small">Skipped until they change. Devices skip them too.</p>
   <table>
     <thead><tr><th scope="col">Device</th><th scope="col">File</th><th scope="col">Why</th></tr></thead>
-    <tbody>{% for dev, name, reason in bad %}<tr><td><code class="nowrap">{{ dev }}</code></td><td><code>{{ name }}</code></td><td>{{ reason }}</td></tr>{% endfor %}</tbody>
+    <tbody>{% for dev, name, reason in bad %}<tr><td>{% if device_names.get(dev) %}{{ device_names[dev] }}{% else %}<code class="nowrap">{{ dev }}</code>{% endif %}</td><td><code>{{ name }}</code></td><td>{{ reason }}</td></tr>{% endfor %}</tbody>
   </table>
 </section>
 {% endif %}

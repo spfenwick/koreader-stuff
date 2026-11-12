@@ -90,8 +90,8 @@ local QUOTES = {
 }
 
 local DEVICES = {
-    { id = "a1f3c09e2b7d4e15", name = "Kobo Libra 2" },
-    { id = "7c2e91d04f6a3b88", name = "Pixel 8" },
+    { id = "a1f3c09e2b7d4e15", name = "Kobo Libra 2", versions = { concordance = "0.2.3", cloudlibrary = "0.7.1" } },
+    { id = "7c2e91d04f6a3b88", name = "Pixel 8", versions = { concordance = "0.2.2" } },
 }
 
 local NOW = 1794000000 -- 2026-11-07
@@ -110,7 +110,7 @@ end
 
 local function writeMeta(dev)
     local f = assert(io.open(out .. "/devices/" .. dev.id .. "/meta.json", "wb"))
-    f:write(Codec.encode{ deviceId = dev.id, deviceName = dev.name, schema = 1, createdAt = NOW })
+    f:write(Codec.encode{ deviceId = dev.id, deviceName = dev.name, schema = 1, createdAt = NOW, versions = dev.versions })
     f:close()
 end
 

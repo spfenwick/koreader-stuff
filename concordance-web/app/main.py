@@ -477,6 +477,39 @@ def read_devices() -> list[dict]:
         return []
 
 
+PLUGIN_NAMES = {"concordance": "Concordance", "cloudlibrary": "Cloud library"}
+
+
+def _version_key(v: str) -> tuple:
+    """"0.10.2" sorts after "0.9.1"; anything after the numbers is ignored."""
+    parts = []
+    for p in v.split("."):
+        digits = "".join(c for c in p if c.isdigit()) if p[:1].isdigit() else ""
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+def plugin_versions(devices: list[dict]) -> dict[str, list[dict]]:
+    """Each device's plugin versions, Concordance first, marked when older than
+    the newest any device reports."""
+    newest: dict[str, tuple] = {}
+    for d in devices:
+        for plugin, v in (d.get("versions") or {}).items():
+            if isinstance(v, str):
+                newest[plugin] = max(newest.get(plugin, ()), _version_key(v))
+    order = list(PLUGIN_NAMES)
+    out = {}
+    for d in devices:
+        vs = {k: v for k, v in (d.get("versions") or {}).items() if isinstance(v, str)}
+        out[d.get("id")] = [
+            {"name": PLUGIN_NAMES.get(k, k), "version": v, "behind": _version_key(v) < newest[k]}
+            for k, v in sorted(vs.items(), key=lambda kv: (order.index(kv[0]) if kv[0] in order else len(order), kv[0]))
+        ]
+    return out
+
+
 async def versions_page(request: Request):
     books, *_ = snapshot()
     items = sorted((b for b in books.values() if len(b.editions) > 1), key=lambda b: b.title.casefold())
@@ -501,7 +534,9 @@ async def status_page(request: Request):
         finally:
             conn.close()
     *_, counts = snapshot()
+    names = {d.get("id"): d.get("name") for d in devices}
     return render(request, "status.html", devices=devices, bad=bad, seen=seen, counts=counts,
+                  device_names=names, plugin_versions=plugin_versions(devices),
                   state=syncer.state, reading_dir=READING_DIR, loaded_at=library.loaded_at, interval=INTERVAL)
 
 

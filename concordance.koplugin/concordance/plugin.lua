@@ -136,6 +136,50 @@ function Plugin.deviceId()
     return d.device_id
 end
 
+--- This device's name: the "Device hostname" set in KOReader's progress sync
+-- plugin, so it reads the same in both, else the device model. Read from
+-- that plugin's settings file each time, so a change shows at the next sync.
+function Plugin.deviceName()
+    local ok, host = pcall(function()
+        local s = require("luasettings"):open(DataStorage:getSettingsDir() .. "/kosync.lua"):readSetting("settings")
+        return type(s) == "table" and s.kosync_hostname or nil
+    end)
+    if ok and type(host) == "string" then
+        host = host:gsub("^%s+", ""):gsub("%s+$", "")
+        if host ~= "" then return host:sub(1, 64) end
+    end
+    return Device.model
+end
+
+-- This plugin's folder (…/plugins/concordance.koplugin), from this file's path.
+local function ownDir()
+    local src = debug.getinfo(1, "S").source
+    return type(src) == "string" and src:match("^@(.+)/concordance/plugin%.lua$") or nil
+end
+
+local function metaVersion(path)
+    local f = io.open(path, "rb")
+    if not f then return nil end
+    local text = f:read("*a")
+    f:close()
+    return text and text:match('version%s*=%s*"([%w%.%-%+]+)"')
+end
+
+--- Versions of Concordance and Cloud library (when installed and not turned
+-- off) on this device, read from their _meta.lua, for meta.json.
+function Plugin.pluginVersions()
+    local own = ownDir()
+    if not own then return nil end
+    local dir = own:match("^(.*)/[^/]+$") or "."
+    local out = {}
+    out.concordance = metaVersion(own .. "/_meta.lua")
+    local disabled = G_reader_settings and G_reader_settings:readSetting("plugins_disabled")
+    if not (type(disabled) == "table" and disabled.cloudlibrary) then
+        out.cloudlibrary = metaVersion(dir .. "/cloudlibrary.koplugin/_meta.lua")
+    end
+    return out
+end
+
 function Plugin.resetDeviceId()
     Plugin.deviceState().device_id = nil
     return Plugin.deviceId()
@@ -522,7 +566,8 @@ function Plugin.engine()
         store = store,
         logger = logger,
         status = Plugin.deviceState().status,
-        device_name = Device.model,
+        device_name = Plugin.deviceName,
+        plugin_versions = Plugin.pluginVersions,
         work_dir = p.work,
         tmp_dir = p.tmp,
         time_limit = s.time_limit,

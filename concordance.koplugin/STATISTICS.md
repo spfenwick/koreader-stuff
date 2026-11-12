@@ -21,7 +21,9 @@ mixing them gives confusing results.
 ```
 <folder on server>/Reading/       /KOReader/Reading unless changed
   devices/<device-id>/
-    meta.json                     device ID, model, format version, when written
+    meta.json                     device ID, name (progress sync's "Device hostname",
+                                  else the model), plugin versions, format version,
+                                  when written
     seg-0000000001.jsonl.zst      segment files, numbered 1, 2, 3, …
     seg-0000000002.jsonl.zst
     …

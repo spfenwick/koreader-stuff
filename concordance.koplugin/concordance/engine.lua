@@ -26,7 +26,9 @@ Everything KOReader-specific is passed in (`deps`), so tests can drive it:
     flush()               make the statistics plugin write its pending data
     afterImport(ids)      refresh what's shown for these book ids
     getDeviceId()         -> id
-    device_name, work_dir, tmp_dir
+    device_name           a string, or a function giving it (read each sync)
+    plugin_versions       optional, { [plugin] = version }, or a function giving it
+    work_dir, tmp_dir
     saveStatus(status)    persist the status table
     onDone(status, run)   optional, after every cycle (e.g. tell the user)
     logger, time_limit, poll_interval, max_events, max_download_bytes
@@ -374,12 +376,25 @@ function Engine:_export(run)
         local seq = NetJob.STREAMS[p.stream].seq(name)
         if seq and seq > (packed[p.stream] or 0) then packed[p.stream] = seq end
     end
-    local packed_key = next(packed) and Codec.encode(packed) or nil
+    -- The device's name and plugin versions too, for other devices and the
+    -- web app; any change to them, or to packed, writes meta.json again.
+    local name = d.device_name
+    if type(name) == "function" then
+        local ok, got = pcall(name)
+        name = ok and got or nil
+    end
+    name = type(name) == "string" and name or ""
+    local versions = d.plugin_versions
+    if type(versions) == "function" then
+        local ok, got = pcall(versions)
+        versions = ok and got or nil
+    end
+    versions = type(versions) == "table" and next(versions) and versions or nil
     writeFileAtomic(meta_path, Codec.encode{
-        deviceId = run.device_id, deviceName = d.device_name or "", schema = Codec.VERSION,
-        createdAt = d.now(), packed = next(packed) and packed or nil,
+        deviceId = run.device_id, deviceName = name, schema = Codec.VERSION,
+        createdAt = d.now(), packed = next(packed) and packed or nil, versions = versions,
     })
-    run.meta_key = packed_key
+    run.meta_key = Codec.encode{ name = name, packed = packed, versions = versions or {} }
     -- Packing, on full listings (see netjob.lua and pack.lua).
     local pack_params
     if run.full_list and d.pack then

@@ -101,6 +101,7 @@ stub("luasettings", {
             file = path,
             data = ok and type(data) == "table" and data or {},
             flush = function(self) S.writeFile(self.file, "return " .. serialize(self.data) .. "\n") end,
+            readSetting = function(self, k) return self.data[k] end,
         }
     end,
 })
@@ -633,6 +634,33 @@ do
     um.getTopmostVisibleWidget = old_top
     package.loaded["apps/filemanager/filemanager"] = old_fm
     package.loaded["common/shared_state"] = old_shared
+end
+
+-- The device's name: progress sync's "Device hostname", else the model.
+do
+    local kosync = dev.dir .. "/kosync.lua"
+    os.remove(kosync)
+    check(P.deviceName() == "Test device", "no progress sync settings: the device model")
+    S.writeFile(kosync, 'return { settings = { kosync_hostname = "  Bedside Kobo " } }\n')
+    check(P.deviceName() == "Bedside Kobo", "progress sync's device hostname, trimmed")
+    S.writeFile(kosync, 'return { settings = { kosync_hostname = "   " } }\n')
+    check(P.deviceName() == "Test device", "blank hostname: the device model")
+    S.writeFile(kosync, 'return { settings = { auto_sync = true } }\n')
+    check(P.deviceName() == "Test device", "no hostname set: the device model")
+    os.remove(kosync)
+end
+
+-- Plugin versions, from the _meta.lua files.
+do
+    local function metaVersion(path)
+        return S.readFile(path):match('version%s*=%s*"([^"]+)"')
+    end
+    local v = P.pluginVersions()
+    check(v and v.concordance == metaVersion("concordance.koplugin/_meta.lua"), "Concordance's version")
+    check(v.cloudlibrary == metaVersion("cloudlibrary.koplugin/_meta.lua"), "Cloud library's version, when installed")
+    settings_data.plugins_disabled = { cloudlibrary = true }
+    check(P.pluginVersions().cloudlibrary == nil, "no Cloud library version when it's turned off")
+    settings_data.plugins_disabled = nil
 end
 
 server.stop()

@@ -57,6 +57,14 @@ else
     echo "smoke: version $web_version not shown at the bottom of the page" >&2
     fail=1
 fi
+# Plugin versions on the status page, the Pixel's Concordance marked as behind.
+status=$(curl -sf "$base/status")
+if echo "$status" | grep -q 'Cloud library 0.7.1' && echo "$status" | grep -q 'class="behind"[^>]*>Concordance 0.2.2<'; then
+    echo "200 plugin versions shown"
+else
+    echo "smoke: plugin versions not shown on the status page, or the older one not marked" >&2
+    fail=1
+fi
 # Versions: the two files of Pride and Prejudice, joined by their UUID, with different texts.
 versions=$(curl -sf "$base/versions")
 if echo "$versions" | grep -q '1a2b3c4d-0000-4000-8000-000000000001' && echo "$versions" | grep -q '2 texts'; then

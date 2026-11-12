@@ -131,8 +131,17 @@ if isDir(devices_dir) then
             local meta = readFile(dir .. "/meta.json")
             local ok, m = pcall(Codec.decode, meta or "")
             if ok and type(m) == "table" then
-                dev.name = type(m.deviceName) == "string" and m.deviceName or nil
+                dev.name = type(m.deviceName) == "string" and m.deviceName ~= "" and m.deviceName:sub(1, 64) or nil
                 dev.meta_written = tonumber(m.createdAt)
+                -- Plugin versions (sent by newer Concordance): short strings only.
+                if type(m.versions) == "table" then
+                    for plugin, v in pairs(m.versions) do
+                        if type(plugin) == "string" and #plugin <= 32 and type(v) == "string" and #v <= 32 then
+                            dev.versions = dev.versions or {}
+                            dev.versions[plugin] = v
+                        end
+                    end
+                end
             end
             for name in lfs.dir(dir) do
                 local attr = name:sub(1, 1) ~= "." and lfs.attributes(dir .. "/" .. name)
@@ -213,7 +222,7 @@ end
 local list = {}
 for _, dev in pairs(devices) do
     list[#list + 1] = { id = dev.id, name = dev.name, newest = dev.newest, meta_written = dev.meta_written,
-                        counts = dev.counts }
+                        counts = dev.counts, versions = dev.versions }
 end
 table.sort(list, function(a, b) return a.id < b.id end)
 writeAtomic(data_dir .. "/devices.json", Codec.encode(list))
