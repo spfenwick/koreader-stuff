@@ -35,6 +35,11 @@ mixing them gives confusing results.
     …
 ```
 
+To read these files by hand, `luajit tools/concordance-dump.lua <file or
+device folder>` decompresses them and prints each record with its short
+tags spelled out (`"t":"e"` as `"type":"event"`, `dur` as `duration`, …);
+`--pretty` puts a field on each line, `--dates` shows times as dates.
+
 ### Moving from Statistics/
 
 Until OmniSync 0.5.0 this folder was `<folder on server>/Statistics/`. Before

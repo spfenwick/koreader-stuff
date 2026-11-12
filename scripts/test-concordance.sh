@@ -36,7 +36,7 @@ export STATSYNC_TMP
 
 what=${1:-all}
 case "$what" in
-    unit) "$lua_bin" tests/test_concordance.lua && "$lua_bin" tests/test_concordance_ann.lua && "$lua_bin" tests/test_concordance_book.lua && "$lua_bin" tests/test_concordance_coll.lua && "$lua_bin" tests/test_concordance_hist.lua && "$lua_bin" tests/test_concordance_id.lua && "$lua_bin" tests/test_concordance_updates.lua && "$lua_bin" tests/test_concordance_versions.lua && "$lua_bin" tests/test_concordance_converge.lua ;;
+    unit) "$lua_bin" tests/test_concordance.lua && "$lua_bin" tests/test_concordance_ann.lua && "$lua_bin" tests/test_concordance_book.lua && "$lua_bin" tests/test_concordance_coll.lua && "$lua_bin" tests/test_concordance_hist.lua && "$lua_bin" tests/test_concordance_id.lua && "$lua_bin" tests/test_concordance_updates.lua && "$lua_bin" tests/test_concordance_versions.lua && "$lua_bin" tests/test_concordance_converge.lua && "$lua_bin" tests/test_concordance_dump.lua ;;
     bench) "$lua_bin" tests/bench_concordance.lua ;;
     *)
         "$lua_bin" tests/test_concordance.lua
@@ -50,5 +50,6 @@ case "$what" in
         "$lua_bin" tests/test_concordance_converge.lua
         "$lua_bin" tests/test_concordance_integration.lua
         "$lua_bin" tests/test_concordance_plugin.lua
+        "$lua_bin" tests/test_concordance_dump.lua
         ;;
 esac
