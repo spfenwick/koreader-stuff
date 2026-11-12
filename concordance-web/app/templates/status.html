@@ -26,12 +26,12 @@
 
 <section>
   <h2>Devices</h2>
-  <table>
+  <table class="devices">
     <thead><tr><th scope="col">Device</th><th scope="col">ID</th><th scope="col" class="num">Statistics</th><th scope="col" class="num">Highlights</th><th scope="col" class="num">Book data</th><th scope="col" class="num">Identity</th><th scope="col" class="num">Imported</th><th scope="col" class="num">Newest file</th></tr></thead>
     <tbody>
     {% for d in devices %}
     <tr>
-      <td>{{ d.name or '—' }}</td><td><code>{{ d.id }}</code></td>
+      <td>{{ d.name or '—' }}</td><td><code class="nowrap">{{ d.id }}</code></td>
       <td class="num">{{ d.counts.stats or 0 }}</td><td class="num">{{ d.counts.ann or 0 }}</td>
       <td class="num">{{ d.counts.book or 0 }}</td><td class="num">{{ d.counts.id or 0 }}</td>
       <td class="num">{{ seen.get(d.id, 0) }}</td>
@@ -51,7 +51,7 @@
   <p class="muted small">Skipped until they change. Devices skip them too.</p>
   <table>
     <thead><tr><th scope="col">Device</th><th scope="col">File</th><th scope="col">Why</th></tr></thead>
-    <tbody>{% for dev, name, reason in bad %}<tr><td><code>{{ dev }}</code></td><td><code>{{ name }}</code></td><td>{{ reason }}</td></tr>{% endfor %}</tbody>
+    <tbody>{% for dev, name, reason in bad %}<tr><td><code class="nowrap">{{ dev }}</code></td><td><code>{{ name }}</code></td><td>{{ reason }}</td></tr>{% endfor %}</tbody>
   </table>
 </section>
 {% endif %}
