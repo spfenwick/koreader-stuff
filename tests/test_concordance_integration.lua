@@ -245,6 +245,19 @@ check(C.status.devices == 3, "three devices seen")
 local names = A.status.device_names or {}
 check(names[B.id] == "Simulated " .. B.name and names[C.id] == "Simulated " .. C.name and names[A.id] == nil,
     "other devices' names learnt from their meta.json")
+B.device_name = "Bedside Kobo"
+B.engine.status.last_full_list = 0
+sync({ B })
+sync({ A })
+check((A.status.device_names or {})[B.id] == "Simulated " .. B.name, "a rename isn't read before a full listing")
+A.engine.status.last_full_list = 0
+sync({ A })
+check((A.status.device_names or {})[B.id] == "Bedside Kobo", "a renamed device's new name learnt on the next full listing")
+B.device_name = nil
+B.engine.status.last_full_list, A.engine.status.last_full_list = 0, 0
+sync({ B })
+sync({ A })
+check((A.status.device_names or {})[B.id] == "Simulated " .. B.name, "and renamed back")
 
 -- Same book, different title on one device (edited metadata)
 C:read({ md5 = BOOKS[5].md5, title = "My own title", authors = "Me", pages = 90 }, { { 3, clock + 50, 60 } })

@@ -48,9 +48,11 @@ rely on: a few seconds older than the server's clock) and the streams gone
 through completely, for the caller to record once the downloads are
 imported.
 
-params.named: { [device id] = name } of the devices already named. Up to
-MAX_NAME_FETCHES others have their meta.json read for their name
-(result.device_names).
+params.named: { [device id] = name } of the devices already named, and
+params.meta_tags: { [device id] = tag } of the meta.json each was read from
+(NetJob.metaTag). Up to MAX_NAME_FETCHES others have their meta.json read: a
+device not read yet, or on a full listing, one whose meta.json changed
+(result.device_names, result.device_meta_tags).
 
 Downloads go to tmp_dir, each to a .part file renamed when complete.
 `report(result)` is called after each step that changes the result, so the
@@ -78,7 +80,8 @@ Result: { ok, error, stage, full_listed, uploaded = { name, size, etag,
           deleted = { [pack name] = segments deleted }, left = { [pack name]
           = its segments still there },
           folders = { [id] = { modified, reliable, complete = { [stream] = true } } },
-          device_names = { [id] = name } (devices not in params.named),
+          device_names = { [id] = name } and device_meta_tags = { [id] = tag }
+          (the meta.json files read),
           own_modified, own_reliable, dates_confirmed, dates_unreliable,
           bytes_up, bytes_down, requests }
 (stream is "stats", "ann", "book" or "id").
@@ -95,6 +98,15 @@ local NetJob = {}
 NetJob.DEVICES = "devices"
 --- Other devices' meta.json read per sync for their names.
 NetJob.MAX_NAME_FETCHES = 4
+
+--- What tells one version of a listed (or fetched) file from another: its
+-- etag, else its size and date; nil when the server gives none of them.
+function NetJob.metaTag(e)
+    if type(e) ~= "table" then return nil end
+    if type(e.etag) == "string" and e.etag ~= "" then return "e:" .. e.etag end
+    if e.size or e.modified then return "s:" .. tostring(e.size) .. "@" .. tostring(e.modified) end
+    return nil
+end
 
 --- A folder date is relied on only when it's at least this many seconds
 -- older than the server's clock: a segment moved in during the same second
@@ -253,27 +265,6 @@ function NetJob.run(params, transport, report)
     table.sort(ids)
     result.devices = ids
 
-    -- Names of devices not named yet, from their meta.json (once each, a
-    -- few per sync): to say where a book was last read.
-    if params.named then
-        local asked = 0
-        for _, id in ipairs(ids) do
-            if id ~= own_id and not params.named[id] and asked < NetJob.MAX_NAME_FETCHES then
-                asked = asked + 1
-                local path = params.tmp_dir .. "/name-meta.json.part"
-                local ok = transport:get(NetJob.DEVICES .. "/" .. id .. "/meta.json", path)
-                local f = ok and io.open(path, "rb")
-                local meta = f and Codec.decode(f:read("*a"))
-                if f then f:close() end
-                os.remove(path)
-                if type(meta) == "table" and type(meta.deviceName) == "string" then
-                    result.device_names = result.device_names or {}
-                    result.device_names[id] = meta.deviceName:sub(1, 64)
-                end
-            end
-        end
-    end
-
     -- This device's own folder kept its date across the upload last time:
     -- dates on this server don't follow changes.
     local own_date = dates[own_id]
@@ -318,6 +309,52 @@ function NetJob.run(params, transport, report)
             end
         end
     end
+    -- Other devices' names, from their meta.json (a few per sync): to say
+    -- where a book was last read. Each is read once, then again when a full
+    -- listing shows its meta.json changed (a new name or plugin version).
+    if params.named then
+        local named, tags = params.named, params.meta_tags or {}
+        local asked = 0
+        for _, id in ipairs(ids) do
+            if id ~= own_id and asked < NetJob.MAX_NAME_FETCHES then
+                local listed, listed_tag = listings[id], nil
+                if listed then
+                    for _, e in ipairs(listed) do
+                        if e.name == "meta.json" and not e.is_dir then listed_tag = NetJob.metaTag(e) or "?"; break end
+                    end
+                end
+                local known = named[id] ~= nil or tags[id] ~= nil
+                local want
+                if listed then
+                    -- No meta.json there: nothing to read. A server that gives
+                    -- nothing to tell versions apart ("?"): read every full listing.
+                    want = listed_tag ~= nil and (not known or listed_tag == "?" or listed_tag ~= tags[id])
+                else
+                    want = not known
+                end
+                if want then
+                    asked = asked + 1
+                    local path = params.tmp_dir .. "/name-meta.json.part"
+                    local ok, info, code = transport:get(NetJob.DEVICES .. "/" .. id .. "/meta.json", path)
+                    local f = ok and io.open(path, "rb")
+                    local meta = f and Codec.decode(f:read("*a"))
+                    if f then f:close() end
+                    os.remove(path)
+                    if ok or code == 404 then
+                        -- "-": none there yet (read when a full listing shows one).
+                        result.device_meta_tags = result.device_meta_tags or {}
+                        result.device_meta_tags[id] = not ok and "-" or listed_tag
+                            or (type(info) == "table" and NetJob.metaTag(info)) or "?"
+                    end
+                    if type(meta) == "table" and type(meta.deviceName) == "string" and meta.deviceName ~= "" then
+                        result.device_names = result.device_names or {}
+                        result.device_names[id] = meta.deviceName:sub(1, 64)
+                    end
+                end
+            end
+        end
+    end
+
     local own_listing = listings[own_id]
     local packed_floor = {} -- stream -> highest packed number, from meta.json on the server
     if own_listing then

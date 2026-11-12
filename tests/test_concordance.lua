@@ -979,8 +979,57 @@ do
     local asked = {}
     for _, l in ipairs(t.log) do if l:find("meta.json", 1, true) then asked[#asked + 1] = l end end
     check(#asked == 1 and asked[1]:find("dev3", 1, true), "named devices aren't asked again")
+    check(r.device_meta_tags and r.device_meta_tags.dev3 == "-", "no meta.json: noted, so it isn't asked every sync")
+    t.log = {}
+    NetJob.run({ device_id = "dev1", seen = {}, tmp_dir = tmp, named = { dev2 = "Kobo Forma" }, meta_tags = { dev3 = "-" } }, t)
+    asked = {}
+    for _, l in ipairs(t.log) do if l:find("meta.json", 1, true) then asked[#asked + 1] = l end end
+    check(#asked == 0, "noted as missing: not asked again without a full listing")
     r = NetJob.run({ device_id = "dev1", seen = {}, tmp_dir = tmp }, t)
     check(r.device_names == nil, "names only read when asked for")
+
+    -- Read again only when a full listing shows its meta.json changed.
+    local function metaGets()
+        local n = {}
+        for _, l in ipairs(t.log) do
+            local id = l:match("^get devices/([^/]+)/meta%.json$")
+            if id then n[#n + 1] = id end
+        end
+        return n
+    end
+    t.log = {}
+    r = NetJob.run({ device_id = "dev1", seen = {}, tmp_dir = tmp, named = {}, full_list = true }, t)
+    local tags = r.device_meta_tags or {}
+    check(tags.dev2 and tags.dev3 == nil and #metaGets() == 1, "full listing: meta.json read, its tag kept; none for a device without one")
+    local named = { dev2 = r.device_names.dev2 }
+    tags.dev3 = "-"
+    t.log = {}
+    r = NetJob.run({ device_id = "dev1", seen = {}, tmp_dir = tmp, named = named, meta_tags = tags, full_list = true }, t)
+    check(#metaGets() == 0 and r.device_names == nil, "unchanged meta.json: not read again")
+    t.files["devices/dev2/meta.json"] = '{"deviceId":"dev2","deviceName":"Bedside Kobo"}'
+    t.log = {}
+    r = NetJob.run({ device_id = "dev1", seen = {}, tmp_dir = tmp, named = named, meta_tags = tags }, t)
+    check(#metaGets() == 0, "renamed, no full listing: not read yet")
+    t.log = {}
+    r = NetJob.run({ device_id = "dev1", seen = {}, tmp_dir = tmp, named = named, meta_tags = tags, full_list = true }, t)
+    check(#metaGets() == 1 and r.device_names and r.device_names.dev2 == "Bedside Kobo"
+        and r.device_meta_tags.dev2 ~= tags.dev2, "renamed: read again on the next full listing")
+    -- Named before tags were kept (an older version): read once to get one.
+    t.log = {}
+    r = NetJob.run({ device_id = "dev1", seen = {}, tmp_dir = tmp, named = { dev2 = "Kobo Forma" }, meta_tags = {}, full_list = true }, t)
+    check(#metaGets() == 1 and r.device_names.dev2 == "Bedside Kobo", "named without a tag: read once on a full listing")
+    -- A nameless meta.json: read once, not every sync.
+    t.files["devices/dev3/meta.json"] = '{"deviceId":"dev3","deviceName":""}'
+    t.log = {}
+    r = NetJob.run({ device_id = "dev1", seen = {}, tmp_dir = tmp, named = named, meta_tags = { dev2 = "x" } }, t)
+    local nameless = r.device_meta_tags or {}
+    check(nameless.dev3 and not (r.device_names or {}).dev3, "nameless device: tag kept, no name")
+    t.log = {}
+    NetJob.run({ device_id = "dev1", seen = {}, tmp_dir = tmp, named = named, meta_tags = { dev2 = "x", dev3 = nameless.dev3 } }, t)
+    check(#metaGets() == 0, "nameless device: not read again until it changes")
+    -- Tags: etag first, else size and date, else none.
+    check(NetJob.metaTag{ etag = '"abc"', size = 3 } == 'e:"abc"' and NetJob.metaTag{ size = 3, modified = "x" } == "s:3@x"
+        and NetJob.metaTag{} == nil, "metaTag")
 end
 
 S.finish("concordance unit tests")

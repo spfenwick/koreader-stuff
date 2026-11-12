@@ -464,7 +464,7 @@ function Concordance:syncSettings(preview)
         return
     end
     local root = Plugin.settingsRoot()
-    local device = require("device").model or "?"
+    local device = Plugin.deviceName() or "?"
     NetworkMgr:runWhenOnline(function()
         if not preview then
             -- So what's synced is what's in use.

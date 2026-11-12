@@ -408,9 +408,12 @@ they load in doesn't matter:
   the next change: after a sync that brought book data or identity facts
   (or changed the groups), `Identity.changed()` tells Cloud library,
   which redraws what's on screen.
-- Device names: each device's `meta.json` already held its name; the
-  network step now reads it once for each device not named yet (up to 4
-  a sync, `params.named`, kept in the status as `device_names`).
+- Device names: each device's `meta.json` holds its name (progress sync's
+  "Device hostname", else the model); the network step reads it for each
+  device not read yet, and again when a full listing (daily) shows that
+  `meta.json` changed, by its etag, else size and date (up to 4 a sync,
+  `params.named` and `params.meta_tags`, kept in the status as
+  `device_names` and `device_meta_tags`).
 - Shown on cloud books: the badge is the cloud with a check, play or pause
   mark cut out (finished, reading, on hold); the details sheet has a line
   such as "Finished · ★★★★☆ · Last read 5 Oct 2026 on Kobo Forma".

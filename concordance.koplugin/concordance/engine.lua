@@ -436,6 +436,7 @@ function Engine:_export(run)
         folders = dates_known and self.status.folders or nil,
         own_check = dates_ok and self.status.own_check or nil,
         named = self.status.device_names or {},
+        meta_tags = self.status.device_meta_tags or {},
     }
     local result_path = run.result_path
     local makeTransport = d.makeTransport
@@ -511,6 +512,13 @@ function Engine:_collect(run)
             if type(id) == "string" and type(name) == "string" then names[id] = name end
         end
         self.status.device_names = names
+    end
+    if type(result.device_meta_tags) == "table" and next(result.device_meta_tags) then
+        local tags = self.status.device_meta_tags or {}
+        for id, tag in pairs(result.device_meta_tags) do
+            if type(id) == "string" and type(tag) == "string" then tags[id] = tag end
+        end
+        self.status.device_meta_tags = tags
     end
     run.missing_own = result.missing_own
     if result.full_listed and not run.killed then run.full_listed = d.now() end
