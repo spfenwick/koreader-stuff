@@ -852,6 +852,11 @@ stub("ffi/util", {
     end,
 })
 
+-- This stand-in KOReader has only what settings sync uses, so Concordance's
+-- start-up check would rightly find the rest missing. Its messages are kept
+-- out of this test's (tests/test_concordance_problems.lua covers them).
+require("concordance/problems").enable = function() end
+
 -- A copy of the plugin, next to OmniSync (still on).
 local plugin_copy = base .. "/plugins/concordance.koplugin"
 os.execute("mkdir -p " .. q(plugin_copy) .. " && cp -r concordance.koplugin/. " .. q(plugin_copy))
