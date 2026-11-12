@@ -4,7 +4,8 @@ The network part of a sync. Runs in a subprocess; doesn't touch any database.
 With a transport (see webdav.lua) rooted at <configured folder>/Reading:
 
 1. List devices/ (PROPFIND, Depth 1). Create the folders on first use, and
-   this device's meta.json.
+   this device's meta.json; write it again when it changed (params.rewrite_meta),
+   on any sync.
 2. On a full listing (first sync, "Sync now", rebuild, and once a day): list
    every device folder too. This also deletes this device's leftover
    temporary uploads and finds segments out of sequence.
@@ -185,7 +186,7 @@ end
 --  expect_own, and for annotations
 --  ann = { pending = { path, size } | nil, bad } (seen is shared: names differ),
 --  and for book data and book identity, book and id (the same shape); rewrite_meta (this device's
---  meta.json on the server is out of date: written on a full listing);
+--  meta.json on the server is out of date: written on this sync);
 --  folders ({ [id] = { modified,
 --  streams = { [stream] = true } } }, nil when the server's dates can't be
 --  trusted) and own_check (see above); and pack = { after = { [stream] =
@@ -357,29 +358,56 @@ function NetJob.run(params, transport, report)
 
     local own_listing = listings[own_id]
     local packed_floor = {} -- stream -> highest packed number, from meta.json on the server
+    local function readOwnMeta()
+        local path = params.tmp_dir .. "/own-meta.json.part"
+        local ok = transport:get(own .. "/meta.json", path)
+        local f = ok and io.open(path, "rb")
+        local meta = f and Codec.decode(f:read("*a"))
+        if f then f:close() end
+        os.remove(path)
+        if type(meta) == "table" and type(meta.packed) == "table" then
+            for k, v in pairs(meta.packed) do
+                if type(v) == "number" then packed_floor[k] = v end
+            end
+        end
+    end
+    -- Writes this device's meta.json, keeping any higher packed number the
+    -- server's copy gave (a device restored from an old backup knows fewer
+    -- packs than it made).
+    local function writeOwnMeta()
+        local path = params.meta_path
+        local f = io.open(path, "rb")
+        local meta = f and Codec.decode(f:read("*a"))
+        if f then f:close() end
+        if type(meta) == "table" then
+            local raised = false
+            for k, v in pairs(packed_floor) do
+                meta.packed = meta.packed or {}
+                if v > (tonumber(meta.packed[k]) or 0) then meta.packed[k] = v; raised = true end
+            end
+            if raised then
+                path = params.tmp_dir .. "/own-meta.json.new"
+                local out = io.open(path, "wb")
+                if out then out:write(Codec.encode(meta)); out:close() else path = params.meta_path end
+            end
+        end
+        local ok, perr = transport:put(own .. "/meta.json", path)
+        if path ~= params.meta_path then os.remove(path) end
+        if ok then result.meta_written = true else segErr("writing meta.json: " .. tostring(perr)) end
+    end
     if own_listing then
         local has_meta = false
         for _, e in ipairs(own_listing) do
             if e.name == "meta.json" then has_meta = true end
             if e.name:match("^%.upload%-.*%.part$") then transport:delete(own .. "/" .. e.name) end
         end
-        if has_meta then
-            local path = params.tmp_dir .. "/own-meta.json.part"
-            local ok = transport:get(own .. "/meta.json", path)
-            local f = ok and io.open(path, "rb")
-            local meta = f and Codec.decode(f:read("*a"))
-            if f then f:close() end
-            os.remove(path)
-            if type(meta) == "table" and type(meta.packed) == "table" then
-                for k, v in pairs(meta.packed) do
-                    if type(v) == "number" then packed_floor[k] = v end
-                end
-            end
-        end
-        if (not has_meta or params.rewrite_meta) and params.meta_path then
-            local ok, perr = transport:put(own .. "/meta.json", params.meta_path)
-            if ok then result.meta_written = true else segErr("writing meta.json: " .. tostring(perr)) end
-        end
+        if has_meta then readOwnMeta() end
+        if (not has_meta or params.rewrite_meta) and params.meta_path then writeOwnMeta() end
+    elseif params.rewrite_meta and params.meta_path then
+        -- An ordinary sync, and the name, plugin versions or packs changed:
+        -- written now rather than at the next full listing (two requests).
+        readOwnMeta()
+        writeOwnMeta()
     end
     update("listed")
 

@@ -490,6 +490,26 @@ do
     check(t.files["devices/dev1/meta.json"] == "{}", "meta.json written")
     check(r.full_listed, "full listing done")
 
+    -- Ordinary sync: meta.json written only when it changed, keeping a
+    -- higher packed number the server's copy has.
+    do
+        local tm = memTransport({ devices = true, ["devices/dev1"] = true, ["devices/dev1/seg-0000000001.jsonl.zst"] = "x",
+                                  ["devices/dev1/meta.json"] = '{"deviceName":"Old","packed":{"stats":7}}' })
+        local m = TMP .. "/regular-meta.json"
+        S.writeFile(m, Codec.encode{ deviceName = "New", versions = { concordance = "1.0.0" }, packed = { ann = 2 } })
+        local seen1 = { dev1 = { ["seg-0000000001.jsonl.zst"] = { size = 1 } } }
+        local rm = NetJob.run({ device_id = "dev1", meta_path = m, seen = seen1, tmp_dir = tmp, expect_own = true }, tm)
+        check(rm.ok and not rm.meta_written and tm.files["devices/dev1/meta.json"]:find("Old", 1, true),
+            "ordinary sync, meta.json unchanged: not written")
+        rm = NetJob.run({ device_id = "dev1", meta_path = m, seen = seen1, tmp_dir = tmp, expect_own = true,
+                          rewrite_meta = true }, tm)
+        local got = Codec.decode(tm.files["devices/dev1/meta.json"])
+        check(rm.ok and rm.meta_written and not rm.full_listed and got.deviceName == "New"
+            and got.versions.concordance == "1.0.0", "ordinary sync, meta.json changed: written")
+        check(got.packed.stats == 7 and got.packed.ann == 2, "the server's higher packed number kept")
+        check(Codec.decode(S.readFile(m)).packed.stats == nil, "local meta.json left as it was")
+    end
+
     -- Full listing: restored device continues after its highest segment, gets its lost ones back
     t.files["devices/dev1/seg-0000000005.jsonl.zst"] = "old"
     t.files["devices/dev1/.upload-dead.part"] = "half"
