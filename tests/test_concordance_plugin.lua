@@ -616,7 +616,9 @@ do
     local um = package.loaded["ui/uimanager"]
     local old_top, old_fm = um.getTopmostVisibleWidget, package.loaded["apps/filemanager/filemanager"]
     local old_shared = package.loaded["common/shared_state"]
-    local fm = { zenos = {} }
+    -- ZenOS's real config: a features table, with no home_page in it (Home
+    -- can't be turned off).
+    local fm = { zenos = { config = { features = { history = true, navbar = true } } } }
     local home_widget, menu = {}, {}
     local top = menu
     local home = { isActiveOnTop = function() return top == home_widget end }

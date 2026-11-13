@@ -374,11 +374,7 @@ local function zenHome()
     local zen = fm.zenos ~= nil or SharedState ~= nil
     if not zen then return nil end
     local why
-    local config = type(fm.zenos) == "table" and fm.zenos.config
-    local features = type(config) == "table" and config.features
-    if type(features) == "table" and features.home_page ~= true then
-        return nil -- Home switched off in ZenOS's settings
-    end
+    -- (ZenOS always has Home: there's no setting that turns it off.)
     if fm.zenos == nil then
         why = "the file browser has no zenos field"
     elseif type(SharedState) ~= "table" or type(SharedState.get) ~= "function" then
