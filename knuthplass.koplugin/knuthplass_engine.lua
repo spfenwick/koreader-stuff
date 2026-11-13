@@ -106,50 +106,47 @@ function Engine.standardLibPath()
     return lfs.currentdir() .. "/libs/libkoreader-cre.so"
 end
 
---- The build commit the open document's engine reports: "" for an engine
--- without it (the standard one, or an early Knuth–Plass build).
-function Engine.installedBuild(document)
-    local cre = document and document._document
-    if not cre or not cre.getStringProperty then return nil end
-    local ok, value = pcall(cre.getStringProperty, cre, Engine.build_property)
-    return ok and value or ""
-end
-
 --- The running engine: its build ("" if it doesn't report one), and
--- whether it has the Knuth–Plass settings. Read from the open book, or
--- with no book open (in the file browser), from an empty document view,
--- which loads the engine if it isn't yet.
+-- whether it has the Knuth–Plass settings.
+--
+-- Read from a new, empty document view (which loads the engine if it isn't
+-- yet), never from an open book: when KOReader opens a book, it loads its
+-- saved defaults (data/cr3.ini) over the engine's properties, and that file
+-- holds every property of the engine that wrote it, so a book can report
+-- the build of an earlier engine. A new view has only the engine's own
+-- defaults.
 -- @return build, supported; or nil if it can't be read
-function Engine.runningEngine(document)
-    local cre_doc = document and document._document
-    local view
-    if not cre_doc then
-        local ok, cre = pcall(function()
-            return require("document/credocument"):engineInit()
-        end)
-        if not ok or type(cre) ~= "table" or not cre.newDocView then
-            logger.warn("KnuthPlass: cannot load the engine:", cre)
-            return nil
-        end
-        -- A document view gets the engine's defaults as it's made.
-        ok, view = pcall(cre.newDocView, 100, 100, 0)
-        if not ok then
-            logger.warn("KnuthPlass: cannot make a document view:", view)
-            return nil
-        end
-        cre_doc = view
+function Engine.runningEngine()
+    local ok, cre = pcall(function()
+        return require("document/credocument"):engineInit()
+    end)
+    if not ok or type(cre) ~= "table" or not cre.newDocView then
+        logger.warn("KnuthPlass: cannot load the engine:", cre)
+        return nil
     end
-    if not cre_doc.getStringProperty then return nil end
+    local view
+    ok, view = pcall(cre.newDocView, 100, 100, 0)
+    if not ok or type(view) ~= "table" and type(view) ~= "userdata" then
+        logger.warn("KnuthPlass: cannot make a document view:", view)
+        return nil
+    end
     local function property(name)
-        local ok, value = pcall(cre_doc.getStringProperty, cre_doc, name)
-        return ok and value or ""
+        local got, value = pcall(view.getStringProperty, view, name)
+        return got and type(value) == "string" and value or ""
     end
     local build = property(Engine.build_property)
     local supported = property(Engine.capability_property) ~= ""
-    if view and view.close then
+    if view.close then
         pcall(view.close, view)
     end
     return build, supported
+end
+
+--- The build commit the running engine reports: "" for an engine without
+-- it (the standard one, or an early Knuth–Plass build), nil if it can't be
+-- read. (See runningEngine for why not from the open book.)
+function Engine.installedBuild()
+    return (Engine.runningEngine())
 end
 
 -- Network ---------------------------------------------------------------------
@@ -742,7 +739,7 @@ function Engine.check(plugin, interactive, mode, fetch, report)
     -- Automatic checks don't load the engine just to look (in the file
     -- browser); they check it when a book is open.
     if not document and not interactive then return false end
-    local current_build, supported = Engine.runningEngine(document)
+    local current_build, supported = Engine.runningEngine()
     if current_build == nil then
         table.insert(report, _("Engine: cannot read which engine is running."))
         return false

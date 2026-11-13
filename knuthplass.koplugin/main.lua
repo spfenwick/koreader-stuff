@@ -494,7 +494,7 @@ end
 function KnuthPlass:onReadSettings(config)
     self.active = self:engineSupported()
     if self.ui.rolling then
-        Engine.verify(Engine.installedBuild(self.ui.document))
+        Engine.verify(Engine.installedBuild())
     end
     if not self.active then
         if self.ui.rolling then
@@ -921,7 +921,7 @@ function KnuthPlass:getDialogButtons()
     })
     local engine_row = {
         {
-            text = T(_("Engine: %1"), Engine.buildText(Engine.installedBuild(self.ui.document))),
+            text = T(_("Engine: %1"), Engine.buildText(Engine.installedBuild())),
             font_size = NAME_FONT_SIZE,
             font_bold = false,
             callback = function()
@@ -967,7 +967,7 @@ end
 function KnuthPlass:showEngineInfo()
     local InfoMessage = require("ui/widget/infomessage")
     -- In the file browser this loads the engine, if it isn't yet.
-    local build, supported = Engine.runningEngine(self.ui.document)
+    local build, supported = Engine.runningEngine()
     local text = T(_("Engine build: %1\nKOReader: %2\nDevice: %3\n\nThe Knuth–Plass engine is a CREngine built from the knuth-plass-history branch of github.com/spfenwick/crengine. \"Check for updates\" also looks for a build for this KOReader version."),
         Engine.buildText(build), tostring(Engine.revision()), tostring(Engine.target()))
     local installed = Engine.installed()

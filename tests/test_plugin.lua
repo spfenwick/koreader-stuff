@@ -575,6 +575,34 @@ do
     assert(Engine.findBuild({ builds = { base1 = entry("abc") } }, "base1", "kobo") == nil)
     assert(Engine.buildId(manifest.builds.fpA.kobo) == "abc/lib-abc.so")
 
+    -- The running engine's build comes from a new view, not the open book
+    -- (whose properties KOReader's saved defaults, data/cr3.ini, may have
+    -- set to an earlier engine's).
+    do
+        local saved = package.loaded["document/credocument"]
+        local closed = false
+        local view = {
+            getStringProperty = function(_, name)
+                if name == "crengine.knuth.plass.build" then return "newbuild" end
+                if name == "crengine.style.justify.tolerance" then return "200" end
+                return ""
+            end,
+            close = function() closed = true end,
+        }
+        package.loaded["document/credocument"] = {
+            engineInit = function() return { newDocView = function() return view end } end,
+        }
+        local build, supported = Engine.runningEngine()
+        assert(build == "newbuild" and supported == true and closed)
+        assert(Engine.installedBuild() == "newbuild")
+        -- No engine to read: unknown.
+        package.loaded["document/credocument"] = {
+            engineInit = function() error("no engine") end,
+        }
+        assert(Engine.runningEngine() == nil and Engine.installedBuild() == nil)
+        package.loaded["document/credocument"] = saved
+    end
+
     -- A KOReader folder of our own, with KOReader's engine.
     local Loader = require("knuthplass_loader")
     local dir = os.tmpname()
