@@ -32,7 +32,7 @@
     {% for d in devices %}
     <tr>
       <td>{{ d.name or '—' }}{% set pv = plugin_versions.get(d.id) %}{% if pv %}
-        <span class="device-versions small muted">{% for p in pv %}<span{% if p.behind %} class="behind" title="Older than on another device"{% endif %}>{{ p.name }} {{ p.version }}</span>{{ ' · ' if not loop.last }}{% endfor %}</span>{% endif %}</td><td><code class="nowrap">{{ d.id }}</code></td>
+        <span class="device-versions small muted">{% for p in pv %}<span{% if p.behind %} class="behind" title="Older than on another device"{% endif %}>{{ p.name }} {{ p.version }}</span>{% if not loop.last %}&nbsp;· {% endif %}{% endfor %}</span>{% endif %}</td><td><code class="nowrap">{{ d.id }}</code></td>
       <td class="num">{{ d.counts.stats or 0 }}</td><td class="num">{{ d.counts.ann or 0 }}</td>
       <td class="num">{{ d.counts.book or 0 }}</td><td class="num">{{ d.counts.id or 0 }}</td>
       <td class="num">{{ seen.get(d.id, 0) }}</td>
