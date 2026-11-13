@@ -27,6 +27,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # The plugin's own modules: the ingester merges with exactly this code.
 COPY concordance.koplugin/concordance /opt/concordance/concordance
+# Its version, shown at the bottom of every page.
+COPY concordance.koplugin/_meta.lua /opt/concordance/_meta.lua
 COPY concordance-web/ingest ./ingest
 COPY concordance-web/app ./app
 

@@ -168,16 +168,32 @@ end
 
 --- Versions of Concordance and Cloud library (when installed and not turned
 -- off) on this device, read from their _meta.lua, for meta.json.
-function Plugin.pluginVersions()
+-- Also KOReader's own version (its short form, such as "2025.10-58") and
+-- ZenOS's, when installed and not turned off. plugins_dir: where to look for
+-- the other plugins (tests); by default the folder Concordance is in.
+--
+-- ZenOS's folders: zenos.koplugin from its releases, zen_ui.koplugin from
+-- before it was renamed (its plugin name then is zen_ui), and its source
+-- folder's name.
+local ZENOS_DIRS = { { "zenos.koplugin", "zenos" }, { "zen_ui.koplugin", "zen_ui" }, { "zen-os.koplugin", "zenos" } }
+
+function Plugin.pluginVersions(plugins_dir)
     local own = ownDir()
     if not own then return nil end
-    local dir = own:match("^(.*)/[^/]+$") or "."
+    local dir = plugins_dir or own:match("^(.*)/[^/]+$") or "."
     local out = {}
     out.concordance = metaVersion(own .. "/_meta.lua")
     local disabled = G_reader_settings and G_reader_settings:readSetting("plugins_disabled")
-    if not (type(disabled) == "table" and disabled.cloudlibrary) then
+    disabled = type(disabled) == "table" and disabled or {}
+    if not disabled.cloudlibrary then
         out.cloudlibrary = metaVersion(dir .. "/cloudlibrary.koplugin/_meta.lua")
     end
+    for _, z in ipairs(ZENOS_DIRS) do
+        local v = not disabled[z[2]] and metaVersion(dir .. "/" .. z[1] .. "/_meta.lua")
+        if v then out.zenos = v break end
+    end
+    local ok, short = pcall(function() return require("version"):getShortVersion() end)
+    if ok and type(short) == "string" and short ~= "" and short ~= "unknown" then out.koreader = short end
     return out
 end
 

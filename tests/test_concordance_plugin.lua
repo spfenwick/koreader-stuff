@@ -663,6 +663,30 @@ do
     settings_data.plugins_disabled = { cloudlibrary = true }
     check(P.pluginVersions().cloudlibrary == nil, "no Cloud library version when it's turned off")
     settings_data.plugins_disabled = nil
+
+    -- KOReader's version and ZenOS's.
+    local old_version = package.loaded["version"]
+    package.loaded["version"] = { getShortVersion = function() return "2025.10-58" end }
+    local plugins = TMP .. "/versions-plugins"
+    S.mkdirp(plugins .. "/zenos.koplugin")
+    check(P.pluginVersions(plugins).zenos == nil, "no ZenOS version when it isn't installed")
+    S.writeFile(plugins .. "/zenos.koplugin/_meta.lua",
+        'return {\n    name = "zenos",\n    version = "4.3.1",\n    fullname = "ZenOS",\n}\n')
+    v = P.pluginVersions(plugins)
+    check(v.zenos == "4.3.1", "ZenOS's version: " .. tostring(v.zenos))
+    check(v.koreader == "2025.10-58", "KOReader's version: " .. tostring(v.koreader))
+    settings_data.plugins_disabled = { zenos = true }
+    check(P.pluginVersions(plugins).zenos == nil, "no ZenOS version when it's turned off")
+    settings_data.plugins_disabled = nil
+    os.remove(plugins .. "/zenos.koplugin/_meta.lua")
+    S.mkdirp(plugins .. "/zen_ui.koplugin")
+    S.writeFile(plugins .. "/zen_ui.koplugin/_meta.lua", 'return { name = "zen_ui", version = "3.9.0" }\n')
+    check(P.pluginVersions(plugins).zenos == "3.9.0", "ZenOS under its old folder name")
+    package.loaded["version"] = { getShortVersion = function() return "unknown" end }
+    check(P.pluginVersions(plugins).koreader == nil, "no KOReader version when it isn't known")
+    package.loaded["version"] = { getShortVersion = function() error("no git-rev") end }
+    check(P.pluginVersions(plugins).koreader == nil, "no KOReader version when reading it fails")
+    package.loaded["version"] = old_version
 end
 
 server.stop()

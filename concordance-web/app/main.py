@@ -16,6 +16,7 @@ import base64
 import binascii
 import json
 import os
+import re
 import secrets
 import sqlite3
 from contextlib import asynccontextmanager
@@ -37,7 +38,7 @@ from .cwa import CWA, CWAError, plain_text
 from .library import STATUS_LABELS, Library
 from .settings import Settings
 from .sync import Syncer
-from .version import VERSION
+from .version import CONCORDANCE_VERSION, VERSION
 
 HERE = Path(__file__).resolve().parent
 READING_DIR = Path(os.environ.get("CONCORDANCE_READING_DIR", "/data/reading"))
@@ -71,7 +72,7 @@ def books_url(request: Request, drop: str) -> str:
 
 
 env.globals.update(STATUS_LABELS=STATUS_LABELS, syncer=syncer, cover_url=cover_url, books_url=books_url,
-                   VERSION=VERSION)
+                   VERSION=VERSION, CONCORDANCE_VERSION=CONCORDANCE_VERSION)
 
 
 def snapshot():
@@ -477,11 +478,20 @@ def read_devices() -> list[dict]:
         return []
 
 
-PLUGIN_NAMES = {"concordance": "Concordance", "cloudlibrary": "Cloud library"}
+# In the order shown. "koreader" is KOReader itself (its short version, such
+# as "2025.10-58": year, month, point release, commits since).
+PLUGIN_NAMES = {"concordance": "Concordance", "cloudlibrary": "Cloud library", "zenos": "ZenOS",
+                "koreader": "KOReader"}
+
+_KOREADER_VERSION = re.compile(r"v?(\d{4})\.(\d{2})(?:\.(\d+))?(?:-(\d+))?")
 
 
-def _version_key(v: str) -> tuple:
-    """"0.10.2" sorts after "0.9.1"; anything after the numbers is ignored."""
+def _version_key(v: str, plugin: str = "") -> tuple:
+    """"0.10.2" sorts after "0.9.1"; anything after the numbers is ignored.
+    KOReader's "2025.10-58" sorts after "2025.10" and before "2025.10.1"."""
+    if plugin == "koreader":
+        m = _KOREADER_VERSION.match(v)
+        return tuple(int(g or 0) for g in m.groups()) if m else ()
     parts = []
     for p in v.split("."):
         digits = "".join(c for c in p if c.isdigit()) if p[:1].isdigit() else ""
@@ -498,13 +508,13 @@ def plugin_versions(devices: list[dict]) -> dict[str, list[dict]]:
     for d in devices:
         for plugin, v in (d.get("versions") or {}).items():
             if isinstance(v, str):
-                newest[plugin] = max(newest.get(plugin, ()), _version_key(v))
+                newest[plugin] = max(newest.get(plugin, ()), _version_key(v, plugin))
     order = list(PLUGIN_NAMES)
     out = {}
     for d in devices:
         vs = {k: v for k, v in (d.get("versions") or {}).items() if isinstance(v, str)}
         out[d.get("id")] = [
-            {"name": PLUGIN_NAMES.get(k, k), "version": v, "behind": _version_key(v) < newest[k]}
+            {"name": PLUGIN_NAMES.get(k, k), "version": v, "behind": _version_key(v, k) < newest[k]}
             for k, v in sorted(vs.items(), key=lambda kv: (order.index(kv[0]) if kv[0] in order else len(order), kv[0]))
         ]
     return out

@@ -1,5 +1,6 @@
 *
 !concordance.koplugin/concordance/
+!concordance.koplugin/_meta.lua
 !concordance-web/requirements.txt
 !concordance-web/ingest/
 !concordance-web/app/

@@ -43,7 +43,7 @@
 <main class="page">
 {% block content %}{% endblock %}
 </main>
-<footer class="foot small muted">Concordance web {{ VERSION }}</footer>
+<footer class="foot small muted">Concordance web {{ VERSION }}{% if CONCORDANCE_VERSION %} · Concordance {{ CONCORDANCE_VERSION }}{% endif %}</footer>
 <div class="tip" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

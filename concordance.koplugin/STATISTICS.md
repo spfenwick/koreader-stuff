@@ -29,8 +29,9 @@ check the tables' columns and add the version.
 <folder on server>/Reading/       /KOReader/Reading unless changed
   devices/<device-id>/
     meta.json                     device ID, name (progress sync's "Device hostname",
-                                  else the model), plugin versions, format version,
-                                  when written
+                                  else the model), plugin versions (Concordance,
+                                  Cloud library, ZenOS) and KOReader's, format
+                                  version, when written
     seg-0000000001.jsonl.zst      segment files, numbered 1, 2, 3, …
     seg-0000000002.jsonl.zst
     …

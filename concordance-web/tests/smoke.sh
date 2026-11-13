@@ -51,15 +51,25 @@ for path in / /books "$book" "$book/highlights.md" /highlights "/highlights?q=wh
 done
 # The app's version at the bottom of every page.
 web_version=$(sed -n 's/^VERSION = "\([0-9][0-9.]*\)".*/\1/p' "$(dirname "$0")/../app/version.py")
-if curl -sf "$base/" | grep -q "Concordance web $web_version<"; then
+if curl -sf "$base/" | grep -q "Concordance web $web_version[ <]"; then
     echo "200 version $web_version shown"
 else
     echo "smoke: version $web_version not shown at the bottom of the page" >&2
     fail=1
 fi
+# The version of the plugin code the image runs, beside it.
+plugin_version=$(sed -n 's/^ *version = "\([0-9][0-9.]*\)".*/\1/p' "$(dirname "$0")/../../concordance.koplugin/_meta.lua")
+if curl -sf "$base/" | grep -q "Concordance $plugin_version<"; then
+    echo "200 Concordance version $plugin_version shown"
+else
+    echo "smoke: Concordance version $plugin_version not shown at the bottom of the page" >&2
+    fail=1
+fi
 # Plugin versions on the status page, the Pixel's Concordance marked as behind.
 status=$(curl -sf "$base/status")
-if echo "$status" | grep -q 'Cloud library 0.7.1' && echo "$status" | grep -q 'class="behind"[^>]*>Concordance 0.2.2<'; then
+if echo "$status" | grep -q 'Cloud library 0.7.1' && echo "$status" | grep -q 'class="behind"[^>]*>Concordance 0.2.2<' \
+    && echo "$status" | grep -q 'ZenOS 4.3.1' && echo "$status" | grep -q '>KOReader 2025.10-58<' \
+    && echo "$status" | grep -q 'class="behind"[^>]*>KOReader 2025.10<'; then
     echo "200 plugin versions shown"
 else
     echo "smoke: plugin versions not shown on the status page, or the older one not marked" >&2
