@@ -789,10 +789,13 @@ do
     state = Loader.readState()
     assert(state.pending and state.attempts == 0 and state.commit == "forky")
     -- A child's failure to load leaves the state alone too.
+    -- (The installed engine is read-only: replaced, as the plugin does.)
+    os.remove(lib)
     write(lib, "\127ELF bad")
     assert(childStart() == "standard")
     state = Loader.readState()
     assert(state.enabled and state.pending and state.failed == nil)
+    os.remove(lib)
     write(lib, data)
     assert(start() == data and Loader.readState().attempts == 1)
     Engine.verify("forky")
