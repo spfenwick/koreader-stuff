@@ -1761,6 +1761,56 @@ do
     eq(Virtual.listItem(fc, Virtual.books[1]).doc_props.title, "Own", "metadata set by a sort is kept")
 end
 
+-- "Rebuilding library…" while the listing is rebuilt after a catalog change ---------------
+
+do
+    local UIManager = require("ui/uimanager")
+    local FileManager = require("apps/filemanager/filemanager")
+    local saved = { show = UIManager.show, close = UIManager.close,
+        forceRePaint = UIManager.forceRePaint, nextTick = UIManager.nextTick }
+    local shown, closed, ticks = {}, {}, {}
+    UIManager.show = function(_self, w) table.insert(shown, w) end
+    UIManager.close = function(_self, w) table.insert(closed, w) end
+    UIManager.forceRePaint = function() end
+    UIManager.nextTick = function(_self, fn) table.insert(ticks, fn) end
+    local real_fm = FileManager.instance
+    FileManager.instance = {}
+
+    Virtual.setCatalog("/lib", { { id = "r1", title = "One" } })
+    Virtual.listingRebuilding() -- whatever earlier tests changed
+    shown, closed, ticks = {}, {}, {}
+    Virtual.setCatalog("/lib", { { id = "r1", title = "One" } })
+    check(not Virtual.listingRebuilding(), "same cloud books: no message")
+    Virtual.setCatalog("/lib", { { id = "r1", title = "One" }, { id = "r2", title = "Two" } })
+    check(Virtual.listingRebuilding(), "cloud books changed: message")
+    eq(#shown, 1, "one message")
+    eq(shown[1] and shown[1].text, "Rebuilding library…", "message text")
+    eq(#closed, 0, "up while the listing is built")
+    for _i, fn in ipairs(ticks) do fn() end
+    check(closed[1] ~= nil and closed[1] == shown[1], "closed on the next tick, before the repaint")
+    check(not Virtual.listingRebuilding(), "once per change")
+
+    -- ZenOS's Home on top, or the file browser hidden behind it: the
+    -- listing is rebuilt out of sight, with no message, and that counts.
+    package.loaded["common/shared_state"] = { get = function(p, key) return p._zen_shared[key] end }
+    FileManager.instance = { zenos = { _zen_shared = { home = { isActiveOnTop = function() return true end } } } }
+    Virtual.setCatalog("/lib", { { id = "r1", title = "One" } })
+    check(not Virtual.listingRebuilding(), "Home on top: no message")
+    check(not Virtual.listingRebuilding(), "the hidden rebuild counts as the rebuild")
+    FileManager.instance = { invisible = true }
+    Virtual.setCatalog("/lib", { { id = "r3", title = "Three" } })
+    check(not Virtual.listingRebuilding(), "file browser hidden: no message")
+    FileManager.instance = { zenos = { _zen_shared = { home = { isActiveOnTop = function() return false end } } } }
+    Virtual.setCatalog("/lib", { { id = "r1", title = "One" } })
+    check(Virtual.listingRebuilding(), "Home not on top: message")
+    eq(#shown, 2, "two messages in all")
+
+    package.loaded["common/shared_state"] = nil
+    FileManager.instance = real_fm
+    for k, fn in pairs(saved) do UIManager[k] = fn end
+    Virtual.setCatalog(nil, {})
+end
+
 -- ZenOS book sources -----------------------------------------------------------------------
 
 do

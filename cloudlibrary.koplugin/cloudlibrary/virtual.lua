@@ -69,14 +69,25 @@ local function signature(folder, books)
     return require("ffi/sha2").md5(table.concat(parts, "\n"))
 end
 
+-- The cloud books listed changed since the library folder was last listed
+-- (not counting the first catalog loaded: ZenOS's saved listing has it).
+local loaded_once = false
+
+local function noteChange(before)
+    if loaded_once and Virtual.catalog_sig ~= before then Virtual.rebuild_pending = true end
+    loaded_once = true
+end
+
 function Virtual.setCatalog(folder, books)
     local old = Virtual.books
+    local before = Virtual.catalog_sig
     Virtual.folder = normalize(folder)
     Virtual.books, Virtual.by_path = {}, {}
     Virtual.generation = Virtual.generation + 1
     -- Turned off (startup check or an error): no cloud books.
     if not Virtual.folder or not Guard.ok("library") then
         Virtual.catalog_sig = signature(Virtual.folder, {})
+        noteChange(before)
         Virtual.notifyChanged(old)
         return
     end
@@ -92,6 +103,7 @@ function Virtual.setCatalog(folder, books)
         end
     end
     Virtual.catalog_sig = signature(Virtual.folder, Virtual.books)
+    noteChange(before)
     Virtual.notifyChanged(old)
 end
 
@@ -112,6 +124,26 @@ end
 function Virtual.listingKey()
     local extra = Virtual.listingExtra and Virtual.listingExtra() or ""
     return Virtual.catalog_sig .. "/" .. extra
+end
+
+--- The library folder's listing is being built (FileChooser:getList, which
+-- ZenOS calls only when its cached listing is out of date). After the
+-- catalog changed, that can take seconds: "Rebuilding library…" is shown
+-- until the folder is drawn. Not while ZenOS's Home is on top: the listing
+-- is then rebuilt out of sight (and the Library tab opens without it).
+-- True if the message was shown.
+function Virtual.listingRebuilding()
+    if not Virtual.rebuild_pending then return false end
+    Virtual.rebuild_pending = false
+    if ZenSource.homeOnTop() then return false end
+    local UIManager = require("ui/uimanager")
+    local InfoMessage = require("ui/widget/infomessage")
+    local msg = InfoMessage:new{ text = _("Rebuilding library…"), dismissable = false }
+    UIManager:show(msg)
+    UIManager:forceRePaint()
+    -- Tasks run before the next repaint, which draws the new listing.
+    UIManager:nextTick(function() UIManager:close(msg) end)
+    return true
 end
 
 -- Call after the catalog changes: redraws the library folder, or a folder
@@ -354,9 +386,15 @@ end
 local function installListing()
     local FileChooser = require("ui/widget/filechooser")
     Guard.hook("library", FileChooser, "getList", function(orig, self, path, collate)
+        local library = self.name == "filemanager" and Virtual.folder
+            and normalize(path) == Virtual.folder
+        if library and collate then
+            -- Only a message: a failure mustn't turn the library off.
+            local ok, err = pcall(Virtual.listingRebuilding)
+            if not ok then logger.warn("CloudLibrary: rebuilding message:", err) end
+        end
         local dirs, files, readable = orig(self, path, collate)
-        if self.name == "filemanager" and Virtual.folder
-                and normalize(path) == Virtual.folder then
+        if library then
             local t0 = Timing.start()
             for _i, book in ipairs(Virtual.books) do
                 if collate then

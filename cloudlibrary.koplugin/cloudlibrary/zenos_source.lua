@@ -293,6 +293,22 @@ function ZenSource.refreshHome(paths)
     if type(home.rebuildActive) == "function" then home.rebuildActive() end
 end
 
+--- True when ZenOS's Home is on top of the file browser, or the file
+-- browser is hidden behind it (ZenOS can start on Home with the file
+-- browser not shown yet).
+function ZenSource.homeOnTop()
+    local FileManager = require("apps/filemanager/filemanager")
+    local fm = FileManager.instance
+    if not fm then return false end
+    if fm.invisible == true then return true end
+    local ok, home = pcall(function()
+        return fm.zenos and require("common/shared_state").get(fm.zenos, "home")
+    end)
+    if not ok or type(home) ~= "table" or type(home.isActiveOnTop) ~= "function" then return false end
+    local ok_top, top = pcall(home.isActiveOnTop)
+    return ok_top and top == true
+end
+
 --- Tells ZenOS the cloud books changed; with paths, also that their covers
 -- or metadata did (ZenOS drops its cached covers for them).
 function ZenSource.changed(paths)
