@@ -18,13 +18,18 @@ processes, it must load, and provide every function KOReader's own engine
 (which matches KOReader's Lua code) does. If it doesn't, KOReader's own
 engine is used, and the plugin offers a matching build.
 
-Until a book has opened with a newly installed (or re-checked) engine (the
-plugin then clears "pending"), it counts the times the engine is loaded; if
-it fails to load, or is loaded more than max_attempts times (KOReader
-stopped before a book opened with it), it goes back to the last engine
+Until a book has opened with a newly installed (or re-checked) engine, or
+KOReader has quit normally after loading it (the plugin then clears
+"pending"), it counts the times the engine is loaded; if it fails to load,
+or is loaded more than max_attempts times (KOReader crashed or was stopped
+each time before either), it goes back to the last engine
 known to work (the plugin keeps a copy when it installs a new one), or else
 KOReader's own engine, and records why. A failed re-check after a KOReader
 update does the same.
+
+Forked child processes (CoverBrowser's, say, which open books for their
+covers) load the engine as it's set up, but leave the counting, and falling
+back, to KOReader's own process.
 
 Keep it self-contained: it runs before most of KOReader is set up.
 ]]
@@ -35,6 +40,21 @@ local Loader = {
     -- Seconds a loading test may take.
     probe_timeout = 20,
 }
+
+local ffi = require("ffi")
+pcall(ffi.cdef, "int getpid(void);")
+
+local function getpid()
+    local ok, pid = pcall(function() return ffi.C.getpid() end)
+    return ok and tonumber(pid) or nil
+end
+
+--- Whether this runs in a child process forked after the engine was set
+-- up (KOReader's process is the one that ran Loader.apply).
+function Loader.isChild()
+    local pid = getpid()
+    return Loader.pid ~= nil and pid ~= nil and pid ~= Loader.pid
+end
 
 local function dataDir()
     local DataStorage = require("datastorage")
@@ -387,7 +407,7 @@ loadInstalled = function(state)
     if state.pending then
         state.attempts = (state.attempts or 0) + 1
         if state.attempts > Loader.max_attempts then
-            return loadFallback(state, "KOReader stopped before a book opened with it")
+            return loadFallback(state, "KOReader stopped without opening a book with it or quitting normally")
         end
         -- On disk before the engine runs, in case it crashes.
         Loader.writeState(state)
@@ -404,10 +424,28 @@ loadInstalled = function(state)
     return loadFallback(state, "it failed to load: " .. tostring(err))
 end
 
+--- In a forked child: the engine at state.lib as it is, or nil. (Its state
+-- is KOReader's process's to change.)
+local function loadInChild(state)
+    local open = package.loadlib(state.lib, "luaopen_cre")
+    if not open then return nil end
+    local ok, cre = pcall(open)
+    if ok and cre ~= nil then
+        Loader.active = state.commit or true
+        return cre
+    end
+    return nil
+end
+
 --- Load the engine at state.lib, or KOReader's own if that fails (in any
 -- way: KOReader must always get an engine).
 function Loader.load(name, state)
     package.preload[Loader.module] = nil
+    if Loader.isChild() then
+        local ok, cre = pcall(loadInChild, state)
+        if ok and cre ~= nil then return cre end
+        return Loader.loadStandard(name)
+    end
     local ok, cre = pcall(loadInstalled, state)
     if ok and cre ~= nil then return cre end
     if not ok then
@@ -460,6 +498,7 @@ function Loader.apply()
         state.attempts = 0
         Loader.writeState(state)
     end
+    Loader.pid = getpid()
     package.preload[Loader.module] = function(name)
         return Loader.load(name, state)
     end

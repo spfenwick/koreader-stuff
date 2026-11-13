@@ -162,6 +162,11 @@ local function makeUI(probe, ragged)
         assert(type(value) == "number", name)
         self.props[name] = value
     end
+    -- The plugin reads the engine's properties from a new view (here, the
+    -- same stub), not the book.
+    package.loaded["document/credocument"] = {
+        engineInit = function() return { newDocView = function() return cre end } end,
+    }
     local events = {}
     local menu_registered = false
     local ui = {
@@ -185,6 +190,21 @@ do
     assert(plugin.active == false)
     assert(next(cre.props) == nil)
     assert(plugin:onSetLineBreakingMode(1) == nil)
+    assert(next(cre.props) == nil)
+end
+
+-- Stock engine with KOReader's saved defaults (data/cr3.ini) from a
+-- Knuth–Plass engine: the book has its properties, the engine doesn't.
+-- Still inactive.
+do
+    local ui, cre = makeUI("200")
+    local engine_view = { getStringProperty = function() return "" end }
+    package.loaded["document/credocument"] = {
+        engineInit = function() return { newDocView = function() return engine_view end } end,
+    }
+    local plugin = Plugin:new{ ui = ui }
+    plugin:onReadSettings(ui.doc_settings)
+    assert(plugin.active == false)
     assert(next(cre.props) == nil)
 end
 
@@ -720,6 +740,62 @@ do
     assert(start() == data and start() == data)
     assert(start() == "standard")
     assert(Engine.takeRollback().reason:find("stopped", 1, true))
+
+    -- KOReader quitting normally after loading it settles it too, so starts
+    -- in the file browser (no book) don't count against it.
+    b, data = build("quitter")
+    assert(Engine.install(b, data, plugin_path))
+    Engine.verifyOnExit() -- not loaded yet: still on trial
+    assert(Loader.readState().pending)
+    assert(start() == data)
+    do
+        -- Through UIManager:quit.
+        local UIManager = require("ui/uimanager")
+        local quit, hooked = UIManager.quit, UIManager._knuthplass_exit_hooked
+        local quit_args
+        UIManager.quit = function(...) quit_args = { ... } end
+        UIManager._knuthplass_exit_hooked = nil
+        Engine.hookExit()
+        Engine.hookExit() -- once only
+        UIManager:quit(85)
+        assert(quit_args[1] == UIManager and quit_args[2] == 85)
+        UIManager.quit, UIManager._knuthplass_exit_hooked = quit, hooked
+    end
+    state = Loader.readState()
+    assert(state.pending == nil and state.attempts == nil and state.commit == "quitter")
+    for _i = 1, 3 do assert(start() == data) end
+    -- An engine this session didn't load (KOReader's own ran instead) isn't
+    -- settled by quitting.
+    b, data = build("unloaded")
+    assert(Engine.install(b, data, plugin_path))
+    package.loaded["knuthplass_loader.patch"].active = nil
+    Engine.verifyOnExit()
+    assert(Loader.readState().pending)
+
+    -- Child processes forked before KOReader's own process loads the engine
+    -- (CoverBrowser's) load it, but don't count or fall back.
+    b, data = build("forky")
+    assert(Engine.install(b, data, plugin_path))
+    local function childStart()
+        package.loaded["libs/libkoreader-cre"] = nil
+        package.preload["libs/libkoreader-cre"] = nil
+        dofile(patch)
+        local patch_loader = package.loaded["knuthplass_loader.patch"]
+        -- As if forked: another pid from the one that set it up.
+        patch_loader.pid = patch_loader.pid + 1
+        return require("libs/libkoreader-cre").engine
+    end
+    for _i = 1, 4 do assert(childStart() == data) end
+    state = Loader.readState()
+    assert(state.pending and state.attempts == 0 and state.commit == "forky")
+    -- A child's failure to load leaves the state alone too.
+    write(lib, "\127ELF bad")
+    assert(childStart() == "standard")
+    state = Loader.readState()
+    assert(state.enabled and state.pending and state.failed == nil)
+    write(lib, data)
+    assert(start() == data and Loader.readState().attempts == 1)
+    Engine.verify("forky")
 
     -- After a KOReader update, it's checked again at start-up and, as it
     -- still fits, kept: proven again once a book opens with it.

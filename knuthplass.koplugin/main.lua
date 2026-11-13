@@ -382,6 +382,8 @@ function KnuthPlass:init()
     self.supported = {}
     self.active = false
     self:onDispatcherRegisterActions()
+    -- A new engine on trial has proved itself if KOReader quits normally.
+    pcall(Engine.hookExit)
     if self.ui.rolling then
         -- Only reflowable (CREngine) documents have these settings.
         self.ui.menu:registerToMainMenu(self)
@@ -431,12 +433,21 @@ function KnuthPlass:onDispatcherRegisterActions()
     })
 end
 
+-- Whether the running engine has Knuth–Plass line breaking. Read from the
+-- engine itself (a new document view), not the book, whose properties
+-- KOReader's saved defaults may have set to an earlier engine's (see
+-- Engine.properties). Also reads what optionSupported needs.
 function KnuthPlass:engineSupported()
     local document = self.ui.document
     if not (self.ui.rolling and document and document._document) then
         return false
     end
-    local probe = document._document:getStringProperty(CAPABILITY_PROPERTY)
+    local names = { CAPABILITY_PROPERTY }
+    for _i, option in ipairs(options) do
+        if option.requires then table.insert(names, option.requires) end
+    end
+    self.engine_properties = Engine.properties(names) or {}
+    local probe = self.engine_properties[CAPABILITY_PROPERTY]
     return probe ~= nil and probe ~= ""
 end
 
@@ -446,7 +457,7 @@ function KnuthPlass:optionSupported(option)
     if not option.requires then
         return true
     end
-    local probe = self.ui.document._document:getStringProperty(option.requires)
+    local probe = (self.engine_properties or {})[option.requires]
     return probe ~= nil and probe ~= ""
 end
 

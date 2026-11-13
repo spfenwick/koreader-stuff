@@ -185,11 +185,13 @@ reMarkable 1 or 2 uses `remarkable`.)
   previous engine" (Tools menu, or "Roll back" in the dialog) switches to
   it from the next start, and the engine it replaces isn't offered again
   for this KOReader version.
-- Until a book has opened with a new engine, the patch counts the times
-  it's loaded. If it fails to load, or KOReader stops twice before a book
-  opened with it, the previous engine is used from then on (or KOReader's
-  own, if there isn't one), and that build isn't offered again for this
-  KOReader version.
+- Until a book has opened with a new engine, or KOReader has quit normally
+  (Exit, Restart, power off) after loading it, the patch counts the times
+  it's loaded. If it fails to load, or KOReader stops twice without either
+  (a crash, or a forced stop), the previous engine is used from then on (or
+  KOReader's own, if there isn't one), and that build isn't offered again
+  for this KOReader version. Loads in child processes (CoverBrowser's, for
+  covers) don't count.
 - After a KOReader update, the patch checks the engine again on the first
   start, in separate processes: it must load with the new version, and have
   every function KOReader's own engine has (which matches KOReader's Lua
