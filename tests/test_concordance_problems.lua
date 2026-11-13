@@ -46,6 +46,32 @@ do
     Problems.disable()
 end
 
+-- A check and the code using what it checks: one problem -----------------------------------
+
+do
+    Problems.reset()
+    Problems.enable()
+    shown = {}
+    Problems.requires("ReadHistory", { addItem = function() end }, { addItem = 4, _flush = 1 })
+    Problems.report("check:ReadHistory._flush", "Books read elsewhere can't be saved into the history", "ReadHistory:_flush is missing")
+    runTicks()
+    check(#shown == 1, "found together: one message: " .. #shown)
+    Problems.report("check:ReadHistory._flush", "Books read elsewhere can't be saved into the history", "again")
+    runTicks()
+    check(#shown == 1, "used later: no second message")
+    local lines = Problems.statusLines()
+    check(#lines == 2 and lines[2]:find("^Books read elsewhere can't be saved") and lines[2]:find("(×3)", 1, true),
+        "Status says what stops working, once: " .. tostring(lines[2]))
+    -- The other way round: the code first, then a check finds it.
+    Problems.report("check:Mod.f", "Thing F stops working", "f is missing")
+    Problems.requires("Mod", {}, { f = true })
+    check(Problems.list["check:Mod.f"].text == "Thing F stops working" and Problems.list["check:Mod.f"].detail == "f is missing",
+        "a check doesn't replace what the code said")
+    runTicks()
+    check(#shown == 2, "the new problem shown once")
+    Problems.disable()
+end
+
 -- Checking what's relied on ----------------------------------------------------------------
 
 do
@@ -79,7 +105,7 @@ do
         readhistory = { reload = function() end }, idle = function() return true end,
     }
     local n, why = h:apply(true)
-    check(n == nil and why == "no history" and Problems.has("hist:list"), "no ReadHistory.hist: reported, nothing done")
+    check(n == nil and why == "no history" and Problems.has("check:ReadHistory.hist"), "no ReadHistory.hist: reported, nothing done")
 
     local CollSync = require("concordance/collsync")
     local c = CollSync.new{
@@ -87,8 +113,8 @@ do
         schedule = function() end, enabled = function() return true end,
         readcollection = { write = function() end }, docsettings = false,
     }
-    check(c:observe() == 0 and Problems.has("coll:tables"), "no ReadCollection.coll: reported, nothing done")
-    check(Problems.has("coll:_read"), "no ReadCollection:_read: reported")
+    check(c:observe() == 0 and Problems.has("check:ReadCollection.coll"), "no ReadCollection.coll: reported, nothing done")
+    check(Problems.has("check:ReadCollection._read"), "no ReadCollection:_read: reported")
 
     local ProgressHook = require("concordance/progresshook")
     check(ProgressHook.oddBody({}) == nil and ProgressHook.oddBody({ message = "none" }) == nil,

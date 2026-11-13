@@ -471,10 +471,10 @@ local function refreshAfterHistory(paths)
             local ok, err = pcall(fm.file_chooser.refreshPath, fm.file_chooser)
             if not ok then
                 logger.warn("Concordance: refreshing the file browser failed:", err)
-                Problems.report("ui:refreshPath", "Redrawing the file browser after a sync failed", err)
+                Problems.report("ui:refreshPath-failed", "Redrawing the file browser after a sync failed", err)
             end
         else
-            Problems.report("ui:refreshPath", "The file browser may not update after a sync: KOReader has changed",
+            Problems.report("check:FileChooser.refreshPath", "The file browser may not update after a sync: KOReader has changed",
                 "FileChooser:refreshPath is missing")
         end
     end
@@ -485,10 +485,10 @@ local function refreshAfterHistory(paths)
             local ok, err = pcall(history.updateItemTable, history)
             if not ok then
                 logger.warn("Concordance: refreshing the History list failed:", err)
-                Problems.report("ui:history", "Redrawing the open History list failed", err)
+                Problems.report("ui:history-failed", "Redrawing the open History list failed", err)
             end
         else
-            Problems.report("ui:history", "The open History list may not update after a sync: KOReader has changed",
+            Problems.report("check:FileManagerHistory.updateItemTable", "The open History list may not update after a sync: KOReader has changed",
                 "FileManagerHistory:updateItemTable is missing")
         end
     end
@@ -778,7 +778,7 @@ function Plugin.engine()
                 stats:insertDB()
             else
                 logger.warn("Concordance: the statistics plugin has no insertDB, the latest page times wait")
-                Problems.report("stats:insertDB", "The latest reading times wait for the next sync: KOReader's statistics plugin has changed",
+                Problems.report("check:ReaderStatistics.insertDB", "The latest reading times wait for the next sync: KOReader's statistics plugin has changed",
                     "ReaderStatistics:insertDB is missing")
             end
         end,
@@ -796,7 +796,8 @@ function Plugin.engine()
             end
             if why then
                 logger.warn("Concordance: can't refresh the open book's statistics:", why)
-                Problems.report("stats:fields", "The open book's reading estimates miss time read elsewhere until it's reopened: KOReader's statistics plugin has changed",
+                Problems.report(why:find("getPageTimeTotalStats", 1, true) and "check:ReaderStatistics.getPageTimeTotalStats"
+                    or "stats:id_curr_book", "The open book's reading estimates miss time read elsewhere until it's reopened: KOReader's statistics plugin has changed",
                     why)
                 return
             end

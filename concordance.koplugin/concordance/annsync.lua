@@ -47,7 +47,8 @@ function AnnSync:bookOf(ui)
             local why = not ui.annotation and "ReaderUI.annotation is missing"
                 or "ReaderAnnotation.annotations is missing"
             self.log.warn("Concordance: can't read the open book's highlights:", why)
-            Problems.report("ann:fields", "Highlights aren't synced: KOReader's highlights have changed", why)
+            Problems.report(ui.annotation and "check:ReaderAnnotation.annotations" or "check:ReaderAnnotation",
+                "Highlights aren't synced: KOReader's highlights have changed", why)
         end
         return nil, "no book with annotations open"
     end
@@ -142,7 +143,7 @@ function AnnSync:apply(ui, force)
     if ui.annotation.updateAnnotations then
         ui.annotation:updateAnnotations(true, true)
     else
-        Problems.report("ann:updateAnnotations", "Highlights received may be out of order until the book is reopened: KOReader has changed",
+        Problems.report("check:ReaderAnnotation.updateAnnotations", "Highlights received may be out of order until the book is reopened: KOReader has changed",
             "ReaderAnnotation:updateAnnotations is missing")
     end
     local hl1, notes1 = counts(ui.annotation)
@@ -151,7 +152,7 @@ function AnnSync:apply(ui, force)
     if ui.view and ui.view.resetHighlightBoxesCache then
         ui.view:resetHighlightBoxesCache()
     elseif ui.view then
-        Problems.report("ann:resetHighlightBoxesCache", "Highlights received may be drawn in the wrong place until the book is reopened: KOReader has changed",
+        Problems.report("check:ReaderView.resetHighlightBoxesCache", "Highlights received may be drawn in the wrong place until the book is reopened: KOReader has changed",
             "ReaderView:resetHighlightBoxesCache is missing")
     end
     -- index_modified: not an edit (KOReader would stamp datetime_updated),

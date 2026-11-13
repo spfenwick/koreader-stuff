@@ -217,7 +217,7 @@ function HistSync:apply(force)
     local rh = self:_rh()
     if type(rh.hist) ~= "table" then
         self.log.warn("Concordance: KOReader's history has no list of books (ReadHistory.hist)")
-        Problems.report("hist:list", "The reading history isn't synced: KOReader's history has changed",
+        Problems.report("check:ReadHistory.hist", "The reading history isn't synced: KOReader's history has changed",
             "ReadHistory.hist is missing")
         return nil, "no history"
     end
@@ -251,7 +251,7 @@ function HistSync:apply(force)
             files[#files + 1] = w
         elseif not rh.addItem and self:_isFile(w.path) then
             self.log.warn("Concordance: ReadHistory:addItem is missing, adding books by hand")
-            Problems.report("hist:addItem", "KOReader's history has changed (ReadHistory:addItem is missing)",
+            Problems.report("check:ReadHistory.addItem", "KOReader's history has changed (ReadHistory:addItem is missing)",
                 "books are added by hand")
             entries[#entries + 1] = w
         else
@@ -308,7 +308,7 @@ function HistSync:apply(force)
                 rh:_flush()
             else
                 self.log.warn("Concordance: ReadHistory:_flush is missing, the history isn't saved")
-                Problems.report("hist:flush", "Books read elsewhere can't be saved into the history: KOReader's history has changed",
+                Problems.report("check:ReadHistory._flush", "Books read elsewhere can't be saved into the history: KOReader's history has changed",
                     "ReadHistory:_flush is missing")
             end
         end

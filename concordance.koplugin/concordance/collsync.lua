@@ -62,7 +62,7 @@ function CollSync:_rc()
     elseif not self._warned_read then
         self._warned_read = true
         self.log.warn("Concordance: ReadCollection:_read is missing, collections may be out of date")
-        Problems.report("coll:_read", "Collections may be out of date: KOReader's collections have changed",
+        Problems.report("check:ReadCollection._read", "Collections may be out of date: KOReader's collections have changed",
             "ReadCollection:_read is missing")
     end
     if type(rc.coll) ~= "table" or type(rc.coll_settings) ~= "table" then
@@ -70,8 +70,9 @@ function CollSync:_rc()
             self._warned_coll = true
             self.log.warn("Concordance: ReadCollection.coll or coll_settings is missing, collections aren't synced")
         end
-        Problems.report("coll:tables", "Collections aren't synced: KOReader's collections have changed",
-            "ReadCollection." .. (type(rc.coll) ~= "table" and "coll" or "coll_settings") .. " is missing")
+        local field = type(rc.coll) ~= "table" and "coll" or "coll_settings"
+        Problems.report("check:ReadCollection." .. field, "Collections aren't synced: KOReader's collections have changed",
+            "ReadCollection." .. field .. " is missing")
         rc = setmetatable({ coll = false }, { __index = rc }) -- what follows treats it as no collections
     end
     return rc

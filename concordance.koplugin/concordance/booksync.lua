@@ -302,7 +302,7 @@ function BookSync:_writeMeta(path, ds, ops, ui)
         if ui.doc_settings.getCustomMetadataFile then
             ui.doc_settings:getCustomMetadataFile(true)
         else
-            Problems.report("book:getCustomMetadataFile", "Book details received may not show until the book is reopened: KOReader has changed",
+            Problems.report("check:DocSettings.getCustomMetadataFile", "Book details received may not show until the book is reopened: KOReader has changed",
                 "DocSettings:getCustomMetadataFile is missing")
         end
     end
@@ -314,7 +314,7 @@ end
 function BookSync:_applyHandmade(ui, ops)
     local hm = ui.handmade
     if not hm then
-        Problems.report("book:handmade-missing", "Handmade tables of contents aren't applied: KOReader has changed",
+        Problems.report("check:ReaderHandMade", "Handmade tables of contents aren't applied: KOReader has changed",
             "ReaderUI.handmade is missing")
         return false
     end
@@ -337,7 +337,7 @@ function BookSync:_applyHandmade(ui, ops)
     local ok, err = pcall(function()
         for _i, name in ipairs({ "updateHandmagePages", "setupFlows", "setupToc" }) do
             if type(hm[name]) ~= "function" then
-                Problems.report("book:handmade-" .. name, "A handmade table of contents received may not show until the book is reopened: KOReader has changed",
+                Problems.report("check:ReaderHandMade." .. name, "A handmade table of contents received may not show until the book is reopened: KOReader has changed",
                     "ReaderHandMade:" .. name .. " is missing")
             end
         end
@@ -353,7 +353,7 @@ function BookSync:_applyHandmade(ui, ops)
             if ui.annotation.setNeedsUpdateFlag then
                 ui.annotation:setNeedsUpdateFlag()
             else
-                Problems.report("book:setNeedsUpdateFlag", "Hidden flows received may show wrong page numbers in highlights until the book is reopened: KOReader has changed",
+                Problems.report("check:ReaderAnnotation.setNeedsUpdateFlag", "Hidden flows received may show wrong page numbers in highlights until the book is reopened: KOReader has changed",
                     "ReaderAnnotation:setNeedsUpdateFlag is missing")
             end
         end
@@ -361,7 +361,7 @@ function BookSync:_applyHandmade(ui, ops)
             if ui.view.footer.maybeUpdateFooter then
                 ui.view.footer:maybeUpdateFooter()
             else
-                Problems.report("book:maybeUpdateFooter", "The status bar may not update after a handmade table of contents is received: KOReader has changed",
+                Problems.report("check:ReaderFooter.maybeUpdateFooter", "The status bar may not update after a handmade table of contents is received: KOReader has changed",
                     "ReaderFooter:maybeUpdateFooter is missing")
             end
         end

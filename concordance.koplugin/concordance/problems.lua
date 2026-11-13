@@ -83,18 +83,24 @@ function show()
 end
 
 --- Records a problem and shows it (soon, once). key: stable for the
--- problem (the same problem again isn't shown again); text: what doesn't
--- work, for the user; detail: the error or what changed (optional).
-function Problems.report(key, text, detail)
+-- problem (the same problem again isn't shown again: a check and the code
+-- that uses what it checks report under the same key, "check:<Module>.<name>");
+-- text: what doesn't work, for the user; detail: the error or what changed
+-- (optional); from_check: a start-up check's report, whose text never
+-- replaces a report from the code (which says what stops working).
+function Problems.report(key, text, detail, from_check)
     local now = os.time()
     local p = Problems.list[key]
     if p then
         p.count, p.last = p.count + 1, now
-        if detail ~= nil then p.detail = tostring(detail) end
+        if not from_check then
+            if p.from_check then p.text, p.from_check = text, false end
+            if detail ~= nil then p.detail = tostring(detail) end
+        end
         return false
     end
     Problems.list[key] = { text = text, detail = detail ~= nil and tostring(detail) or nil,
-                           count = 1, first = now, last = now }
+                           count = 1, first = now, last = now, from_check = from_check == true }
     Problems.order[#Problems.order + 1] = key
     Problems.unshown[#Problems.unshown + 1] = key
     schedule()
@@ -130,19 +136,19 @@ end
 function Problems.requires(label, mod, functions, fields)
     local n = 0
     if type(mod) ~= "table" then
-        Problems.report("check:" .. label, label .. " can't be loaded", tostring(mod))
+        Problems.report("check:" .. label, label .. " can't be loaded", tostring(mod), true)
         return 1
     end
     for name, min in pairs(functions or {}) do
         local f = mod[name]
         if type(f) ~= "function" then
-            Problems.report("check:" .. label .. "." .. name, label .. "." .. name .. " is missing")
+            Problems.report("check:" .. label .. "." .. name, label .. "." .. name .. " is missing", nil, true)
             n = n + 1
         elseif type(min) == "number" then
             local np, vararg = params(f)
             if np and np < min and not vararg then
                 Problems.report("check:" .. label .. "." .. name, label .. "." .. name .. " has changed",
-                    string.format("takes %d parameters, expected %d", np, min))
+                    string.format("takes %d parameters, expected %d", np, min), true)
                 n = n + 1
             end
         end
@@ -150,7 +156,7 @@ function Problems.requires(label, mod, functions, fields)
     for name, want in pairs(fields or {}) do
         if type(mod[name]) ~= want then
             Problems.report("check:" .. label .. "." .. name, label .. "." .. name .. " is missing",
-                "expected a " .. want .. ", found " .. type(mod[name]))
+                "expected a " .. want .. ", found " .. type(mod[name]), true)
             n = n + 1
         end
     end
