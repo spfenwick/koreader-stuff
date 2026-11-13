@@ -139,7 +139,15 @@ function Problems.requires(label, mod, functions, fields)
         Problems.report("check:" .. label, label .. " can't be loaded", tostring(mod), true)
         return 1
     end
-    for name, min in pairs(functions or {}) do
+    -- In name order, so reports (and Status) come out the same on every Lua.
+    local function sorted(t)
+        local names = {}
+        for name in pairs(t or {}) do names[#names + 1] = name end
+        table.sort(names)
+        return names
+    end
+    for _, name in ipairs(sorted(functions)) do
+        local min = functions[name]
         local f = mod[name]
         if type(f) ~= "function" then
             Problems.report("check:" .. label .. "." .. name, label .. "." .. name .. " is missing", nil, true)
@@ -153,7 +161,8 @@ function Problems.requires(label, mod, functions, fields)
             end
         end
     end
-    for name, want in pairs(fields or {}) do
+    for _, name in ipairs(sorted(fields)) do
+        local want = fields[name]
         if type(mod[name]) ~= want then
             Problems.report("check:" .. label .. "." .. name, label .. "." .. name .. " is missing",
                 "expected a " .. want .. ", found " .. type(mod[name]), true)

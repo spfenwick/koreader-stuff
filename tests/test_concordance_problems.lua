@@ -60,8 +60,12 @@ do
     runTicks()
     check(#shown == 1, "used later: no second message")
     local lines = Problems.statusLines()
-    check(#lines == 2 and lines[2]:find("^Books read elsewhere can't be saved") and lines[2]:find("(×3)", 1, true),
-        "Status says what stops working, once: " .. tostring(lines[2]))
+    local flush_line
+    for _, l in ipairs(lines) do
+        if l:find("_flush", 1, true) or l:find("^Books read elsewhere can't be saved") then flush_line = l end
+    end
+    check(#lines == 2 and flush_line and flush_line:find("^Books read elsewhere can't be saved") and flush_line:find("(×3)", 1, true),
+        "Status says what stops working, once: " .. table.concat(lines, " | "))
     -- The other way round: the code first, then a check finds it.
     Problems.report("check:Mod.f", "Thing F stops working", "f is missing")
     Problems.requires("Mod", {}, { f = true })
