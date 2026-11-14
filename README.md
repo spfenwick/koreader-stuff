@@ -8,10 +8,10 @@ data.
 | --- | --- | --- |
 | <img src="assets/logos/concordance.svg" width="20" alt=""> **Concordance** (`concordance.koplugin`) | Keeps settings, reading statistics, highlights, bookmarks, book status, collections and history the same on every device, through your own WebDAV (or Dropbox) server | [README](concordance.koplugin/README.md) |
 | **Concordance web** (`concordance-web/`) | A web app that shows what Concordance keeps on the server: books, highlights, reading statistics | [README](concordance-web/README.md) |
-| <img src="assets/logos/athenaeum.svg" width="20" alt=""> **Athenaeum** (`athenaeum.koplugin`, formerly Cloud library) | Lists every book in your Calibre-Web Automated library in the file browser, downloaded or not (needs ZenOS) | [User guide](USER_GUIDE.md#athenaeum) |
+| <img src="assets/logos/athenaeum.svg" width="20" alt=""> **Athenæum** (`athenaeum.koplugin`, formerly Cloud library) | Lists every book in your Calibre-Web Automated library in the file browser, downloaded or not (needs ZenOS) | [User guide](USER_GUIDE.md#athenaeum) |
 | **Knuth–Plass justification** (`knuthplass.koplugin`) | Knuth–Plass paragraph line breaking, with a custom KOReader engine it installs itself | [README](knuthplass.koplugin/README.md) |
 
-See the [user guide](USER_GUIDE.md) for using Athenaeum and Concordance,
+See the [user guide](USER_GUIDE.md) for using Athenæum and Concordance,
 together or on their own.
 
 ## Concordance web
@@ -45,14 +45,14 @@ Download a plugin's zip from [Releases](https://github.com/spfenwick/koreader-st
 unzip it into KOReader's `plugins/` folder and restart KOReader. After that,
 each plugin updates itself: Tools → the plugin → Check for updates, or
 Automatic updates (once a day, asking first by default). Concordance checks
-for Athenaeum's updates too.
+for Athenæum's updates too.
 
 ## Development
 
 ```sh
 scripts/test.sh                   # all plugins' quick tests
 scripts/test-concordance.sh       # Concordance's statistics and highlights tests (LuaJIT, rclone)
-tests/athenaeum/run_tests.sh      # Athenaeum (needs a KOReader emulator build)
+tests/athenaeum/run_tests.sh      # Athenæum (needs a KOReader emulator build)
 ```
 
 Releases: see [RELEASING.md](RELEASING.md).
