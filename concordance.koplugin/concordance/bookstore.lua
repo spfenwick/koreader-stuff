@@ -577,7 +577,7 @@ function BookStore:history()
 end
 
 --- The state of every book known by a UUID, as another plugin shows it
--- for a book that may not be on this device (Cloud library's cloud books):
+-- for a book that may not be on this device (Athenaeum's cloud books):
 -- { [uuid] = { status, rating, last_read, last_device } }. A UUID's book is
 -- every file whose identity facts name it, with their joined versions; each
 -- property is the winner across them. used = IdStore.usedFacts(conn).

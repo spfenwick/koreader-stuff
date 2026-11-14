@@ -1,5 +1,5 @@
 -- Unit tests for Concordance's combined updates (concordance.koplugin/concordance/updates.lua)
--- and Cloud library's updater handing its checks to it. KOReader's UI is
+-- and Athenaeum's updater handing its checks to it. KOReader's UI is
 -- stubbed; the updaters are the real shared updater with the network and
 -- install steps stood in for. Run through scripts/test-concordance.sh.
 
@@ -30,9 +30,9 @@ stub("ui/network/manager", {
     isConnected = function() return online end,
     isOnline = function() return online end,
 })
--- Cloud library's settings: a LuaSettings-like store.
+-- Athenaeum's settings: a LuaSettings-like store.
 local cl_data = {}
-stub("cloudlibrary/settings", {
+stub("athenaeum/settings", {
     UPDATES_KEY = "updates",
     store = function()
         return { readSetting = function(_, k) return cl_data[k] end,
@@ -44,12 +44,12 @@ _G.G_reader_settings = {
     readSetting = function(_, k) return reader_data[k] end,
     saveSetting = function(_, k, v) reader_data[k] = v end,
 }
-package.path = "cloudlibrary.koplugin/?.lua;" .. package.path
+package.path = "athenaeum.koplugin/?.lua;" .. package.path
 
 local Updates = require("concordance/updates")
 local OS = require("concordance/updatecore").new{ name = "concordance", title = "Concordance",
     settings_key = "concordance_updates", log_prefix = "Concordance:" }
-local CL = require("cloudlibrary/updater")
+local CL = require("athenaeum/updater")
 
 -- The network and the install, stood in for.
 local releases, fetches, installs, broken = {}, {}, {}, {}
@@ -70,7 +70,7 @@ for _, U in ipairs{ OS, CL } do
 end
 
 local os_plugin = { path = "/p/concordance.koplugin", version = "0.7.0" }
-local cl_plugin = { path = "/p/cloudlibrary.koplugin", version = "0.2.3" }
+local cl_plugin = { path = "/p/athenaeum.koplugin", version = "0.2.3" }
 local with_cl = true
 Updates.register(function()
     local e = { { updater = OS, plugin = os_plugin } }
@@ -90,23 +90,23 @@ local function has(text, sub) return text and text:find(sub, 1, true) ~= nil end
 
 do
     reset()
-    releases = { concordance = "0.7.0", cloudlibrary = "0.2.3" }
+    releases = { concordance = "0.7.0", athenaeum = "0.2.3" }
     Updates.check(true)
     local w = last()
     check(w and not w.confirm and has(w.text, "Concordance: up to date (0.7.0)")
-        and has(w.text, "Cloud library: up to date (0.2.3)"), "both up to date: one message listing both")
+        and has(w.text, "Athenaeum: up to date (0.2.3)"), "both up to date: one message listing both")
     check(#fetches == 2 and shown[1].text == "Checking for updates…" and shown[1].closed, "one check, both plugins")
 
     reset()
-    releases = { concordance = "0.7.1", cloudlibrary = "0.2.4" }
+    releases = { concordance = "0.7.1", athenaeum = "0.2.4" }
     Updates.check(true)
     w = last()
     check(w.confirm and w.ok_text == "Install all" and not w.other_buttons
         and has(w.text, "Concordance: 0.7.1 available (installed: 0.7.0)")
-        and has(w.text, "Cloud library: 0.2.4 available (installed: 0.2.3)"), "both newer: one dialog, Install all")
+        and has(w.text, "Athenaeum: 0.2.4 available (installed: 0.2.3)"), "both newer: one dialog, Install all")
     w.ok_callback()
-    check(table.concat(installs, ",") == "concordance 0.7.1,cloudlibrary 0.2.4", "both installed")
-    check(#restarts == 1 and has(restarts[1], "Concordance 0.7.1, Cloud library 0.2.4"), "one restart prompt for both")
+    check(table.concat(installs, ",") == "concordance 0.7.1,athenaeum 0.2.4", "both installed")
+    check(#restarts == 1 and has(restarts[1], "Concordance 0.7.1, Athenaeum 0.2.4"), "one restart prompt for both")
     check(OS.installed == "0.7.1" and CL.installed == "0.2.4", "each updater knows its update is waiting")
     restarts = {}
     Updates.check(true)
@@ -114,7 +114,7 @@ do
         "after installing: waiting for a restart")
 
     reset()
-    releases = { concordance = "0.7.0", cloudlibrary = "0.2.4" }
+    releases = { concordance = "0.7.0", athenaeum = "0.2.4" }
     broken = { concordance = "check" }
     Updates.check(true)
     w = last()
@@ -124,19 +124,19 @@ do
     check(#installs == 0 and #restarts == 0, "Later: nothing installed")
 
     reset()
-    releases = { concordance = "0.7.1", cloudlibrary = "0.2.4" }
-    broken = { cloudlibrary = "download" }
+    releases = { concordance = "0.7.1", athenaeum = "0.2.4" }
+    broken = { athenaeum = "download" }
     Updates.check(true)
     last().ok_callback()
     check(#restarts == 1 and has(restarts[1], "Updated: Concordance 0.7.1") and has(restarts[1], "Couldn't update:")
-        and has(restarts[1], "Cloud library: 404"), "a failed download is reported with the restart prompt")
+        and has(restarts[1], "Athenaeum: 404"), "a failed download is reported with the restart prompt")
 end
 
 -- Automatic -------------------------------------------------------------------------------
 
 do
     reset()
-    releases = { concordance = "0.7.1", cloudlibrary = "0.2.4" }
+    releases = { concordance = "0.7.1", athenaeum = "0.2.4" }
     online = false
     Updates.check(false)
     check(#fetches == 0, "automatic: nothing when offline")
@@ -161,7 +161,7 @@ do
     Updates.check(false)
     check(table.concat(installs, ",") == "concordance 0.7.1", "install mode: installed without asking")
     w = last()
-    check(w.confirm and has(w.text, "Cloud library: 0.2.4 available") and #restarts == 0,
+    check(w.confirm and has(w.text, "Athenaeum: 0.2.4 available") and #restarts == 0,
         "notify mode: offered, restart prompt after the answer")
     w.cancel_callback()
     check(#restarts == 1 and has(restarts[1], "Concordance 0.7.1"), "one restart prompt, with the automatic install")
@@ -171,11 +171,11 @@ do
     Updates.check(false)
     check(table.concat(fetches, ",") == "concordance", "mode off: not checked automatically")
 
-    -- A Cloud library that checks for itself isn't checked automatically here.
+    -- An Athenaeum that checks for itself isn't checked automatically here.
     reset()
     CL.defers_to_concordance = nil
     Updates.check(false)
-    check(table.concat(fetches, ",") == "concordance", "older Cloud library: its own automatic check")
+    check(table.concat(fetches, ",") == "concordance", "older Athenaeum: its own automatic check")
     CL.defers_to_concordance = true
 
     reset()
@@ -183,25 +183,38 @@ do
     releases = { concordance = "0.7.0" }
     Updates.check(true)
     check(#fetches == 1 and has(last().text, "Concordance: up to date") and not has(last().text, "Cloud"),
-        "without Cloud library: Concordance only")
+        "without Athenaeum: Concordance only")
     with_cl = true
 end
 
--- Cloud library's updater -------------------------------------------------------------------
+-- Athenaeum's updater -------------------------------------------------------------------
 
 do
     reset()
-    releases = { concordance = "0.7.0", cloudlibrary = "0.2.3" }
+    releases = { concordance = "0.7.0", athenaeum = "0.2.3" }
     CL.check(cl_plugin, false)
-    check(#fetches == 0, "Cloud library's automatic check left to Concordance")
+    check(#fetches == 0, "Athenaeum's automatic check left to Concordance")
     CL.check(cl_plugin, true)
     check(#fetches == 2 and has(last().text, "Concordance: up to date"), "its Check for updates runs the combined check")
     reset()
     local entries = Updates.entries
     Updates.entries = nil
     CL.check(cl_plugin, true)
-    check(table.concat(fetches, ",") == "cloudlibrary", "without Concordance: its own check")
+    check(table.concat(fetches, ",") == "athenaeum", "without Concordance: its own check")
     Updates.entries = entries
+
+    -- A Concordance from before the rename knows only Cloud library: it
+    -- wouldn't check Athenaeum, so Athenaeum checks for itself.
+    check(Updates.handles("athenaeum") and Updates.handles("cloudlibrary") and not Updates.handles("zenos"),
+        "Concordance checks Athenaeum, and Cloud library as it was")
+    reset()
+    local handles = Updates.handles
+    Updates.handles = nil
+    CL.check(cl_plugin, true)
+    check(table.concat(fetches, ",") == "athenaeum", "older Concordance: Athenaeum's own check")
+    check(CL.combined() == nil, "older Concordance: not used for Athenaeum's checks")
+    Updates.handles = handles
+    check(CL.combined() == Updates, "this Concordance: used for Athenaeum's checks")
 end
 
 -- Menu ------------------------------------------------------------------------------------
@@ -210,16 +223,16 @@ do
     OS.setMode("install")
     CL.setMode("off")
     local items = Updates.menuItems()
-    check(items[1].text == "Check for updates" and has(items[1].help_text, "Concordance 0.7.0, Cloud library 0.2.3"),
+    check(items[1].text == "Check for updates" and has(items[1].help_text, "Concordance 0.7.0, Athenaeum 0.2.3"),
         "menu: one check, versions in its help")
     local auto = items[2].sub_item_table
     check(items[2].text == "Automatic updates" and #auto == 2 and auto[1].text_func() == "Concordance: install"
-        and auto[2].text_func() == "Cloud library: off", "menu: each plugin's automatic mode")
+        and auto[2].text_func() == "Athenaeum: off", "menu: each plugin's automatic mode")
     auto[2].sub_item_table[2].callback()
     check(CL.getMode() == "notify", "menu: sets the plugin's own mode")
     with_cl = false
     items = Updates.menuItems()
-    check(items[2].text_func() == "Automatic updates: install", "menu without Cloud library: as before")
+    check(items[2].text_func() == "Automatic updates: install", "menu without Athenaeum: as before")
     with_cl = true
 end
 

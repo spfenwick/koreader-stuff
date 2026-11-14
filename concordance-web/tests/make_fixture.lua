@@ -50,7 +50,7 @@ local BOOKS = {
     -- joined by title and authors.
     { key = "frank_old", title = "Frankenstein", authors = "Mary Wollstonecraft Shelley", pages = 300,
       kind = "rolling", uuid = nil },
-    -- A PDF of Moby-Dick, which Cloud library matched to the catalog book:
+    -- A PDF of Moby-Dick, which Athenaeum matched to the catalog book:
     -- joined through a link record.
     { key = "moby_pdf", title = "Moby Dick", authors = "Herman Melville", pages = 600, kind = "paging",
       uuid = nil, link = "1a2b3c4d-0000-4000-8000-000000000002" },
@@ -89,6 +89,8 @@ local QUOTES = {
     },
 }
 
+-- The Kobo reports Athenaeum under its old name, cloudlibrary (an older
+-- Concordance): shown as Athenaeum.
 local DEVICES = {
     { id = "a1f3c09e2b7d4e15", name = "Kobo Libra 2", versions = { concordance = "0.2.3", cloudlibrary = "0.7.1", zenos = "4.3.1", koreader = "2025.10-58" } },
     { id = "7c2e91d04f6a3b88", name = "Pixel 8", versions = { concordance = "0.2.2", koreader = "2025.10" } },

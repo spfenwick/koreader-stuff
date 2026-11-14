@@ -1,6 +1,6 @@
 # Book identity across file versions
 
-Status: every step built: Cloud library's matcher fix, the identity
+Status: every step built: Athenaeum's matcher fix, the identity
 stream (2026-11-06), book data joining (2026-11-08), statistics joining,
 annotations, TOC and flows joining, progress across versions and Cloud
 library's side (all 2026-11-10). Sections below say where the build
@@ -18,7 +18,7 @@ later download has a new MD5; files already on devices keep the old one.
 Devices that downloaded the book on either side of an edit then hold two
 "different" books, and nothing they record about it merges.
 
-The same table also answers what Cloud library needs: which synced data
+The same table also answers what Athenaeum needs: which synced data
 belongs to a catalog book that isn't on this device.
 
 ## Two levels of "same book"
@@ -46,7 +46,7 @@ unchanged by the rewrite:
 So the scheme doesn't survive the rewrite, and the server's ID can't be
 picked out by form alone. Rule: strip `urn:uuid:` / `uuid:`, lowercase,
 keep everything that's a UUID; **two files are the same book if they
-share any UUID**. With Cloud library present, the shared UUID that's a
+share any UUID**. With Athenaeum present, the shared UUID that's a
 catalog ID names the group (the `book_id` in the API below); without it, the
 smallest shared UUID.
 
@@ -132,15 +132,15 @@ major version rejected):
   `"v":2`: a device on the first version would take an unlink for a fact
   read from a file, so it rejects the segment and reads it once updated.
   Other segments still say `"v":1`.
-- When a link is withdrawn: at the start of a sync, once Cloud library has
+- When a link is withdrawn: at the start of a sync, once Athenaeum has
   read its catalog, a link this device made is withdrawn if the file is
-  still in the folder, the book is still in the catalog, and Cloud library
+  still in the folder, the book is still in the catalog, and Athenaeum
   no longer makes the match (`Identity.retractLinks`, with
   `Library.folderFiles` and `Library.inCatalog`). A device only withdraws
   links it sent first: one whose catalog is behind can't undo another's.
   Statistics already folded into one row by the link stay there.
 - `src`: `file` (read from the file with that MD5), `sidecar` (see below)
-  or `link` (supplied by another plugin, e.g. Cloud library matching a
+  or `link` (supplied by another plugin, e.g. Athenaeum matching a
   PDF by title; built with step 6). For one MD5, `file` wins over
   `link`; two different `file` records for one MD5 can't happen (same
   bytes); two `link`s naming different catalog books leave the MD5
@@ -346,15 +346,15 @@ does: same position, nothing; newer or older, jump or ask, by its settings.
 - With "file name" chosen as progress sync's book identity, the key is
   a hash of the file name, which matches no MD5 here: nothing changes.
 
-## Cloud library's side
+## Athenaeum's side
 
-Cloud library stays a separate plugin and uses Concordance when it's present
+Athenaeum stays a separate plugin and uses Concordance when it's present
 (feature-detected on `ui.concordance`, as with ZenOS).
 
-Built so far, the other way round: Cloud library exposes
+Built so far, the other way round: Athenaeum exposes
 `Library.pathForUuids(uuids)` (the downloaded file or the cloud entry of
 the catalog book with one of those UUIDs), which Concordance's history sync
-calls through `package.loaded["cloudlibrary/library"]` (see BOOKDATA.md,
+calls through `package.loaded["athenaeum/library"]` (see BOOKDATA.md,
 Reading history).
 
 Concordance exposes (planned):
@@ -366,7 +366,7 @@ identity:link(md5, book_id)     -- a match made outside the file (src "link")
 identity:changed()              -- event after new facts or merged data
 ```
 
-Cloud library then:
+Athenaeum then:
 
 1. **Fixes its matcher**: strip `uuid:` as well as `urn:uuid:` (the
    rewritten test book has `uuid:…` and no longer matches by UUID today).
@@ -391,13 +391,13 @@ they load in doesn't matter:
   `fileAdded(path)`, `onChanged(key, fn)` and `revision()`. There's no
   `groupFor`: nothing needed it. `last_device` is the device's name, or
   `Identity.THIS_DEVICE`.
-- Links go the other way from the plan: Concordance asks Cloud library for
+- Links go the other way from the plan: Concordance asks Athenaeum for
   them at the start of each sync (`Library.links()`, recorded by
   `Identity.recordLinks` before the facts are sent), as it asks for the
   folder's files (`Library.localFiles()`). A link is made for a matched
   file that doesn't name the book's UUID itself: matched by title, or not
   an EPUB (a downloaded PDF). Its MD5 is the sidecar's when the book was
-  opened here, else the file's partial MD5, which Cloud library's matcher
+  opened here, else the file's partial MD5, which Athenaeum's matcher
   now keeps in `local_files` (catalog schema 8). In `IdStore`, links count
   as planned (`usedFacts`): only for an MD5 with no `file` or `sidecar`
   fact, and only when its links agree. A link has no signature, so it
@@ -408,7 +408,7 @@ they load in doesn't matter:
   joined versions; each of status, rating and last opened (`hist`) is
   the winning record across them (`BookStore:statesByUuid`). Cached until
   the next change: after a sync that brought book data or identity facts
-  (or changed the groups), `Identity.changed()` tells Cloud library,
+  (or changed the groups), `Identity.changed()` tells Athenaeum,
   which redraws what's on screen.
 - Device names: each device's `meta.json` holds its name (progress sync's
   "Device hostname", else the model); the network step reads it for each
@@ -419,14 +419,14 @@ they load in doesn't matter:
 - Shown on cloud books: the badge is the cloud with a check, play or pause
   mark cut out (finished, reading, on hold); the details sheet has a line
   such as "Finished · ★★★★☆ · Last read 5 Oct 2026 on Kobo Forma".
-- Downloads: after a download, Cloud library calls `fileAdded`, which
+- Downloads: after a download, Athenaeum calls `fileAdded`, which
   reads the file in the main process (0.25 to 1 s on the Forma) and
   refreshes the groups, so "Download & read" opens the book with its other
   versions' status, highlights and position already applying.
 
 ## Order of work
 
-1. Matcher prefix fix in Cloud library (independent, small). **Done** (Cloud library 0.2.3).
+1. Matcher prefix fix in Athenaeum (independent, small). **Done** (Athenaeum 0.2.3).
 2. Identity stream: OPF reading, signature, `id-` segments, merged
    facts, a Status line ("Books known in more than one version: n").
    No joining yet; run it on the devices for a while and check the groups.
@@ -436,9 +436,9 @@ they load in doesn't matter:
 3. Book data joining (level 1). **Built** (2026-11-08).
 4. Statistics joining, including the late-link move. **Built** (2026-11-10).
 5. Annotations, TOC and flows joining (level 2). **Built** (2026-11-10).
-6. Cloud library: links, `bookState`, badges and details. **Built**
+6. Athenaeum: links, `bookState`, badges and details. **Built**
    (2026-11-10; see "As built" in
-   "Cloud library's side").
+   "Athenaeum's side").
 7. Progress across versions. **Built** (2026-11-10), before 4 to 6.
 
 Each step is shippable on its own; 2 changes no behaviour.
@@ -458,7 +458,7 @@ Each step is shippable on its own; 2 changes no behaviour.
   in the group gets nothing.
 - Integration (rclone WebDAV, as now): device A on old file, device B on
   rewritten file, both directions, plus a third device that only has the
-  book in Cloud library and sees its status.
+  book in Athenaeum and sees its status.
 
 ## Open questions
 

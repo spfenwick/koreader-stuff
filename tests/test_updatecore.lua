@@ -25,7 +25,7 @@ local canonical = read("shared/updatecore.lua")
 for _, copy in ipairs({
     "knuthplass.koplugin/knuthplass_updatecore.lua",
     "concordance.koplugin/concordance/updatecore.lua",
-    "cloudlibrary.koplugin/cloudlibrary/updatecore.lua",
+    "athenaeum.koplugin/athenaeum/updatecore.lua",
 }) do
     check(read(copy) == canonical, copy .. " differs from shared/updatecore.lua (run scripts/sync-updatecore.sh)")
 end
@@ -33,7 +33,7 @@ end
 -- Every plugin has a release version.
 local function stub(name, value) package.loaded[name] = value end
 stub("gettext", setmetatable({}, { __call = function(_, s) return s end }))
-for _, name in ipairs({ "knuthplass", "concordance", "cloudlibrary" }) do
+for _, name in ipairs({ "knuthplass", "concordance", "athenaeum" }) do
     local meta = dofile(name .. ".koplugin/_meta.lua")
     check(type(meta.version) == "string" and meta.version:match("^%d+%.%d+%.%d+$"), name .. " _meta.lua version")
 end

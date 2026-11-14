@@ -23,13 +23,14 @@ cd "$repo_dir"
     concordance.koplugin/_meta.lua \
     concordance.koplugin/main.lua \
     concordance.koplugin/concordance/*.lua \
-    cloudlibrary.koplugin/_meta.lua \
-    cloudlibrary.koplugin/main.lua \
-    cloudlibrary.koplugin/cloudlibrary/*.lua
+    athenaeum.koplugin/_meta.lua \
+    athenaeum.koplugin/main.lua \
+    athenaeum.koplugin/athenaeum/*.lua
 "$lua_bin" tests/test_updatecore.lua
 "$lua_bin" tests/test_plugin.lua
+"$lua_bin" tests/test_athenaeum_migrate.lua
 "$lua_bin" tests/test_concordance_settings.lua
 # The rest of concordance.koplugin's tests need KOReader's sources and rclone:
 # scripts/test-concordance.sh
-# cloudlibrary.koplugin's tests need a KOReader emulator build:
-# tests/cloudlibrary/run_tests.sh
+# athenaeum.koplugin's tests need a KOReader emulator build:
+# tests/athenaeum/run_tests.sh

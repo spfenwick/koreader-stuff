@@ -1,20 +1,25 @@
 --[[--
-Updates for Concordance and Cloud library together: one check, one dialog
+Updates for Concordance and Athenaeum together: one check, one dialog
 listing both, one restart prompt.
 
-Each plugin keeps its own updater (concordance/updatecore.lua and Cloud
-library's cloudlibrary/updater.lua, both copies of shared/updatecore.lua)
+Each plugin keeps its own updater (concordance/updatecore.lua and
+Athenaeum's athenaeum/updater.lua, both copies of shared/updatecore.lua)
 with its own settings (automatic mode, skipped version, last check). This
 only drives them together, through the parts of their interface that do no
 UI: fetchManifest, fetch, install, getMode, getSettings, saveSettings and
 `installed`.
 
-Cloud library's updater looks for this module (package.loaded
-"concordance/updates") and, while it's active, hands its own checks here: its
-menu's "Check for updates" runs the combined check, and its automatic check
-is left to Concordance's. Its updater says so with `defers_to_concordance`;
-without that (an older Cloud library), its automatic check is its own and
-isn't repeated here.
+Athenaeum's updater looks for this module (package.loaded
+"concordance/updates") and, while it's active and handles("athenaeum"),
+hands its own checks here: its menu's "Check for updates" runs the combined
+check, and its automatic check is left to Concordance's. Its updater says
+so with `defers_to_concordance`; without that (an older version), its
+automatic check is its own and isn't repeated here.
+
+Athenaeum was called Cloud library (cloudlibrary/updater.lua) before; a
+Cloud library still on a device is checked here the same way, and its
+update is Athenaeum (see athenaeum/migrate.lua). Before handles(), a
+Concordance only knew Cloud library, so Athenaeum asks.
 
     Updates.register(fn)          fn() -> { { updater = U, plugin = { path, version } }, … }
     Updates.check(interactive)    the combined check
@@ -35,6 +40,10 @@ function Updates.register(fn) Updates.entries = fn end
 
 --- True while Concordance is running and checks for both plugins.
 function Updates.active() return Updates.entries ~= nil end
+
+--- True for the plugins this checks besides Concordance (by their updater's
+-- name).
+function Updates.handles(name) return name == "athenaeum" or name == "cloudlibrary" end
 
 --- The plugins, or only those that can be updated (loaded by KOReader
 -- from a folder, with a version).
@@ -270,7 +279,7 @@ function Updates.menuItems()
     local items = {
         {
             text = _("Check for updates"),
-            help_text = T(_("Checks for new versions of Concordance and Cloud library (if it's installed).\n\nInstalled: %1"),
+            help_text = T(_("Checks for new versions of Concordance and Athenaeum (if it's installed).\n\nInstalled: %1"),
                 table.concat(versions, ", ")),
             enabled_func = function() return #list(true) > 0 end,
             keep_menu_open = true,

@@ -43,7 +43,7 @@
       {%- else %}The book's file{% endif %}</th></tr>
       {% for e in g.editions %}
       <tr>
-        <td>{{ e.title or '—' }}{% if 'sidecar' in e.sources and 'file' not in e.sources %}<div class="small muted">Kept by a book's settings after its file was replaced</div>{% endif %}{% if 'link' in e.sources and 'file' not in e.sources and 'sidecar' not in e.sources %}<div class="small muted">Matched to its catalog book by Cloud library (by title, or not an EPUB)</div>{% endif %}</td>
+        <td>{{ e.title or '—' }}{% if 'sidecar' in e.sources and 'file' not in e.sources %}<div class="small muted">Kept by a book's settings after its file was replaced</div>{% endif %}{% if 'link' in e.sources and 'file' not in e.sources and 'sidecar' not in e.sources %}<div class="small muted">Matched to its catalog book by Athenaeum (by title, or not an EPUB)</div>{% endif %}</td>
         <td><code>{{ e.md5 }}</code></td>
         <td>{% if e.text %}<span class="chip" title="Body signature {{ e.sig[:12] }}…">{{ e.text }}</span>{% else %}<span class="muted" title="No device has read this file's text">—</span>{% endif %}</td>
         <td>{% for d in e.reported_by | sort %}{{ device_names.get(d) or d }}{{ ', ' if not loop.last }}{% else %}<span class="muted">—</span>{% endfor %}</td>

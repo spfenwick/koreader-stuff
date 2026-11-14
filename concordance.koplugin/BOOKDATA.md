@@ -262,8 +262,8 @@ file's access time ("sort by last read").
   hand, and when only they changed the history is saved with KOReader's
   own `_reduce` and `_flush`.
 - **Where the book is**: a file the sync knows for the book or one of its
-  versions (`book_files`, `coll_files`); else, through Cloud library
-  (`package.loaded["cloudlibrary/library"].pathForUuids`, when it's
+  versions (`book_files`, `coll_files`); else, through Athenaeum
+  (`package.loaded["athenaeum/library"].pathForUuids`, when it's
   loaded), the book's UUIDs from book identity: the downloaded file, or
   the book's cloud entry (a path that isn't a file). A cloud entry isn't
   dimmed but has `select_enabled` false, so KOReader never picks it to

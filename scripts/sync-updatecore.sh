@@ -8,7 +8,7 @@ cd "$repo_dir"
 for target in \
     knuthplass.koplugin/knuthplass_updatecore.lua \
     concordance.koplugin/concordance/updatecore.lua \
-    cloudlibrary.koplugin/cloudlibrary/updatecore.lua
+    athenaeum.koplugin/athenaeum/updatecore.lua
 do
     cp shared/updatecore.lua "$target"
     echo "updated $target"

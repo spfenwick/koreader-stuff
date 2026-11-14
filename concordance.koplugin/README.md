@@ -187,7 +187,7 @@ started from the menu. The code is in `concordance/problems.lua`.
 
 ## Updates
 
-Concordance checks for new versions of itself and of Cloud library (if it's
+Concordance checks for new versions of itself and of Athenaeum (if it's
 installed and enabled) together, through one connection:
 
 - **Check for updates** shows one message listing both plugins: up to date,
@@ -199,12 +199,12 @@ installed and enabled) together, through one connection:
   default: asks first) or install. Once a day, when KOReader is already
   online, Concordance checks both. Plugins set to install are installed, and
   those set to notify are offered in one dialog, which can skip those
-  versions. Cloud library leaves its automatic check to Concordance (an
-  older Cloud library keeps its own).
+  versions. Athenaeum leaves its automatic check to Concordance (an
+  older Athenaeum keeps its own).
 - After installing, there's one restart prompt naming what was updated,
   and any that failed.
 
-Each plugin keeps its own update settings (Cloud library's in its own
+Each plugin keeps its own update settings (Athenaeum's in its own
 settings file). An update is checked (checksum, complete plugin) before
 it replaces the installed one, and takes effect after a restart. Don't
 also copy this plugin between devices with settings sync: it never syncs

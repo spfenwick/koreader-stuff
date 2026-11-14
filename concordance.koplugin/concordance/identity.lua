@@ -1,8 +1,8 @@
 --[[--
 What Concordance tells other plugins about books, by book ID (a UUID the
-book's files carry), and what they can tell it. Cloud library uses it,
+book's files carry), and what they can tell it. Athenaeum uses it,
 finding it as package.loaded["concordance/identity"] (nothing is shared when
-Concordance isn't installed). See IDENTITY.md, "Cloud library's side".
+Concordance isn't installed). See IDENTITY.md, "Athenaeum's side".
 
     Identity.available()        true once Concordance has set it up
     Identity.bookState(uuids)   { status, rating, last_read, last_device }
@@ -21,12 +21,12 @@ given as Identity.THIS_DEVICE.
 Calls run in KOReader's main process and never raise: a failure is logged
 and gives nil (or 0).
 
-The other way round, Concordance asks Cloud library (when it's there) for
+The other way round, Concordance asks Athenaeum (when it's there) for
 the files in its folder (Library.localFiles, read for their identity like
 books opened here) and for the files it matched to a catalog book without
 the file naming the book's UUID (Library.links: by title, or a PDF): each
 becomes a "link" fact (Identity.recordLinks, at the start of each sync).
-A link this device made that Cloud library no longer makes, for a file
+A link this device made that Athenaeum no longer makes, for a file
 still in its folder and a book still in its catalog, is withdrawn
 (Identity.retractLinks, with Library.folderFiles and Library.inCatalog).
 --]]
@@ -63,7 +63,7 @@ local function warn(what, ...)
     local n = select("#", ...)
     local detail = n > 0 and tostring((select(n, ...))) or nil
     require("concordance/problems").report("identity:" .. tostring(what),
-        "Book identity (shared with Cloud library): " .. tostring(what):gsub(":$", ""), detail)
+        "Book identity (shared with Athenaeum): " .. tostring(what):gsub(":$", ""), detail)
 end
 
 local function load()

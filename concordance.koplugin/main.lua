@@ -792,7 +792,7 @@ function Concordance:menuItems()
 
 Book status (reading, on hold, finished), rating, review, custom metadata (title, authors, series…) and the handmade table of contents and hidden flows are synced with them, and so are collections and favorites (which books are in which, and the collections' names) and the reading history (when each book was last opened: a book read on another device goes into this device's history at the time it was read; books removed from the history aren't removed elsewhere). Status, rating, review, metadata and collections are written into books that aren't open too; the table of contents waits until the book is opened.
 
-A book read elsewhere that isn't on this device appears in the history only if Cloud library is installed and has it: tap it to download it.
+A book read elsewhere that isn't on this device appears in the history only if Athenaeum is installed and has it: tap it to download it.
 
 Notes and reviews are stored on the server as plain text.
 
@@ -897,22 +897,29 @@ Turn off KOReader's "Export annotations on book closing" (in the reader's Bookma
     return items
 end
 
---- Cloud library's running instance and its own updater, when it's
--- installed and enabled (it loaded its updater at start).
-function Concordance:cloudLibrary()
-    local plugin = self.ui and self.ui.cloudlibrary
-    local updater = package.loaded["cloudlibrary/updater"]
+--- Athenaeum's running instance and its own updater, when it's
+-- installed and enabled (it loaded its updater at start). Also Cloud
+-- library, as it was called before (until the device updates it: its
+-- update is Athenaeum), and Athenaeum in the session it moves itself out
+-- of cloudlibrary.koplugin (KOReader still calls it cloudlibrary then).
+-- Only this plugin has a cloudlibrary/updater module: the other
+-- cloudlibrary.koplugin's ui.cloudlibrary isn't taken for it.
+function Concordance:athenaeum()
+    local ui = self.ui or {}
+    local updater = package.loaded["athenaeum/updater"] or package.loaded["cloudlibrary/updater"]
+    local plugin = ui.athenaeum or ui.cloudlibrary
     if plugin and plugin.path and plugin.version and type(updater) == "table" and updater.check then
         return plugin, updater
     end
 end
 
 --- The plugins checked together for updates (concordance/updates.lua): this
--- one and Cloud library, each with its own updater and settings. A Cloud
--- library from before it handed its automatic check to Concordance keeps it.
+-- one and Athenaeum, each with its own updater and settings. An Athenaeum
+-- (or Cloud library) from before it handed its automatic check to
+-- Concordance keeps it.
 function Concordance:updateEntries()
     local entries = { { updater = Updater, plugin = self } }
-    local plugin, updater = self:cloudLibrary()
+    local plugin, updater = self:athenaeum()
     if plugin then
         table.insert(entries, { updater = updater, plugin = plugin, own_automatic = not updater.defers_to_concordance })
     end

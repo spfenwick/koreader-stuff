@@ -1,27 +1,40 @@
-# Cloud Library & Concordance — User Guide
+# Athenaeum & Concordance — User Guide
 
 ## Overview
 
-Cloud library puts your whole online book collection in KOReader's file browser; Concordance keeps your reading the same on every device. Each works alone, and together they share what you've read across devices and book versions.
+Athenaeum puts your whole online book collection in KOReader's file browser; Concordance keeps your reading the same on every device. Each works alone, and together they share what you've read across devices and book versions.
 
-|  | Cloud library | Concordance |
+|  | Athenaeum | Concordance |
 | --- | --- | --- |
 | What it does | Lists every book in your Calibre-Web Automated OPDS catalog, downloaded or not. Tested only with Calibre-Web Automated and may rely on its features; other OPDS servers may not work | Syncs settings, reading statistics, highlights, bookmarks, book status and history |
 | Needs | ZenOS (with book sources) and an OPDS catalog in KOReader's OPDS plugin | A WebDAV server in Cloud storage (Dropbox works for settings only) |
-| Menu | Cloud library | Tools → Concordance |
-| Settings file | `settings/cloudlibrary/settings.lua` | `settings/concordance/` |
+| Menu | Athenaeum | Tools → Concordance |
+| Settings file | `settings/athenaeum/settings.lua` | `settings/concordance/` |
 
 Concordance also has an optional web app, Concordance web, for browsing your books, highlights and reading statistics in a browser.
 
-## Cloud library
+## Athenaeum
 
 Every book in your catalog appears in your library folder, whether it's on the device or not. Books not yet downloaded are "cloud books": they look and sort like real books, with covers, and download when you want them.
+
+Athenaeum was called Cloud library before version 0.8.0. Its old folder name, `cloudlibrary.koplugin`, is also used by another plugin, which made the two clash in package managers such as ZenPM.
+
+### Moving from Cloud library
+
+Cloud library updates itself to Athenaeum like any other update (Check for updates, or automatically). When KOReader restarts after the update, Athenaeum finishes the move by itself:
+
+- Its folder is renamed from `plugins/cloudlibrary.koplugin` to `plugins/athenaeum.koplugin`.
+- Its settings, catalogs and covers move from `settings/cloudlibrary/` to `settings/athenaeum/`. Nothing is downloaded again.
+- Gestures, profiles and keyboard shortcuts set to **Cloud library: quick sync** become **Athenaeum: quick sync**.
+- If you also installed Athenaeum by hand, the old `cloudlibrary.koplugin` folder is removed. Another plugin's `cloudlibrary.koplugin` is left alone.
+
+Between installing the update and restarting, the running Cloud library may report that part of it was turned off: its files have already been replaced. Restart KOReader to finish. With Concordance installed, update it too: an older Concordance doesn't know the new name, so until it's updated, Athenaeum checks for its own updates and Concordance doesn't use Athenaeum's catalog (its matched files and cloud books).
 
 ### Setting up
 
 1. Add your library's catalog in KOReader's OPDS catalog plugin (with its username and password).
-2. Cloud library → **Catalog**: choose it. This runs a full sync.
-3. Cloud library → **Folder**: where cloud books are listed and downloaded to. It defaults to KOReader's download folder. Books already in this folder (not its subfolders) are recognised as catalog books, so they aren't listed twice.
+2. Athenaeum → **Catalog**: choose it. This runs a full sync.
+3. Athenaeum → **Folder**: where cloud books are listed and downloaded to. It defaults to KOReader's download folder. Books already in this folder (not its subfolders) are recognised as catalog books, so they aren't listed twice.
 
 ### Browsing cloud books
 
@@ -47,7 +60,7 @@ Downloads run in the background, one at a time. Files are named like KOReader's 
 | Quick sync | Adds books new to the catalog. Becomes a full sync if the number of books changed | Every hour, when the file browser opens or Wi-Fi connects |
 | Full sync | Rereads the whole catalog: edited and removed books, series, titles. A catalog that comes back empty removes nothing | Weekly |
 
-Quick sync can be every 1, 3, 6 or 12 hours, daily or never; full sync daily, weekly or never. Neither turns Wi-Fi on. Run either by hand from the menu, or assign **Cloud library: quick sync** to a gesture.
+Quick sync can be every 1, 3, 6 or 12 hours, daily or never; full sync daily, weekly or never. Neither turns Wi-Fi on. Run either by hand from the menu, or assign **Athenaeum: quick sync** to a gesture.
 
 ### Menu
 
@@ -59,14 +72,14 @@ Quick sync can be every 1, 3, 6 or 12 hours, daily or never; full sync daily, we
 | Show cloud books | Turn off before removing the plugin, so the file browser forgets cloud books |
 | Mark cloud books | Cloud badge on cloud-only books (on) |
 | Mark books on this device | Check mark on downloaded catalog books (off) |
-| Mark books not in the cloud library | Crossed-out cloud on folder books missing from the catalog (off) |
+| Mark books not in the catalog | Crossed-out cloud on folder books missing from the catalog (off) |
 | Include cloud books in Authors, Series and Tags | ZenOS tabs (on) |
 | Include cloud books in file search | (on) |
 | Status | Catalog, folder, book and cover counts, last syncs and any problems |
 | Timings | How long each step took, for tracking down slowness |
 | Check for updates / Automatic updates | Handled together with Concordance when it's installed |
 
-If a KOReader or ZenOS update breaks part of Cloud library, it turns that part off and says so; your books and the file browser keep working.
+If a KOReader or ZenOS update breaks part of Athenaeum, it turns that part off and says so; your books and the file browser keep working.
 
 ## Concordance
 
@@ -156,7 +169,7 @@ Tools → Concordance, in the file browser and the reader:
 | Status | Server, last syncs and errors, devices seen, books in several versions |
 | Troubleshooting → Rebuild from server | Imports every device's files again; deletes nothing |
 | Troubleshooting → Reset device ID | For a device restored from another's backup |
-| Check for updates / Automatic updates | Updates Concordance and Cloud library together |
+| Check for updates / Automatic updates | Updates Concordance and Athenaeum together |
 
 Each sync is also a gesture under General ("Concordance: sync statistics and highlights", "Concordance: sync settings", and so on).
 
@@ -175,14 +188,14 @@ Start it with `docker compose up -d`, setting `READING_DIR` to your server's `<f
 
 ## Using them together
 
-With both installed, your cloud library knows what you've read on every device, and a book counts as one book however many times its file has changed.
+With both installed, Athenaeum knows what you've read on every device, and a book counts as one book however many times its file has changed.
 
 ### What you see
 
 - **Cloud badges show reading state.** A cloud-only book's badge gets a check (finished), play (reading) or pause (on hold) mark from your other devices.
 - **Details show your history.** A cloud book's details sheet adds a line such as "Finished · ★★★★☆ · Last read 12 Oct 2026 on Kobo Forma".
 - **History includes cloud books.** A book you read on another device appears in History even if it isn't downloaded here; tap it to see its details and download it. Once downloaded, the entry becomes the file.
-- **Downloads open where you left off.** A book Cloud library has just downloaded is matched at once, so it opens with its status and highlights from other devices.
+- **Downloads open where you left off.** A book Athenaeum has just downloaded is matched at once, so it opens with its status and highlights from other devices.
 - **One update check.** Concordance checks both plugins in one go and offers to install both; there's one restart prompt afterwards.
 
 ### Book versions
@@ -200,7 +213,7 @@ Highlights and positions only cross between versions with the same text, so a di
 
 Files sharing a book ID count as one book when their titles agree, their text is the same, or they share both of Calibre's IDs. A retitled new edition with different text and only one ID in common is kept apart; so are different books that share an ID by mistake.
 
-With Cloud library, catalog books in its folder are recognised whether or not they've been opened. A file with no book ID of its own (a PDF, or an EPUB without one) that Cloud library matches by title shares status, rating and statistics with its catalog book; an EPUB with its own ID goes by that instead. If Cloud library stops matching a file to a book, the device that made the match withdraws it at its next sync.
+With Athenaeum, catalog books in its folder are recognised whether or not they've been opened. A file with no book ID of its own (a PDF, or an EPUB without one) that Athenaeum matches by title shares status, rating and statistics with its catalog book; an EPUB with its own ID goes by that instead. If Athenaeum stops matching a file to a book, the device that made the match withdraws it at its next sync.
 
 Tools → Concordance → **Status** shows how many books are known in more than one version; Concordance web's **Versions** page lists them.
 
@@ -208,10 +221,10 @@ Tools → Concordance → **Status** shows how many books are known in more than
 
 | Problem | What to do |
 | --- | --- |
-| A cloud book shows an old cover | Cloud library → Refresh all covers |
-| New books on the server don't appear | Cloud library → Quick sync now; for edited or removed books, Full sync now |
-| Cloud library says part of it was turned off | Usually after a KOReader or ZenOS update. Check Cloud library → Status and `crash.log`, then update the plugin |
-| Removing Cloud library | Turn off Show cloud books first, so the file browser forgets them |
+| A cloud book shows an old cover | Athenaeum → Refresh all covers |
+| New books on the server don't appear | Athenaeum → Quick sync now; for edited or removed books, Full sync now |
+| Athenaeum says part of it was turned off | Usually after a KOReader or ZenOS update. Check Athenaeum → Status and `crash.log`, then update the plugin |
+| Removing Athenaeum | Turn off Show cloud books first, so the file browser forgets them |
 | Statistics missing on a device | Concordance → Troubleshooting → Rebuild from server (adds only, never deletes) |
 | Device restored from another device's backup | Concordance → Troubleshooting → Reset device ID |
 | "Removed highlights waiting for you" in the menu | Choose whether to restore them here or remove them everywhere |
@@ -221,10 +234,10 @@ Tools → Concordance → **Status** shows how many books are known in more than
 Things to avoid:
 
 - Don't sync books' `.sdr` folders, `docsettings/`, `history.lua` or `collection.lua` with settings sync or another file sync; Concordance already handles them.
-- Don't copy Concordance or Cloud library between devices with settings sync; they update themselves.
+- Don't copy Concordance or Athenaeum between devices with settings sync; they update themselves.
 - Reading statistics and history entries you remove on one device stay on the others: to clear statistics everywhere, reset them on every device and remove the server's files by hand. Other deletions (highlights, ratings, reviews, collections, listed settings files) do sync.
 - Notes and reviews are sent as plain text to your server; passwords are never logged.
 
-Log lines start with `CloudLibrary:`, `Concordance:` or `StatSync:` in KOReader's `crash.log`.
+Log lines start with `Athenaeum:`, `Concordance:` or `StatSync:` in KOReader's `crash.log`.
 
 For more detail, see [concordance.koplugin/README.md](concordance.koplugin/README.md), [SETTINGS.md](concordance.koplugin/SETTINGS.md), [STATISTICS.md](concordance.koplugin/STATISTICS.md) and [IDENTITY.md](concordance.koplugin/IDENTITY.md).
