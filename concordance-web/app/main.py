@@ -152,13 +152,14 @@ async def home(request: Request):
     # Pages per day over the last two weeks.
     first = today - timedelta(days=13)
     recent_days = books_by_day(by_md5, first, today)
-    page_items = []
+    page_items, page_links = [], []
     for i in range(14):
         d = first + timedelta(days=i)
         pages = sum(p for _, _, p in recent_days.get(d, []))
         page_items.append((f"{d:%a %-d}", pages, f"{d:%a %-d %b}"))
+        page_links.append(f"/day/{d.isoformat()}")
     pages_chart = charts.bars(page_items, aria="Pages read per day, last two weeks", unit=("page", "pages"),
-                              width=960, height=180)
+                              width=960, height=180, links=page_links)
     week = today - timedelta(days=today.weekday())
 
     def since(d0: date) -> int:
