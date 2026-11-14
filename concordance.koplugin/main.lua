@@ -792,7 +792,7 @@ function Concordance:menuItems()
 
 Book status (reading, on hold, finished), rating, review, custom metadata (title, authors, series…) and the handmade table of contents and hidden flows are synced with them, and so are collections and favorites (which books are in which, and the collections' names) and the reading history (when each book was last opened: a book read on another device goes into this device's history at the time it was read; books removed from the history aren't removed elsewhere). Status, rating, review, metadata and collections are written into books that aren't open too; the table of contents waits until the book is opened.
 
-A book read elsewhere that isn't on this device appears in the history only if Athenaeum is installed and has it: tap it to download it.
+A book read elsewhere that isn't on this device appears in the history only if Athenæum is installed and has it: tap it to download it.
 
 Notes and reviews are stored on the server as plain text.
 

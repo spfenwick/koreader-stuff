@@ -279,7 +279,7 @@ function Updates.menuItems()
     local items = {
         {
             text = _("Check for updates"),
-            help_text = T(_("Checks for new versions of Concordance and Athenaeum (if it's installed).\n\nInstalled: %1"),
+            help_text = T(_("Checks for new versions of Concordance and Athenæum (if it's installed).\n\nInstalled: %1"),
                 table.concat(versions, ", ")),
             enabled_func = function() return #list(true) > 0 end,
             keep_menu_open = true,

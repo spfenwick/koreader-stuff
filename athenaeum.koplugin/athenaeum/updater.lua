@@ -15,7 +15,7 @@ local _ = require("gettext")
 
 local Updater = require("athenaeum/updatecore").new{
     name = "athenaeum",
-    title = _("Athenaeum"),
+    title = _("Athenæum"),
     -- In settings/athenaeum/settings.lua, with the plugin's settings.
     settings_key = require("athenaeum/settings").UPDATES_KEY,
     settings = function() return require("athenaeum/settings").store() end,

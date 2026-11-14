@@ -67,7 +67,7 @@ else
 fi
 # Plugin versions on the status page, the Pixel's Concordance marked as behind.
 status=$(curl -sf "$base/status")
-if echo "$status" | grep -q 'Athenaeum 0.7.1' && echo "$status" | grep -q 'class="behind"[^>]*>Concordance 0.2.2<' \
+if echo "$status" | grep -q 'Athenæum 0.7.1' && echo "$status" | grep -q 'class="behind"[^>]*>Concordance 0.2.2<' \
     && echo "$status" | grep -q 'ZenOS 4.3.1' && echo "$status" | grep -q '>KOReader 2025.10-58<' \
     && echo "$status" | grep -q 'class="behind"[^>]*>KOReader 2025.10<'; then
     echo "200 plugin versions shown"
@@ -89,7 +89,7 @@ if echo "$versions" | grep -q '1a2b3c4d-0000-4000-8000-000000000001' && echo "$v
     else
         echo "versions: Pride and Prejudice's editions not grouped by book ID" >&2; fail=1
     fi
-    if echo "$versions" | grep -q 'Matched to its catalog book by Athenaeum'; then
+    if echo "$versions" | grep -q 'Matched to its catalog book by Athenæum'; then
         echo "200 file linked by Athenaeum listed"
     else
         echo "versions: Moby-Dick's PDF not joined through its link" >&2; fail=1
