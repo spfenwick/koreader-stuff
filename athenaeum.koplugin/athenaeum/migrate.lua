@@ -134,6 +134,23 @@ function Migrate.fixPackagePath()
     package.path = Migrate.dir .. "/?.lua;" .. package.path
 end
 
+--- After a move this session, at the end of main.lua: KOReader reads
+-- _meta.lua (version, fullname, description) from the old folder once
+-- main.lua has run, finds nothing there and leaves it out, so it's added
+-- here from the new folder. Without it, the plugin has no version this
+-- session ("Check for updates (?)", and Concordance doesn't list it).
+function Migrate.addMeta(plugin_class)
+    if not Migrate.moved_from then return end
+    local ok, meta = pcall(dofile, Migrate.dir .. "/_meta.lua")
+    if not ok or type(meta) ~= "table" then
+        logger.warn("Athenaeum: can't read _meta.lua after moving:", meta)
+        return
+    end
+    for k, v in pairs(meta) do
+        if k ~= "name" and plugin_class[k] == nil then plugin_class[k] = v end
+    end
+end
+
 --- When the plugin starts, after a move this session: KOReader has the old
 -- folder as the plugin's path and in its search path for modules.
 -- plugin_class: the table main.lua returned (its instances inherit `path`).

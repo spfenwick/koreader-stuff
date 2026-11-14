@@ -111,4 +111,7 @@ function Athenaeum:onAthenaeumSync()
     return true
 end
 
+-- After moving out of cloudlibrary.koplugin: KOReader can't find _meta.lua.
+Migrate.addMeta(Athenaeum)
+
 return Athenaeum

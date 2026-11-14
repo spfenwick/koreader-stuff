@@ -156,6 +156,12 @@ do
     check(class.path == new, "started: the plugin's path is the new folder")
     check(package.path == saved_path .. ";" .. new .. "/?.lua", "started: modules found in the new folder")
     check(package.cpath == saved_cpath .. ";" .. new .. "/lib/?.so", "started: libraries found in the new folder")
+    -- KOReader looks for _meta.lua in the old folder: added from the new one.
+    write(new .. "/_meta.lua", 'return { fullname = "Athenaeum", version = "0.8.1", name = "x" }')
+    local loaded = { name = "athenaeum", fullname = "kept" }
+    M.addMeta(loaded)
+    check(loaded.version == "0.8.1" and loaded.name == "athenaeum" and loaded.fullname == "kept",
+        "moved: version from the new folder's _meta.lua")
     package.path, package.cpath = saved_path, saved_cpath
     purge(PLUGINS)
 end
@@ -221,6 +227,9 @@ do
     local new = PLUGINS .. "/athenaeum.koplugin"
     plugin(new, { ["main.lua"] = "" })
     check(M.folder(new) == true and M.moved_from == nil, "nothing to move")
+    local loaded = {}
+    M.addMeta(loaded)
+    check(loaded.version == nil, "not moved: _meta.lua left to KOReader")
     check(M.folder(nil) == true, "no folder known: loads")
     purge(PLUGINS)
 end
