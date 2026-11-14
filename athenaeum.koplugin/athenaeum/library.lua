@@ -695,26 +695,26 @@ end
 
 local function describeResult(r)
     if r.error then
-        return T(_("Athenaeum: %1 failed: %2"), jobName(r.mode, r.sync and r.sync.escalated), r.error)
+        return T(_("Athenæum: %1 failed: %2"), jobName(r.mode, r.sync and r.sync.escalated), r.error)
     end
     if r.mode == "covers" and r.covers then
         local n = r.covers.fetched_total or r.covers.fetched
         local same = r.covers.unchanged_total or r.covers.unchanged or 0
         if r.covers.network_error then
-            return T(_("Athenaeum: %1 covers downloaded, then the network was lost."), n)
+            return T(_("Athenæum: %1 covers downloaded, then the network was lost."), n)
         end
         if same > 0 then
-            return T(_("Athenaeum: %1 covers downloaded, %2 unchanged."), n, same)
+            return T(_("Athenæum: %1 covers downloaded, %2 unchanged."), n, same)
         end
-        return T(_("Athenaeum: %1 covers downloaded."), n)
+        return T(_("Athenæum: %1 covers downloaded."), n)
     end
     local s = r.sync
-    if not s then return _("Athenaeum: device books checked.") end
+    if not s then return _("Athenæum: device books checked.") end
     if s.deleted ~= nil then
-        return T(_("Athenaeum: %1 books (%2 new, %3 removed)."), s.total, s.added, s.deleted)
+        return T(_("Athenæum: %1 books (%2 new, %3 removed)."), s.total, s.added, s.deleted)
     end
-    if s.added > 0 then return T(_("Athenaeum: %1 new books."), s.added) end
-    return _("Athenaeum is up to date.")
+    if s.added > 0 then return T(_("Athenæum: %1 new books."), s.added) end
+    return _("Athenæum is up to date.")
 end
 
 --- Starts a sync in a subprocess. mode: "quick", "full", "scan" (local
@@ -723,7 +723,7 @@ end
 function Library.sync(mode, quiet, opts)
     if Library.job then
         if not quiet then
-            notify(T(_("Athenaeum: a %1 is already running."), jobName(Library.job.mode)))
+            notify(T(_("Athenæum: a %1 is already running."), jobName(Library.job.mode)))
         end
         return false
     end
@@ -731,7 +731,7 @@ function Library.sync(mode, quiet, opts)
     if not server then
         if not quiet then
             UIManager:show(require("ui/widget/infomessage"):new{
-                text = _("Choose your library's OPDS catalog first: Athenaeum → Catalog."),
+                text = _("Choose your library's OPDS catalog first: Athenæum → Catalog."),
             })
         end
         return false
@@ -746,17 +746,17 @@ function Library.sync(mode, quiet, opts)
         ffiutil.writeToFD(child_fd, require("dump")(result), true)
     end, true)
     if not pid then
-        if not quiet then notify(T(_("Athenaeum: %1 failed: %2"), jobName(mode), tostring(fd))) end
+        if not quiet then notify(T(_("Athenæum: %1 failed: %2"), jobName(mode), tostring(fd))) end
         return false
     end
     Library.job = { pid = pid, fd = fd, mode = mode, quiet = quiet, opts = opts, db_path = db_path,
         started = os.time(), t0 = Timing.start() }
     if not quiet and mode == "covers" then
-        notify(_("Athenaeum: downloading covers…"))
+        notify(_("Athenæum: downloading covers…"))
     elseif not quiet and mode == "full" then
-        notify(_("Athenaeum: full sync…"))
+        notify(_("Athenæum: full sync…"))
     elseif not quiet and mode ~= "scan" then
-        notify(_("Athenaeum: quick sync…"))
+        notify(_("Athenæum: quick sync…"))
     end
     UIManager:scheduleIn(1, Library.poll)
     return true
@@ -837,7 +837,7 @@ local function pollJob()
         end
     end
     if covers and covers.backfill_done then
-        notify(T(_("Athenaeum: all %1 covers downloaded."), Library.stats.covers or 0))
+        notify(T(_("Athenæum: all %1 covers downloaded."), Library.stats.covers or 0))
     end
     if more then
         Library.sync(job.mode, true, { manual = job.opts.manual, retry_before = job.opts.retry_before,
@@ -854,7 +854,7 @@ function Library.refreshCovers()
     local server = Library.server()
     if not server then return end
     if Library.job then
-        notify(T(_("Athenaeum: a %1 is already running."), jobName(Library.job.mode)))
+        notify(T(_("Athenæum: a %1 is already running."), jobName(Library.job.mode)))
         return
     end
     UIManager:show(require("ui/widget/confirmbox"):new{
@@ -943,11 +943,11 @@ function Library.download(id, opts)
         if c.ext == opts.ext then format = c end
     end
     if not format then
-        notify(T(_("Athenaeum: no downloadable format for %1."), book.title or id))
+        notify(T(_("Athenæum: no downloadable format for %1."), book.title or id))
         return false
     end
     if Downloads.isQueued(id) then
-        notify(T(_("Athenaeum: already downloading %1."), book.title or id))
+        notify(T(_("Athenæum: already downloading %1."), book.title or id))
         return false
     end
     local url = require("athenaeum/sync").resolve(server.url, format.href)
@@ -1156,7 +1156,7 @@ end
 
 function Library.menuEntry(plugin)
     return {
-        text = _("Athenaeum"),
+        text = _("Athenæum"),
         sorting_hint = "tools",
         sub_item_table_func = function()
             local has_server = function() return Library.server() ~= nil end
@@ -1340,7 +1340,7 @@ function Library.menuEntry(plugin)
                         callback = function()
                             local TextViewer = require("ui/widget/textviewer")
                             UIManager:show(TextViewer:new{
-                                title = _("Athenaeum timings"),
+                                title = _("Athenæum timings"),
                                 text = Timing.text(),
                                 monospace_font = false,
                             })

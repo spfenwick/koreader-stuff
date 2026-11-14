@@ -64,7 +64,7 @@ function Guard.fail(feature, where, err)
                 local InfoMessage = require("ui/widget/infomessage")
                 local _ = require("gettext")
                 UIManager:show(InfoMessage:new{
-                    text = _("Athenaeum turned part of itself off after an error, probably from a KOReader or ZenOS update. Your books and the file browser aren't affected.\n\nDetails: Athenaeum → Status, and crash.log."),
+                    text = _("Athenæum turned part of itself off after an error, probably from a KOReader or ZenOS update. Your books and the file browser aren't affected.\n\nDetails: Athenæum → Status, and crash.log."),
                 })
             end)
         end

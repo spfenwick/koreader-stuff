@@ -480,7 +480,7 @@ def read_devices() -> list[dict]:
 
 # In the order shown. "koreader" is KOReader itself (its short version, such
 # as "2025.10-58": year, month, point release, commits since).
-PLUGIN_NAMES = {"concordance": "Concordance", "athenaeum": "Athenaeum", "zenos": "ZenOS",
+PLUGIN_NAMES = {"concordance": "Concordance", "athenaeum": "Athenæum", "zenos": "ZenOS",
                 "koreader": "KOReader"}
 # Old names: Athenaeum was Cloud library ("cloudlibrary"), which devices with
 # an older Concordance still report.

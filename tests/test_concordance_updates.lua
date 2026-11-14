@@ -94,7 +94,7 @@ do
     Updates.check(true)
     local w = last()
     check(w and not w.confirm and has(w.text, "Concordance: up to date (0.7.0)")
-        and has(w.text, "Athenaeum: up to date (0.2.3)"), "both up to date: one message listing both")
+        and has(w.text, "Athenæum: up to date (0.2.3)"), "both up to date: one message listing both")
     check(#fetches == 2 and shown[1].text == "Checking for updates…" and shown[1].closed, "one check, both plugins")
 
     reset()
@@ -103,10 +103,10 @@ do
     w = last()
     check(w.confirm and w.ok_text == "Install all" and not w.other_buttons
         and has(w.text, "Concordance: 0.7.1 available (installed: 0.7.0)")
-        and has(w.text, "Athenaeum: 0.2.4 available (installed: 0.2.3)"), "both newer: one dialog, Install all")
+        and has(w.text, "Athenæum: 0.2.4 available (installed: 0.2.3)"), "both newer: one dialog, Install all")
     w.ok_callback()
     check(table.concat(installs, ",") == "concordance 0.7.1,athenaeum 0.2.4", "both installed")
-    check(#restarts == 1 and has(restarts[1], "Concordance 0.7.1, Athenaeum 0.2.4"), "one restart prompt for both")
+    check(#restarts == 1 and has(restarts[1], "Concordance 0.7.1, Athenæum 0.2.4"), "one restart prompt for both")
     check(OS.installed == "0.7.1" and CL.installed == "0.2.4", "each updater knows its update is waiting")
     restarts = {}
     Updates.check(true)
@@ -129,7 +129,7 @@ do
     Updates.check(true)
     last().ok_callback()
     check(#restarts == 1 and has(restarts[1], "Updated: Concordance 0.7.1") and has(restarts[1], "Couldn't update:")
-        and has(restarts[1], "Athenaeum: 404"), "a failed download is reported with the restart prompt")
+        and has(restarts[1], "Athenæum: 404"), "a failed download is reported with the restart prompt")
 end
 
 -- Automatic -------------------------------------------------------------------------------
@@ -161,7 +161,7 @@ do
     Updates.check(false)
     check(table.concat(installs, ",") == "concordance 0.7.1", "install mode: installed without asking")
     w = last()
-    check(w.confirm and has(w.text, "Athenaeum: 0.2.4 available") and #restarts == 0,
+    check(w.confirm and has(w.text, "Athenæum: 0.2.4 available") and #restarts == 0,
         "notify mode: offered, restart prompt after the answer")
     w.cancel_callback()
     check(#restarts == 1 and has(restarts[1], "Concordance 0.7.1"), "one restart prompt, with the automatic install")
@@ -223,11 +223,11 @@ do
     OS.setMode("install")
     CL.setMode("off")
     local items = Updates.menuItems()
-    check(items[1].text == "Check for updates" and has(items[1].help_text, "Concordance 0.7.0, Athenaeum 0.2.3"),
+    check(items[1].text == "Check for updates" and has(items[1].help_text, "Concordance 0.7.0, Athenæum 0.2.3"),
         "menu: one check, versions in its help")
     local auto = items[2].sub_item_table
     check(items[2].text == "Automatic updates" and #auto == 2 and auto[1].text_func() == "Concordance: install"
-        and auto[2].text_func() == "Athenaeum: off", "menu: each plugin's automatic mode")
+        and auto[2].text_func() == "Athenæum: off", "menu: each plugin's automatic mode")
     auto[2].sub_item_table[2].callback()
     check(CL.getMode() == "notify", "menu: sets the plugin's own mode")
     with_cl = false

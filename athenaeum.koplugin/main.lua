@@ -47,7 +47,7 @@ end
 
 function Athenaeum:onDispatcherRegisterActions()
     Dispatcher:registerAction("athenaeum_sync", {
-        category = "none", event = "AthenaeumSync", title = _("Athenaeum: quick sync"),
+        category = "none", event = "AthenaeumSync", title = _("Athenæum: quick sync"),
         general = true,
     })
 end
@@ -65,7 +65,7 @@ function Athenaeum:init()
                 local UIManager = require("ui/uimanager")
                 UIManager:nextTick(function()
                     UIManager:show(require("ui/widget/infomessage"):new{
-                        text = _("Athenaeum needs ZenOS (a version with book sources). It's turned off."),
+                        text = _("Athenæum needs ZenOS (a version with book sources). It's turned off."),
                     })
                 end)
             end

@@ -63,7 +63,7 @@ local function warn(what, ...)
     local n = select("#", ...)
     local detail = n > 0 and tostring((select(n, ...))) or nil
     require("concordance/problems").report("identity:" .. tostring(what),
-        "Book identity (shared with Athenaeum): " .. tostring(what):gsub(":$", ""), detail)
+        "Book identity (shared with Athenæum): " .. tostring(what):gsub(":$", ""), detail)
 end
 
 local function load()
