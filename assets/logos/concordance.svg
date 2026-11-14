@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Concordance">
+  <title>Concordance</title>
+  <rect width="64" height="64" rx="14" fill="#111"/>
+  <!-- Two interlocked rings: each has a gap where it passes under the other
+       (the left one under at the top, the right one under at the bottom). -->
+  <g fill="none" stroke="#fff" stroke-width="5">
+    <path d="M34.91 25.24A12 12 0 1 1 28.24 20.45"/>
+    <path d="M29.09 38.76A12 12 0 1 1 35.76 43.55"/>
+  </g>
+</svg>

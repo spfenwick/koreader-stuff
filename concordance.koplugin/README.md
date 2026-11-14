@@ -1,3 +1,5 @@
+<img src="../assets/logos/concordance.svg" width="64" alt="">
+
 # Concordance (concordance.koplugin)
 
 Keeps KOReader the same on several devices, through a server set up in

@@ -6,9 +6,9 @@ data.
 
 | | What it does | Docs |
 | --- | --- | --- |
-| **Concordance** (`concordance.koplugin`) | Keeps settings, reading statistics, highlights, bookmarks, book status, collections and history the same on every device, through your own WebDAV (or Dropbox) server | [README](concordance.koplugin/README.md) |
+| <img src="assets/logos/concordance.svg" width="20" alt=""> **Concordance** (`concordance.koplugin`) | Keeps settings, reading statistics, highlights, bookmarks, book status, collections and history the same on every device, through your own WebDAV (or Dropbox) server | [README](concordance.koplugin/README.md) |
 | **Concordance web** (`concordance-web/`) | A web app that shows what Concordance keeps on the server: books, highlights, reading statistics | [README](concordance-web/README.md) |
-| **Athenaeum** (`athenaeum.koplugin`, formerly Cloud library) | Lists every book in your Calibre-Web Automated library in the file browser, downloaded or not (needs ZenOS) | [User guide](USER_GUIDE.md#athenaeum) |
+| <img src="assets/logos/athenaeum.svg" width="20" alt=""> **Athenaeum** (`athenaeum.koplugin`, formerly Cloud library) | Lists every book in your Calibre-Web Automated library in the file browser, downloaded or not (needs ZenOS) | [User guide](USER_GUIDE.md#athenaeum) |
 | **Knuth–Plass justification** (`knuthplass.koplugin`) | Knuth–Plass paragraph line breaking, with a custom KOReader engine it installs itself | [README](knuthplass.koplugin/README.md) |
 
 See the [user guide](USER_GUIDE.md) for using Athenaeum and Concordance,

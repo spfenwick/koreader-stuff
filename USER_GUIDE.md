@@ -15,6 +15,8 @@ Concordance also has an optional web app, Concordance web, for browsing your boo
 
 ## Athenaeum
 
+<img src="assets/logos/athenaeum.svg" width="48" alt="">
+
 Every book in your catalog appears in your library folder, whether it's on the device or not. Books not yet downloaded are "cloud books": they look and sort like real books, with covers, and download when you want them.
 
 Athenaeum was called Cloud library before version 0.8.0. Its old folder name, `cloudlibrary.koplugin`, is also used by another plugin, which made the two clash in package managers such as ZenPM.
