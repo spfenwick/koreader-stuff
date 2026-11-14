@@ -1,10 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Concordance">
   <title>Concordance</title>
+  <defs>
+    <!-- Where one ring passes under the other, it's cut away within 1.5 of
+         the other ring's edge, so the gap follows that ring's curve. The
+         left ring passes under at the top, the right one at the bottom. -->
+    <mask id="concordance-under-top" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M27 32A12 12 0 0 1 51 32" fill="none" stroke="#000" stroke-width="8"/>
+    </mask>
+    <mask id="concordance-under-bottom" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M37 32A12 12 0 0 1 13 32" fill="none" stroke="#000" stroke-width="8"/>
+    </mask>
+  </defs>
   <rect width="64" height="64" rx="14" fill="#111"/>
-  <!-- Two interlocked rings: each has a gap where it passes under the other
-       (the left one under at the top, the right one under at the bottom). -->
   <g fill="none" stroke="#fff" stroke-width="5">
-    <path d="M34.91 25.24A12 12 0 1 1 28.24 20.45"/>
-    <path d="M29.09 38.76A12 12 0 1 1 35.76 43.55"/>
+    <circle cx="25" cy="32" r="12" mask="url(#concordance-under-top)"/>
+    <circle cx="39" cy="32" r="12" mask="url(#concordance-under-bottom)"/>
   </g>
 </svg>
