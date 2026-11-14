@@ -29,6 +29,7 @@ cd "$repo_dir"
 "$lua_bin" tests/test_updatecore.lua
 "$lua_bin" tests/test_plugin.lua
 "$lua_bin" tests/test_athenaeum_migrate.lua
+"$lua_bin" tests/test_athenaeum_settings.lua
 "$lua_bin" tests/test_concordance_settings.lua
 # The rest of concordance.koplugin's tests need KOReader's sources and rclone:
 # scripts/test-concordance.sh

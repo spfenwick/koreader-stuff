@@ -1403,6 +1403,7 @@ do
     local Library = require("athenaeum/library")
     local Updater = require("athenaeum/updater")
     os.remove(Settings.path())
+    os.remove(Settings.sharedPath())
     Settings.reset()
     G_reader_settings:saveSetting("athenaeum", { folder = "/books", badge_local = true, show = false })
     G_reader_settings:saveSetting("athenaeum_updates", { mode = "install", last_check = 123 })
@@ -1429,6 +1430,7 @@ do
     eq(G_reader_settings:readSetting("athenaeum"), nil, "older copy removed")
 
     os.remove(Settings.path())
+    os.remove(Settings.sharedPath())
     Settings.reset()
 end
 

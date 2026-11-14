@@ -3,7 +3,8 @@ Ties the pieces together: settings, the catalog store, syncing in a
 subprocess, matching local files, and the virtual entries shown in the file
 browser.
 
-Settings (settings/athenaeum/settings.lua, see settings.lua):
+Settings (settings/athenaeum/settings.lua for the folder, shared.lua for
+the rest; see settings.lua):
   server     { url, username } of one of KOReader's OPDS catalogs
   folder     library folder (default: KOReader's download folder, else home)
   show       show cloud books (default true)

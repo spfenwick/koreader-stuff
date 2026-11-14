@@ -9,7 +9,7 @@ Athenaeum puts your whole online book collection in KOReader's file browser; Con
 | What it does | Lists every book in your Calibre-Web Automated OPDS catalog, downloaded or not. Tested only with Calibre-Web Automated and may rely on its features; other OPDS servers may not work | Syncs settings, reading statistics, highlights, bookmarks, book status and history |
 | Needs | ZenOS (with book sources) and an OPDS catalog in KOReader's OPDS plugin | A WebDAV server in Cloud storage (Dropbox works for settings only) |
 | Menu | Athenaeum | Tools → Concordance |
-| Settings file | `settings/athenaeum/settings.lua` | `settings/concordance/` |
+| Settings files | `settings/athenaeum/settings.lua` (this device), `settings/athenaeum/shared.lua` (can be synced) | `settings/concordance/` |
 
 Concordance also has an optional web app, Concordance web, for browsing your books, highlights and reading statistics in a browser.
 
@@ -37,6 +37,16 @@ Between installing the update and restarting, the running Cloud library may repo
 1. Add your library's catalog in KOReader's OPDS catalog plugin (with its username and password).
 2. Athenaeum → **Catalog**: choose it. This runs a full sync.
 3. Athenaeum → **Folder**: where cloud books are listed and downloaded to. It defaults to KOReader's download folder. Books already in this folder (not its subfolders) are recognised as catalog books, so they aren't listed twice.
+
+### Same settings on every device
+
+Athenaeum keeps the settings that can be the same everywhere in `settings/athenaeum/shared.lua`: the catalog, badges, search, ZenOS tabs, showing cloud books and the sync schedule. The library folder and the updater stay in `settings/athenaeum/settings.lua`, one per device. To share them with Concordance's settings sync, add this line to `settings/concordance/sync.txt`:
+
+```
+/settings/athenaeum/shared.lua
+```
+
+Sync first from the device whose settings you want to keep. The catalog is shared by its URL and username, so add it to every device's OPDS catalogs with the same URL and username (each device keeps its own password). A device whose OPDS catalog has a different URL or username shows no cloud books: correct it in KOReader's OPDS catalog rather than choosing the catalog again in Athenaeum, which would change it on every device.
 
 ### Browsing cloud books
 
