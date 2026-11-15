@@ -455,9 +455,13 @@ function Concordance:showLog(title, text, buttons)
     return viewer
 end
 
-function Concordance:syncSettings(preview)
+--- opts (to settle conflicts): { resolve = "server", "here" or "newest",
+--- only = the files, previous = the sync that found them, to report with }.
+function Concordance:syncSettings(preview, opts)
+    opts = opts or {}
     local p = settingsPaths()
-    if not preview and SettingsEngine.isPending(p) then
+    -- Settling conflicts touches only those files, so it's allowed then.
+    if not preview and not opts.only and SettingsEngine.isPending(p) then
         UIManager:askForRestart(_("Pulled settings are waiting to be put in place at the next start. Syncing now would send the old ones back.\n\nRestart KOReader first?"))
         return
     end
@@ -483,7 +487,7 @@ function Concordance:syncSettings(preview)
                     local remote, err = Remote.new(server, root)
                     if not remote then return { fatal = err, log = err } end
                     return SettingsEngine.sync({ paths = p, remote = remote, device = device },
-                        { preview = preview })
+                        { preview = preview, resolve = opts.resolve, only = opts.only })
                 end)
                 if ok then return res end
                 return { fatal = tostring(res), log = tostring(res) }
@@ -492,15 +496,88 @@ function Concordance:syncSettings(preview)
                 notify(_("Sync cancelled. Run it again to finish."))
                 return
             end
-            self:reportSettings(result or { fatal = _("The sync stopped unexpectedly.") }, preview)
+            self:reportSettings(result or { fatal = _("The sync stopped unexpectedly.") }, preview,
+                opts.previous)
         end)
     end)
 end
 
-function Concordance:reportSettings(result, preview)
+local COUNTS = { "uploaded", "downloaded", "deleted_here", "deleted_server", "already_there" }
+
+-- A sync settling conflicts is reported together with the one that found
+-- them.
+local function addPrevious(result, previous)
+    for __, key in ipairs(COUNTS) do
+        result[key] = (result[key] or 0) + (previous[key] or 0)
+    end
+    result.restart = result.restart or previous.restart
+    result.pending = result.pending or previous.pending
+    local errors = {}
+    for __, e in ipairs(previous.errors or {}) do table.insert(errors, e) end
+    for __, e in ipairs(result.errors or {}) do table.insert(errors, e) end
+    result.errors = errors
+    result.log = (previous.log or "") .. "\n" .. (result.log or "")
+end
+
+local function timeText(t)
+    return t and os.date("%Y-%m-%d %H:%M", t) or "?"
+end
+
+--- Files changed both here and on another device: which to keep? Then
+--- settles them (a sync of just those files), or leaves them for later.
+function Concordance:askConflicts(result)
+    local held = result.held
+    local MAX = 8
+    local lines, paths = {}, {}
+    for i, c in ipairs(held) do
+        table.insert(paths, c.path)
+        if i <= MAX then
+            local where = c.newer == "server" and (c.by or _("the server")) or _("this device")
+            table.insert(lines, T(_("%1\n   newer on %2 (here %3, server %4)"), c.path, where,
+                timeText(c.here_time), timeText(c.server_time)))
+        end
+    end
+    if #held > MAX then table.insert(lines, T(_("…and %1 more"), #held - MAX)) end
+    -- The rest of the report, with the conflicts left as they are.
+    local previous = {}
+    for k, v in pairs(result) do previous[k] = v end
+    previous.held = nil
+    local dialog
+    local function choose(resolve)
+        UIManager:close(dialog)
+        self:syncSettings(false, { resolve = resolve, only = paths, previous = previous })
+    end
+    local ButtonDialog = require("ui/widget/buttondialog")
+    dialog = ButtonDialog:new{
+        title = T(_("These files changed both on this device and on the server since the last sync:\n\n%1\n\nWhich versions should be kept? The others are saved in %2."),
+            table.concat(lines, "\n"), settingsPaths().conflicts),
+        title_align = "left",
+        buttons = {
+            { { text = _("Keep the server's versions"), callback = function() choose("server") end } },
+            { { text = _("Keep this device's versions"), callback = function() choose("here") end } },
+            { { text = _("Keep the newest versions"), callback = function() choose("newest") end } },
+            { { text = _("Decide later"), callback = function()
+                UIManager:close(dialog)
+                previous.held_later = #held
+                self:reportSettings(previous)
+            end } },
+        },
+    }
+    UIManager:show(dialog)
+end
+
+function Concordance:reportSettings(result, preview, previous)
+    if previous then addPrevious(result, previous) end
     local log = result.log or ""
     if result.fatal then
         notify(result.fatal)
+        if previous and previous.restart then
+            UIManager:askForRestart(_("Pulled settings are put in place when KOReader restarts."))
+        end
+        return
+    end
+    if not preview and #(result.held or {}) > 0 then
+        self:askConflicts(result)
         return
     end
     local changes = (result.uploaded or 0) + (result.downloaded or 0)
@@ -523,6 +600,10 @@ function Concordance:reportSettings(result, preview)
     if (result.already_there or 0) > 0 then
         summary = summary .. " " .. T(_("%1 files were already on the server."), result.already_there)
     end
+    if (result.held_later or 0) > 0 then
+        summary = summary .. "\n\n" .. T(_("%1 files changed both here and on the server were left as they are. Sync again to choose which to keep."),
+            result.held_later)
+    end
     if #(result.errors or {}) > 0 then
         self:showLog(T(_("Sync finished with %1 errors"), #result.errors), log)
         return
@@ -539,7 +620,7 @@ function Concordance:reportSettings(result, preview)
         UIManager:askForRestart(summary .. "\n\n"
             .. (result.pending and _("Pulled settings are put in place when KOReader restarts.")
                 or _("The new files are used after KOReader restarts.")))
-    elseif changes == 0 and (result.already_there or 0) == 0 then
+    elseif changes == 0 and (result.already_there or 0) == 0 and (result.held_later or 0) == 0 then
         notify(_("Settings already up to date."))
     else
         notify(summary)

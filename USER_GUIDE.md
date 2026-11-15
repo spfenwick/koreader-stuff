@@ -139,7 +139,7 @@ List one pattern per line in `settings/concordance/sync.txt`, starting from KORe
 - A line starting with `<` is pull only: put the files on the server yourself (fonts, say) and devices download them.
 - The list itself syncs too, so change it on one device and the others follow.
 - **Preview changes** shows what a sync would do without doing it.
-- A file changed on both sides keeps the newer copy and saves the other in `settings/concordance/settings-sync/conflicts/`.
+- When a file changed on both sides, the sync asks which to keep: the server's versions, this device's, or the newest. The others are saved in `settings/concordance/settings-sync/conflicts/`. "Decide later" leaves them as they are until the next sync.
 - A listed file you delete on one device is deleted on the server and the other devices.
 - KOReader's main settings file, `settings.reader.lua`, is never synced: KOReader writes it back from memory, so a pulled copy would be lost.
 - Pulled settings are put in place at the next start, and the sync offers to restart.

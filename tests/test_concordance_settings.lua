@@ -235,8 +235,10 @@ check(not r.fatal and #r.errors == 0, "B's first sync\n" .. r.log)
 check(read(B.paths.list) == read(A.paths.list), "the list downloaded first")
 check(r.pending and r.restart, "settings wait for a restart")
 check(read(B.kodir .. "/settings/gestures.lua") == "return { b = 2 }\n", "settings not in place yet")
-check(#r.conflicts == 1 and r.conflicts[1].path == "settings/gestures.lua" and r.conflicts[1].kept == "A",
-    "both had gestures.lua: A's is newer")
+check(#r.conflicts == 0 and #r.held == 1 and r.held[1].path == "settings/gestures.lua"
+    and r.held[1].newer == "server" and r.held[1].by == "A",
+    "both had gestures.lua: held for B to choose, A's is newer")
+check(r.log:find("? settings/gestures.lua: changed here and on A (newer there)", 1, true), "the log says so\n" .. r.log)
 check(exists(B.kodir .. "/plugins/assistant.koplugin/configuration.lua"), "plugin file downloaded")
 check(exists(B.kodir .. "/plugins/own.koplugin/main.lua"), "unlisted plugin kept")
 check(exists(B.kodir .. "/patches/2-mine.lua") and exists(B.kodir .. "/patches/2-b-only.lua"),
@@ -250,6 +252,16 @@ check(read(B.kodir .. "/styletweaks/t.css") == "p {}\n", "style tweaks downloade
 -- A sync waits for the restart.
 r = sync(B)
 check(r.fatal and r.fatal:find("restart"), "sync refused while settings wait")
+
+-- Settling the conflict touches only that file, so it runs while settings
+-- wait. Without a choice it stays held.
+check(#sync(B, { preview = true }).held == 1, "still held")
+local manifest_before = read(remote_root .. "/manifest.tsv")
+r = sync(B, { resolve = "newest", only = { "settings/gestures.lua" } })
+check(not r.fatal and #r.held == 0 and #r.conflicts == 1 and r.conflicts[1].kept == "A"
+    and r.downloaded == 1 and r.uploaded == 0, "settled: A's is newer\n" .. r.log)
+check(read(B.kodir .. "/settings/gestures.lua") == "return { b = 2 }\n", "staged for the restart, like any setting")
+check(read(remote_root .. "/manifest.tsv") == manifest_before, "nothing else sent")
 
 -- The restart.
 local ok, apply_log = Engine.applyPending(B.paths)
@@ -338,15 +350,51 @@ r = sync(C)
 check(r.uploaded == 1 and read(files_root .. "/settings/ZenOS/config.lua") == "return { c = 3 }\n",
     "an edit beats a deletion\n" .. r.log)
 
--- Both changed: the newer is kept, the other saved.
+-- Both changed: held until A chooses; the rest of the sync goes ahead.
 write(A.kodir .. "/styletweaks/t.css", "A\n")
 touch(A.kodir .. "/styletweaks/t.css", os.time() - 60)
+write(A.kodir .. "/styletweaks/u.css", "U\n")
 write(B.kodir .. "/styletweaks/t.css", "B\n")
-check(sync(B).uploaded == 1, "B uploads first")
+do local rb = sync(B) check(rb.uploaded == 1, "B uploads first\n" .. rb.log) end
 r = sync(A)
+check(#r.conflicts == 0 and #r.held == 1 and r.held[1].path == "styletweaks/t.css" and r.held[1].newer == "server",
+    "held, B's is newer\n" .. r.log)
+check(read(A.kodir .. "/styletweaks/t.css") == "A\n" and read(files_root .. "/styletweaks/t.css") == "B\n",
+    "both left as they are")
+check(r.uploaded == 1 and exists(files_root .. "/styletweaks/u.css"), "the rest synced")
+Engine.applyPending(A.paths) -- C's edit, pulled in the same sync
+Engine.applyPending(B.paths) -- and by B, as it uploaded
+do local r2 = sync(A) check(#r2.held == 1, "held again by the next sync\n" .. r2.log) end
+
+-- Keep this device's, though older: sent to the server, B's saved here.
+r = sync(A, { resolve = "here", only = { "styletweaks/t.css" } })
+check(#r.conflicts == 1 and r.conflicts[1].kept == "this device" and r.uploaded == 1, "A's kept\n" .. r.log)
+check(read(files_root .. "/styletweaks/t.css") == "A\n", "A's on the server")
+check(r.conflicts[1].copy and read(r.conflicts[1].copy) == "B\n", "B's saved")
+check(#sync(A).held == 0, "settled here")
+r = sync(B)
+check(r.downloaded == 2 and #r.held == 0 and read(B.kodir .. "/styletweaks/t.css") == "A\n",
+    "settled everywhere (B gets A's, and u.css)\n" .. r.log)
+
+-- Keep the server's, though older.
+write(A.kodir .. "/styletweaks/t.css", "A2\n")
+write(B.kodir .. "/styletweaks/t.css", "B2\n")
+touch(B.kodir .. "/styletweaks/t.css", os.time() - 60)
+do local rb = sync(B) check(rb.uploaded == 1, "B uploads first\n" .. rb.log) end
+r = sync(A, { resolve = "server", only = { "styletweaks/t.css" } })
+check(#r.conflicts == 1 and r.conflicts[1].kept == "B" and read(A.kodir .. "/styletweaks/t.css") == "B2\n",
+    "the server's kept\n" .. r.log)
+check(r.conflicts[1].copy and read(r.conflicts[1].copy) == "A2\n", "A's saved")
+
+-- Keep the newest.
+write(A.kodir .. "/styletweaks/t.css", "A3\n")
+touch(A.kodir .. "/styletweaks/t.css", os.time() - 60)
+write(B.kodir .. "/styletweaks/t.css", "B3\n")
+do local rb = sync(B) check(rb.uploaded == 1, "B uploads first\n" .. rb.log) end
+r = sync(A, { resolve = "newest", only = { "styletweaks/t.css" } })
 check(#r.conflicts == 1 and r.conflicts[1].kept == "B", "B's is newer")
-check(read(A.kodir .. "/styletweaks/t.css") == "B\n", "A gets B's")
-check(r.conflicts[1] and r.conflicts[1].copy and read(r.conflicts[1].copy) == "A\n", "A's saved")
+check(read(A.kodir .. "/styletweaks/t.css") == "B3\n", "A gets B's")
+check(r.conflicts[1] and r.conflicts[1].copy and read(r.conflicts[1].copy) == "A3\n", "A's saved")
 
 -- Fonts: changes on the server come down; deletions on the server and
 -- fonts deleted here stay as they are.
@@ -818,6 +866,7 @@ stub("ui/widget/infomessage", {
 })
 stub("ui/widget/confirmbox", { new = function(_, o) return o end })
 stub("ui/widget/textviewer", { new = function(_, o) o.viewer = true return o end })
+stub("ui/widget/buttondialog", { new = function(_, o) o.button_dialog = true return o end })
 stub("ui/network/manager", { runWhenOnline = function(_, fn) fn() end, isConnected = function() return false end })
 -- Notifications time out, so the plugin shouldn't use them.
 stub("ui/widget/notification", { notify = function() error("a notification that times out") end })
@@ -958,12 +1007,33 @@ if row[2] then row[2].callback() end
 check(closed == viewer, "Sync now closes the preview")
 
 check(broadcast[1] == "FlushSettings" and flushed == 1, "sync saves settings first")
+-- gestures.lua changed here and on the server: which to keep?
+local dialog = shown[#shown]
+check(dialog and dialog.button_dialog and dialog.title:find("settings/gestures.lua", 1, true)
+    and #restarts == 0, "asks which versions to keep, before anything else")
+local choices = {}
+for _, b in ipairs(dialog and dialog.buttons or {}) do table.insert(choices, b[1].text) end
+check(table.concat(choices, "|") == "Keep the server's versions|Keep this device's versions|Keep the newest versions|Decide later",
+    "the choices: " .. table.concat(choices, "|"))
+-- Later: left as it is, and the report says so.
+local before_later = #notified
+dialog.buttons[4][1].callback()
+check(closed == dialog and #notified == before_later + 1 and notified[#notified]:find("left as they are", 1, true),
+    "decided later: " .. tostring(notified[#notified]))
+check(read(P.kodir .. "/settings/gestures.lua") == "return { p = 1 }\n" and not Engine.isPending(P.paths),
+    "gestures left alone")
+-- Again, and the newest (the server's) kept.
+plugin:onConcordanceSettings()
+dialog = shown[#shown]
+check(dialog and dialog.button_dialog, "asked again by the next sync")
+dialog.buttons[3][1].callback()
 check(#restarts == 1, "sync asks to restart for pulled settings")
 check(Engine.isPending(P.paths), "settings waiting")
 check(read(P.kodir .. "/settings/gestures.lua") == "return { p = 1 }\n", "not in place before restart")
 
+local broadcasts = #broadcast
 plugin:onConcordanceSettings()
-check(#restarts == 2 and #broadcast == 1, "sync refused while settings wait")
+check(#restarts == 2 and #broadcast == broadcasts, "sync refused while settings wait")
 check(item("Discard pulled settings"), "menu offers to discard")
 
 -- The next start puts them in place.

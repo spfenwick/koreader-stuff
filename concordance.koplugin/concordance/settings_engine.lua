@@ -19,8 +19,10 @@ read again.
 
 Comparing a file with its state at the last sync tells which side changed
 it, so a file a device never had isn't taken as deleted there. When both
-sides changed a file, the newer one is kept and the other is saved in
-conflicts/.
+sides changed a file, it's left as it is on both (result.held) until the
+user chooses which to keep: a sync with opts.resolve ("server", "here" or
+"newest") and opts.only (those files) then keeps that one and saves the
+other in conflicts/.
 
 Settings files that KOReader keeps in memory (gestures.lua and the like)
 would be written over with the old values when KOReader next saves them.
@@ -519,7 +521,7 @@ end
 local function newResult()
     return {
         uploaded = 0, downloaded = 0, deleted_here = 0, deleted_server = 0, already_there = 0,
-        conflicts = {}, errors = {}, skipped = {}, lines = {},
+        conflicts = {}, held = {}, errors = {}, skipped = {}, lines = {},
         restart = false, pending = false,
     }
 end
@@ -632,7 +634,7 @@ local function syncTwoWay(ctx, result, L, R)
         end
     end
 
-    for _, path in ipairs(sortedKeys(all)) do
+    local function syncPath(path)
         local l, r, b = L[path], R[path], B[path]
         local lh, rh = l and l.h, r and r.h
         local full = fullOf(ctx, path)
@@ -691,12 +693,29 @@ local function syncTwoWay(ctx, result, L, R)
                 end
             end
         else
-            -- Changed on both sides. A change beats a deletion; otherwise
-            -- the newer one is kept and the other saved in conflicts/.
+            -- Changed on both sides. A change beats a deletion. Otherwise
+            -- the user chooses (ctx.resolve): until then both are left as
+            -- they are, and the file stays a conflict for the next sync.
+            local newer_server = rh and lh and (r.t or 0) > (l.mtime or 0)
+            if lh and rh and not ctx.resolve then
+                table.insert(result.held, {
+                    path = path,
+                    by = r.by ~= "" and r.by or nil,
+                    server_time = r.t,
+                    here_time = l.mtime,
+                    newer = newer_server and "server" or "here",
+                })
+                say(result, "  ? " .. path .. ": changed here and on " .. (r.by ~= "" and r.by or "the server")
+                    .. " (newer " .. (newer_server and "there" or "here") .. "), waiting for your choice")
+                newB[path] = b
+                return
+            end
             local keep_server
             if not lh then keep_server = true
             elseif not rh then keep_server = false
-            else keep_server = (r.t or 0) > (l.mtime or 0) end
+            elseif ctx.resolve == "server" then keep_server = true
+            elseif ctx.resolve == "here" then keep_server = false
+            else keep_server = newer_server end
             local conflict = {
                 path = path,
                 kept = keep_server and (r.by ~= "" and r.by or "the server") or "this device",
@@ -728,6 +747,15 @@ local function syncTwoWay(ctx, result, L, R)
             else
                 push(path, l, b)
             end
+        end
+    end
+
+    for _, path in ipairs(sortedKeys(all)) do
+        if ctx.only and not ctx.only[path] then
+            -- Not this sync's business: as it was.
+            newB[path] = B[path]
+        else
+            syncPath(path)
         end
     end
 end
@@ -931,6 +959,9 @@ local function runOnce(ctx)
             return result
         end
         ctx.manifest = manifest
+    elseif version == "not_found" and ctx.only then
+        result.fatal = "The file list is gone from the server. Sync again."
+        return result
     elseif version == "not_found" then
         ctx.manifest = {}
         version = nil
@@ -990,7 +1021,7 @@ local function runOnce(ctx)
         end
         for _, key in ipairs(sortedKeys(kept_out)) do say(result, "  - " .. key .. ": " .. kept_out[key]) end
         syncTwoWay(ctx, result, Ls, Rs)
-        if #rules.pull > 0 then
+        if #rules.pull > 0 and not ctx.only then
             say(result, "pulled only:")
             syncPullOnly(ctx, result, rules, Lp)
         else
@@ -1025,18 +1056,34 @@ local function runOnce(ctx)
     return result
 end
 
+--- How a conflict can be settled (opts.resolve).
+Engine.RESOLVE = { server = true, here = true, newest = true }
+
 --- Sync with the server.
 ---   ctx:  { paths = Engine.paths(kodir), remote, device }
----   opts: { preview }
---- Returns a result: counts, conflicts, errors, restart, pending, fatal, log.
+---   opts: { preview, resolve, only }
+---     resolve: for files changed on both sides, keep the "server"'s
+---              version, this device's ("here") or the "newest". Without
+---              it they're left as they are, listed in result.held.
+---     only:    a list of paths: sync just those (to settle conflicts).
+---              Nothing else is touched, so it's allowed while pulled
+---              settings wait for a restart.
+--- Returns a result: counts, conflicts (settled), held, errors, restart,
+--- pending, fatal, log.
 function Engine.sync(ctx, opts)
     opts = opts or {}
     ctx.preview = opts.preview
+    ctx.resolve = Engine.RESOLVE[opts.resolve] and opts.resolve or nil
+    ctx.only = nil
+    if type(opts.only) == "table" then
+        ctx.only = {}
+        for _, path in ipairs(opts.only) do ctx.only[path] = true end
+    end
     ctx.stamp = os.date("%Y-%m-%d_%H%M%S")
     Engine.mkdirs(ctx.paths.state)
     Engine.mkdirs(dirname(ctx.paths.cache))
     local result
-    if not opts.preview and Engine.isPending(ctx.paths) then
+    if not opts.preview and not ctx.only and Engine.isPending(ctx.paths) then
         result = newResult()
         result.fatal = "Pulled settings are waiting for a restart."
     else

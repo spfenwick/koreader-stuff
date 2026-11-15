@@ -83,8 +83,15 @@ file:
 - **A file this device never had** is downloaded. It isn't taken as
   deleted here, so adding a line to the list on a device that doesn't have
   the file yet is safe.
-- **Changed on both sides:** the newer one is kept, and the other is saved
-  in `settings/concordance/settings-sync/conflicts/`. A sync says when this happens.
+- **Changed on both sides:** the sync leaves these files as they are and,
+  once the rest is done, lists them (with which side's is newer) and asks
+  which to keep: **Keep the server's versions**, **Keep this device's
+  versions** or **Keep the newest versions**. The choice applies to all of
+  them; only those files are synced again, so it works even while pulled
+  settings wait for a restart. The versions not kept are saved in
+  `settings/concordance/settings-sync/conflicts/`. **Decide later** leaves
+  them as they are, and the next sync asks again. A preview lists them
+  (`?`).
 - **Changed on one side, deleted on the other:** the change is kept.
 
 **Files only ever pulled** (lines starting with `<`, such as fonts) come
@@ -135,11 +142,12 @@ synced before looked deleted on the server, and was deleted here.)
   checksums, they're all uploaded once.
 - Sync first from the device whose settings you want to keep; other
   devices then download what's different, and where both had a file that
-  differs, the newer is kept and the other saved in `conflicts/`.
+  differs, they ask which to keep (choose **Keep the server's versions**
+  to keep the first device's).
 
 ## Limits
 
 - Dropbox and WebDAV only (Cloud storage's FTP isn't supported).
 - On Dropbox, files over 150 MB can't be uploaded.
 - File names can't contain tabs or line breaks.
-- Device clocks decide which change is newer in a conflict.
+- Device clocks decide which change is newer ("Keep the newest versions").
