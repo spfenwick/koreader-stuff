@@ -43,8 +43,8 @@
 
   <section class="highlights">
     <div class="panel-head">
-      <h2>Highlights</h2>
-      {% if book.highlights %}<a href="/book/{{ book.id }}/highlights.md">Download as Markdown</a>{% endif %}
+      <h2>{{ 'Highlights and bookmarks' if book.highlights and book.bookmarks else 'Bookmarks' if book.bookmarks else 'Highlights' }}</h2>
+      {% if book.annotations %}<a href="/book/{{ book.id }}/highlights.md">Download as Markdown</a>{% endif %}
     </div>
     {% set ns = namespace(md5=None) %}
     {% for md5, chapter, items in chapters %}
@@ -55,20 +55,9 @@
       {% if chapter %}<h3 class="chapter">{{ chapter }}</h3>{% endif %}
       {% for a in items %}{{ highlight(a, show_book=false, show_chapter=false) }}{% endfor %}
     {% else %}
-      <p class="muted">No highlights in this book.</p>
+      <p class="muted">No highlights or bookmarks in this book.</p>
     {% endfor %}
   </section>
-
-  {% if book.bookmarks %}
-  <section>
-    <h2>Bookmarks</h2>
-    <ul class="plain-list">
-      {% for a in book.bookmarks %}
-      <li>{{ a.chapter or a.text or 'Bookmark' }}{% if a.page_label %} · {{ a.page_label }}{% endif %} <span class="muted">{{ a.created | when }}</span></li>
-      {% endfor %}
-    </ul>
-  </section>
-  {% endif %}
 
   {% if sessions %}
   <section>

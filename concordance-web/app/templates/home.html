@@ -71,8 +71,8 @@
 
 <div class="two-col">
   <section>
-    <div class="panel-head"><h2>Recent highlights</h2><a href="/highlights">All {{ counts.highlights }}</a></div>
-    {% for a in highlights %}{{ highlight(a) }}{% else %}<p class="muted">No highlights yet.</p>{% endfor %}
+    <div class="panel-head"><h2>Recent highlights and bookmarks</h2><a href="/highlights">All {{ counts.highlights + counts.bookmarks }}</a></div>
+    {% for a in highlights %}{{ highlight(a) }}{% else %}<p class="muted">No highlights or bookmarks yet.</p>{% endfor %}
   </section>
   <section>
     <div class="panel-head"><h2>Recently opened</h2><a href="/books">All {{ counts.books }} books</a></div>

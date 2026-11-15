@@ -13,7 +13,7 @@
   <div class="tile"><div class="tile-label">Time read</div><div class="tile-value">{{ total | duration }}</div></div>
   <div class="tile"><div class="tile-label">Pages</div><div class="tile-value">{{ "{:,}".format(rows | sum(attribute=2)) }}</div></div>
   <div class="tile"><div class="tile-label">Books</div><div class="tile-value">{{ rows | length }}</div></div>
-  <div class="tile"><div class="tile-label">Highlights made</div><div class="tile-value">{{ highlights | length }}</div></div>
+  <div class="tile"><div class="tile-label">Highlights made</div><div class="tile-value">{{ highlights | rejectattr("is_bookmark") | list | length }}</div></div>
 </section>
 {% if total %}
 <section class="panel">
@@ -33,6 +33,6 @@
 <p class="muted">No reading on this day.</p>
 {% endif %}
 {% if highlights %}
-<section><h2>Highlights made</h2>{% for a in highlights %}{{ highlight(a) }}{% endfor %}</section>
+<section><h2>{{ "Highlights and bookmarks made" if highlights | selectattr("is_bookmark") | list else "Highlights made" }}</h2>{% for a in highlights %}{{ highlight(a) }}{% endfor %}</section>
 {% endif %}
 {% endblock %}

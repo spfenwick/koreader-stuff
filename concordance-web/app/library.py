@@ -148,6 +148,16 @@ class Annotation:
         return not self.fields.get("drawer") and not self.fields.get("pos0")
 
     @property
+    def label(self) -> str:
+        """A bookmark's own text: KOReader names a page bookmark "in <chapter>",
+        which says nothing the chapter doesn't, so that's left out."""
+        text = self.text.strip()
+        chapter = self.chapter.strip()
+        if not text or text in (f"in {chapter}", chapter):
+            return ""
+        return text
+
+    @property
     def created(self) -> datetime | None:
         try:
             return datetime.strptime(self.fields.get("datetime", ""), "%Y-%m-%d %H:%M:%S")

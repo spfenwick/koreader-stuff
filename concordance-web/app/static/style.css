@@ -208,6 +208,12 @@ details > summary { margin-bottom: 10px; }
 .hl .note { margin: 8px 0 0; padding: 8px 10px; background: var(--surface-2); border-radius: 6px; white-space: pre-line; }
 .note-label { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-right: 4px; }
 .hl figcaption { margin-top: 8px; font-size: .82rem; color: var(--text-2); }
+.hl.bm { --hl: var(--border); padding: 8px 16px; }
+.hl.bm figcaption { margin-top: 4px; }
+.bm-head { margin: 0; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.bm-head .note-label { margin-right: 0; }
+.bm-icon { color: var(--muted); align-self: center; flex: none; }
+.bm-text { font-family: var(--serif); font-size: 1.05rem; }
 .c-yellow { --hl: var(--hl-yellow); } .c-orange { --hl: var(--hl-orange); } .c-red { --hl: var(--hl-red); }
 .c-purple { --hl: var(--hl-purple); } .c-blue { --hl: var(--hl-blue); } .c-cyan { --hl: var(--hl-cyan); }
 .c-green { --hl: var(--hl-green); } .c-olive { --hl: var(--hl-olive); } .c-gray { --hl: var(--hl-gray); }

@@ -177,7 +177,7 @@ async def home(request: Request):
     recent = sorted((b for b in books.values() if b.last_opened), key=lambda b: -b.last_opened)
     reading = [b for b in recent if b.status not in ("complete", "abandoned")][:6]
     return render(request, "home.html", tiles=tiles, reading=reading, recent=recent[:12],
-                  highlights=[a for a in annotations if not a.is_bookmark][:8], counts=counts,
+                  highlights=annotations[:8], counts=counts,
                   calendar=charts.calendar(daily, today, link="/day/"), legend=charts.calendar_legend(),
                   pages_chart=pages_chart, pages_total=sum(v for _, v, _ in page_items),
                   month_cal=month_calendar(by_md5, month, today), today=today)
@@ -311,7 +311,7 @@ async def book_page(request: Request):
         if daily:
             chart, scope = _book_chart(daily, min(daily), max(daily))
     chapters: list[tuple[str, str, list]] = []  # (edition md5, chapter, highlights)
-    for a in book.highlights:
+    for a in book.annotations:
         if not chapters or chapters[-1][0] != a.md5 or chapters[-1][1] != a.chapter:
             chapters.append((a.md5, a.chapter, []))
         chapters[-1][2].append(a)
@@ -319,7 +319,7 @@ async def book_page(request: Request):
     description = plain_text(book.description) or cwa.description(book.uuids, book.calibre_ids)
     return render(request, "book.html", book=book, sessions=sessions, chart=chart, chart_scope=scope,
                   chapters=chapters, collections=collections, description=description,
-                  multi=len({a.md5 for a in book.highlights}) > 1)
+                  multi=len({a.md5 for a in book.annotations}) > 1)
 
 
 async def book_markdown(request: Request):
@@ -333,11 +333,14 @@ async def book_markdown(request: Request):
     if book.review:
         lines += ["## Review", "", book.review, ""]
     chapter = None
-    for a in book.highlights:
+    for a in book.annotations:
         if a.chapter != chapter:
             chapter = a.chapter
             lines += [f"## {chapter or 'Highlights'}", ""]
-        lines += ["> " + a.text.replace("\n", "\n> "), ""]
+        if a.is_bookmark:
+            lines += ["🔖 *Bookmark*" + (f": {a.label}" if a.label else ""), ""]
+        else:
+            lines += ["> " + a.text.replace("\n", "\n> "), ""]
         if a.note:
             lines += [a.note, ""]
         meta = " · ".join(x for x in (a.page_label, a.fields.get("datetime", "")) if x)
@@ -357,14 +360,19 @@ async def highlights_page(request: Request):
     q = request.query_params.get("q", "").strip()
     color = request.query_params.get("color", "")
     notes = request.query_params.get("notes", "")
-    items = [a for a in annotations if not a.is_bookmark]
+    kind = request.query_params.get("kind", "")
+    if kind not in ("highlights", "bookmarks"):
+        kind = ""
+    items = annotations
+    if kind:
+        items = [a for a in items if a.is_bookmark == (kind == "bookmarks")]
     if q:
         terms = q.casefold().split()
         items = [a for a in items
                  if all(t in f"{a.text}\n{a.note}\n{a.chapter}\n{a.book.title}\n{a.book.authors}".casefold()
                         for t in terms)]
     if color:
-        items = [a for a in items if a.color == color]
+        items = [a for a in items if not a.is_bookmark and a.color == color]
     if notes:
         items = [a for a in items if a.note]
     try:
@@ -377,7 +385,7 @@ async def highlights_page(request: Request):
     used = sorted({a.color for a in annotations if not a.is_bookmark},
                   key=lambda c: COLORS.index(c) if c in COLORS else 99)
     return render(request, "highlights.html", items=shown, total=len(items), q=q, color=color,
-                  notes=notes, page=page, pages=pages, colors=used)
+                  notes=notes, kind=kind, page=page, pages=pages, colors=used)
 
 
 async def day_page(request: Request):
@@ -394,7 +402,7 @@ async def day_page(request: Request):
             t, p = read.get(b.id, (0, 0))
             read[b.id] = (t + secs, p + pages)
     rows = sorted(((books[i], t, p) for i, (t, p) in read.items()), key=lambda r: -r[1])
-    made = [a for a in annotations if a.created and a.created.date() == d and not a.is_bookmark]
+    made = [a for a in annotations if a.created and a.created.date() == d]
     hours = [(f"{h:02d}", s, f"{h:02d}:00–{h:02d}:59") for h, s in enumerate(stats["hours"])]
     return render(request, "day.html", day=d, rows=rows, total=daily.get(d, 0), highlights=made,
                   hours=charts.bars(hours, height=120, label_every=3, aria="Reading time per hour"),

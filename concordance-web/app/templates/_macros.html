@@ -36,8 +36,13 @@
 {%- endmacro %}
 
 {% macro highlight(a, show_book=true, show_chapter=true) -%}
+{% if a.is_bookmark -%}
+<figure class="hl bm">
+  <p class="bm-head"><svg class="bm-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 1.5h8a.5.5 0 0 1 .5.5v12.2a.3.3 0 0 1-.48.24L8 11.5l-4.02 2.94a.3.3 0 0 1-.48-.24V2a.5.5 0 0 1 .5-.5z" fill="currentColor"/></svg><span class="note-label">Bookmark</span>{% if a.label %} <span class="bm-text">{{ a.label }}</span>{% endif %}</p>
+{%- else -%}
 <figure class="hl c-{{ a.color }}{% if a.drawer == 'underscore' %} under{% endif %}">
   <blockquote>{{ a.text }}</blockquote>
+{%- endif %}
   {% if a.note %}<p class="note"><span class="note-label">Note</span> {{ a.note }}</p>{% endif %}
   <figcaption>
     {%- set parts = [] -%}
