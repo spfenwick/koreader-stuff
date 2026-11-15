@@ -100,7 +100,7 @@
         <thead><tr><th scope="col">Title</th><th scope="col">Partial MD5</th><th scope="col" class="num">Read</th><th scope="col" class="num">Pages</th></tr></thead>
         <tbody>
         {% for e in book.editions %}
-        <tr><td>{{ e.title or '—' }}</td><td><code>{{ e.md5 }}</code></td><td class="num">{{ e.read_time | duration if e.read_time else '' }}</td><td class="num">{{ e.pages or '' }}</td></tr>
+        <tr><td>{{ e.title or '—' }}{% if e.superseded %} <span class="muted small">(replaced)</span>{% endif %}</td><td><code>{{ e.md5 }}</code></td><td class="num">{{ e.read_time | duration if e.read_time else '' }}</td><td class="num">{{ e.pages or '' }}</td></tr>
         {% endfor %}
         </tbody>
       </table>

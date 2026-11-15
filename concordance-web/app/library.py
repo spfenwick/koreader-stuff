@@ -211,6 +211,10 @@ class Edition:
     # file only title-joined files were joined to). pos_set: its id_pos group.
     level: str = "own"
     pos_set: str | None = None
+    last_opened: int = 0  # latest open on any device (statistics, history), 0 if unknown
+    # Replaced: no device reports having this file, and another file of the
+    # book was opened after it. Its highlights are left out (see Book.superseded).
+    superseded: bool = False
 
 
 @dataclass
@@ -219,6 +223,9 @@ class Book:
     editions: list[Edition]
     props: dict[str, Record]
     annotations: list[Annotation] = field(default_factory=list)
+    # Annotations of superseded files: their positions don't fit the files
+    # read now, so they're not shown anywhere.
+    superseded: list[Annotation] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)  # collection ids
     uuids: list[str] = field(default_factory=list)  # from book identity, for matching a catalog
     calibre_ids: list[int] = field(default_factory=list)
@@ -497,6 +504,11 @@ class Library:
                 WHERE b.md5 IS NOT NULL GROUP BY b.md5"""):
             e = edition(md5)
             e.read_time, e.pages_read, e.first_read, e.last_read = secs or 0, pages or 0, first, last
+            e.last_opened = max(e.last_opened, last or 0)
+        for md5, opened in stats.execute(
+                "SELECT md5, max(last_open) FROM book WHERE md5 IS NOT NULL GROUP BY md5"):
+            if isinstance(opened, (int, float)):
+                edition(md5).last_opened = max(edition(md5).last_opened, int(opened))
         # Progress: the furthest page read, as a share of the book.
         for md5, ratio in stats.execute("""
                 SELECT b.md5, max(CAST(p.page AS REAL) / p.total_pages)
@@ -510,7 +522,9 @@ class Library:
                 "SELECT md5, prop, updated, device, deleted, hash, value FROM book_merged"):
             if md5 != COLLECTIONS_MD5:
                 edition(md5)
-            props.setdefault(md5, {})[prop] = Record(updated, device, bool(deleted), hsh, _decode(value))
+            rec = props.setdefault(md5, {})[prop] = Record(updated, device, bool(deleted), hsh, _decode(value))
+            if prop == "hist" and md5 != COLLECTIONS_MD5 and not rec.deleted and isinstance(rec.value, (int, float)):
+                edition(md5).last_opened = max(edition(md5).last_opened, int(rec.value))
 
         # Annotations, per file.
         annotations: list[Annotation] = []
@@ -587,16 +601,35 @@ class Library:
             for m in md5s:
                 by_md5[m] = book
 
+        # Superseded files: a book's file that no device reports having (no
+        # identity record; identity only covers files still on disk) and that
+        # another of its files was opened after. Its highlights point into a
+        # text that's been replaced, and devices never apply them to the new
+        # file (they share annotations only with the same text), so they're
+        # left out. PDFs and other files identity doesn't read only count as
+        # superseded by a file opened later.
+        for b in books.values():
+            if len(b.editions) < 2:
+                continue
+            newest = max(e.last_opened for e in b.editions)
+            for e in b.editions:
+                e.superseded = e.md5 not in recorded and e.last_opened < newest
+        shown: list[Annotation] = []
         for a in annotations:
             a.book = by_md5[a.md5]
-            a.book.annotations.append(a)
+            if editions[a.md5].superseded:
+                a.book.superseded.append(a)
+            else:
+                a.book.annotations.append(a)
+                shown.append(a)
+        annotations = shown
         for b in books.values():
             b.annotations.sort(key=lambda a: (b.md5s.index(a.md5), a.kind, a.order))
 
         # Books with nothing to show (no title, readings, highlights or data)
         # are left out: an MD5 only named by an identity fact, say.
         for bid in [bid for bid, b in books.items()
-                    if not b.read_time and not b.annotations and not b.props]:
+                    if not b.read_time and not b.annotations and not b.superseded and not b.props]:
             for m in books[bid].md5s:
                 by_md5.pop(m, None)
             del books[bid]
