@@ -561,6 +561,10 @@ class Library:
         in_group = set(group_of)
         pos_of = dict(state.execute("SELECT md5, grp FROM id_pos"))
         recorded = {md5 for (md5,) in state.execute("SELECT DISTINCT md5 FROM id_facts")}
+        # Files a device read on its disk. A "link" (another plugin matching a
+        # file to a catalog book, often by title) says nothing about its text.
+        on_disk = {md5 for (md5,) in state.execute(
+            "SELECT DISTINCT md5 FROM id_facts WHERE src IN ('file', 'sidecar')")}
         by_title = title_groups(group_of, recorded, list(stats.execute(
             "SELECT DISTINCT md5, title, authors FROM book WHERE md5 IS NOT NULL")))
         for md5 in by_title:
@@ -601,8 +605,8 @@ class Library:
             for m in md5s:
                 by_md5[m] = book
 
-        # Superseded files: a book's file that no device reports having (no
-        # identity record; identity only covers files still on disk) and that
+        # Superseded files: a book's file that no device reports having on disk
+        # (no "file" or "sidecar" identity fact; links don't count) and that
         # another of its files was opened after. Its highlights point into a
         # text that's been replaced, and devices never apply them to the new
         # file (they share annotations only with the same text), so they're
@@ -613,7 +617,7 @@ class Library:
                 continue
             newest = max(e.last_opened for e in b.editions)
             for e in b.editions:
-                e.superseded = e.md5 not in recorded and e.last_opened < newest
+                e.superseded = e.md5 not in on_disk and e.last_opened < newest
         shown: list[Annotation] = []
         for a in annotations:
             a.book = by_md5[a.md5]
