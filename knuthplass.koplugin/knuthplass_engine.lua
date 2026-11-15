@@ -106,50 +106,55 @@ function Engine.standardLibPath()
     return lfs.currentdir() .. "/libs/libkoreader-cre.so"
 end
 
---- The build commit the open document's engine reports: "" for an engine
--- without it (the standard one, or an early Knuth–Plass build).
-function Engine.installedBuild(document)
-    local cre = document and document._document
-    if not cre or not cre.getStringProperty then return nil end
-    local ok, value = pcall(cre.getStringProperty, cre, Engine.build_property)
-    return ok and value or ""
+--- The running engine's string properties { [name] = value } ("" for one
+-- it doesn't have).
+--
+-- Read from a new, empty document view (which loads the engine if it isn't
+-- yet), never from an open book: when KOReader opens a book, it loads its
+-- saved defaults (data/cr3.ini) over the engine's properties, and that file
+-- holds every property of the engine that wrote it, so a book can report
+-- the build or the settings of an earlier engine. A new view has only the
+-- engine's own defaults.
+-- @return the table, or nil if the engine can't be read
+function Engine.properties(names)
+    local ok, cre = pcall(function()
+        return require("document/credocument"):engineInit()
+    end)
+    if not ok or type(cre) ~= "table" or not cre.newDocView then
+        logger.warn("KnuthPlass: cannot load the engine:", cre)
+        return nil
+    end
+    local view
+    ok, view = pcall(cre.newDocView, 100, 100, 0)
+    if not ok or type(view) ~= "table" and type(view) ~= "userdata" then
+        logger.warn("KnuthPlass: cannot make a document view:", view)
+        return nil
+    end
+    local values = {}
+    for _i, name in ipairs(names) do
+        local got, value = pcall(view.getStringProperty, view, name)
+        values[name] = got and type(value) == "string" and value or ""
+    end
+    if view.close then
+        pcall(view.close, view)
+    end
+    return values
 end
 
 --- The running engine: its build ("" if it doesn't report one), and
--- whether it has the Knuth–Plass settings. Read from the open book, or
--- with no book open (in the file browser), from an empty document view,
--- which loads the engine if it isn't yet.
+-- whether it has the Knuth–Plass settings (see Engine.properties).
 -- @return build, supported; or nil if it can't be read
-function Engine.runningEngine(document)
-    local cre_doc = document and document._document
-    local view
-    if not cre_doc then
-        local ok, cre = pcall(function()
-            return require("document/credocument"):engineInit()
-        end)
-        if not ok or type(cre) ~= "table" or not cre.newDocView then
-            logger.warn("KnuthPlass: cannot load the engine:", cre)
-            return nil
-        end
-        -- A document view gets the engine's defaults as it's made.
-        ok, view = pcall(cre.newDocView, 100, 100, 0)
-        if not ok then
-            logger.warn("KnuthPlass: cannot make a document view:", view)
-            return nil
-        end
-        cre_doc = view
-    end
-    if not cre_doc.getStringProperty then return nil end
-    local function property(name)
-        local ok, value = pcall(cre_doc.getStringProperty, cre_doc, name)
-        return ok and value or ""
-    end
-    local build = property(Engine.build_property)
-    local supported = property(Engine.capability_property) ~= ""
-    if view and view.close then
-        pcall(view.close, view)
-    end
-    return build, supported
+function Engine.runningEngine()
+    local values = Engine.properties({ Engine.build_property, Engine.capability_property })
+    if not values then return nil end
+    return values[Engine.build_property], values[Engine.capability_property] ~= ""
+end
+
+--- The build commit the running engine reports: "" for an engine without
+-- it (the standard one, or an early Knuth–Plass build), nil if it can't be
+-- read. (See runningEngine for why not from the open book.)
+function Engine.installedBuild()
+    return (Engine.runningEngine())
 end
 
 -- Network ---------------------------------------------------------------------
@@ -420,6 +425,22 @@ function Engine.redirected()
     return (type(patch) == "table" and patch.active) or Loader.active or false
 end
 
+--- The commit of the engine this session loaded from the plugin's folder,
+-- or true if it isn't known; nil if it runs KOReader's own.
+function Engine.loadedCommit()
+    local patch = package.loaded["knuthplass_loader.patch"]
+    local active = type(patch) == "table" and patch.active or nil
+    return active or Loader.active
+end
+
+--- End a pending engine's trial: it's running, for this KOReader version.
+local function proven(state, why)
+    logger.info("KnuthPlass: engine", state.commit, "works:", why)
+    state.pending = nil
+    state.attempts = nil
+    Loader.writeState(state)
+end
+
 --- Called when a book has opened: a pending engine that is running (and
 -- reports its build, if it's known) has proved itself.
 function Engine.verify(build)
@@ -427,10 +448,34 @@ function Engine.verify(build)
     if state and state.enabled and state.pending and Engine.redirected()
             and (state.commit == nil or build == state.commit)
             and state.rev == Engine.revision() then
-        logger.info("KnuthPlass: engine", build, "works")
-        state.pending = nil
-        state.attempts = nil
-        Loader.writeState(state)
+        proven(state, "a book opened")
+    end
+end
+
+--- Called as KOReader quits normally: a pending engine this session loaded
+-- didn't crash it, so it has proved itself too (starts that open no book,
+-- in the file browser, then don't count against it). Not on a crash or a
+-- forced stop, which don't get here.
+function Engine.verifyOnExit()
+    local state = Loader.readState()
+    local loaded = Engine.loadedCommit()
+    if state and state.enabled and state.pending and loaded
+            and (state.commit == nil or loaded == true or loaded == state.commit)
+            and state.rev == Engine.revision() then
+        proven(state, "KOReader quit normally")
+    end
+end
+
+--- Run verifyOnExit when KOReader quits (UIManager:quit: the Exit menu,
+-- restarts and power off all go through it). Once per session.
+function Engine.hookExit()
+    local UIManager = require("ui/uimanager")
+    if UIManager._knuthplass_exit_hooked then return end
+    UIManager._knuthplass_exit_hooked = true
+    local quit = UIManager.quit
+    UIManager.quit = function(...)
+        pcall(Engine.verifyOnExit)
+        return quit(...)
     end
 end
 
@@ -742,7 +787,7 @@ function Engine.check(plugin, interactive, mode, fetch, report)
     -- Automatic checks don't load the engine just to look (in the file
     -- browser); they check it when a book is open.
     if not document and not interactive then return false end
-    local current_build, supported = Engine.runningEngine(document)
+    local current_build, supported = Engine.runningEngine()
     if current_build == nil then
         table.insert(report, _("Engine: cannot read which engine is running."))
         return false

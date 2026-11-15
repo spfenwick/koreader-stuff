@@ -152,13 +152,14 @@ async def home(request: Request):
     # Pages per day over the last two weeks.
     first = today - timedelta(days=13)
     recent_days = books_by_day(by_md5, first, today)
-    page_items = []
+    page_items, page_links = [], []
     for i in range(14):
         d = first + timedelta(days=i)
         pages = sum(p for _, _, p in recent_days.get(d, []))
         page_items.append((f"{d:%a %-d}", pages, f"{d:%a %-d %b}"))
+        page_links.append(f"/day/{d.isoformat()}")
     pages_chart = charts.bars(page_items, aria="Pages read per day, last two weeks", unit=("page", "pages"),
-                              width=960, height=180)
+                              width=960, height=180, links=page_links)
     week = today - timedelta(days=today.weekday())
 
     def since(d0: date) -> int:
@@ -480,8 +481,22 @@ def read_devices() -> list[dict]:
 
 # In the order shown. "koreader" is KOReader itself (its short version, such
 # as "2025.10-58": year, month, point release, commits since).
-PLUGIN_NAMES = {"concordance": "Concordance", "cloudlibrary": "Cloud library", "zenos": "ZenOS",
+PLUGIN_NAMES = {"concordance": "Concordance", "athenaeum": "Athenæum", "zenos": "ZenOS",
                 "koreader": "KOReader"}
+# Old names: Athenaeum was Cloud library ("cloudlibrary"), which devices with
+# an older Concordance still report.
+PLUGIN_ALIASES = {"cloudlibrary": "athenaeum"}
+
+
+def _device_versions(d: dict) -> dict[str, str]:
+    """A device's versions under the plugins' current names."""
+    out: dict[str, str] = {}
+    for k, v in (d.get("versions") or {}).items():
+        if isinstance(v, str):
+            name = PLUGIN_ALIASES.get(k, k)
+            if k == name or name not in out:
+                out[name] = v
+    return out
 
 _KOREADER_VERSION = re.compile(r"v?(\d{4})\.(\d{2})(?:\.(\d+))?(?:-(\d+))?")
 
@@ -506,13 +521,12 @@ def plugin_versions(devices: list[dict]) -> dict[str, list[dict]]:
     the newest any device reports."""
     newest: dict[str, tuple] = {}
     for d in devices:
-        for plugin, v in (d.get("versions") or {}).items():
-            if isinstance(v, str):
-                newest[plugin] = max(newest.get(plugin, ()), _version_key(v, plugin))
+        for plugin, v in _device_versions(d).items():
+            newest[plugin] = max(newest.get(plugin, ()), _version_key(v, plugin))
     order = list(PLUGIN_NAMES)
     out = {}
     for d in devices:
-        vs = {k: v for k, v in (d.get("versions") or {}).items() if isinstance(v, str)}
+        vs = _device_versions(d)
         out[d.get("id")] = [
             {"name": PLUGIN_NAMES.get(k, k), "version": v, "behind": _version_key(v, k) < newest[k]}
             for k, v in sorted(vs.items(), key=lambda kv: (order.index(kv[0]) if kv[0] in order else len(order), kv[0]))

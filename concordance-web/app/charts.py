@@ -101,9 +101,11 @@ def _plural(n: int, unit: tuple[str, str]) -> str:
 
 
 def bars(items: list[tuple[str, int, str]], height: int = 160, label_every: int = 1,
-         aria: str = "Reading time", width: int = 640, unit: tuple[str, str] | None = None) -> Markup:
+         aria: str = "Reading time", width: int = 640, unit: tuple[str, str] | None = None,
+         links: list[str | None] | None = None) -> Markup:
     """Vertical bars. items: (axis label, value, tooltip label). Values are seconds,
-    or counts of `unit` (singular, plural), e.g. ("page", "pages")."""
+    or counts of `unit` (singular, plural), e.g. ("page", "pages"). links, if given,
+    holds one href (or None) per item; bars with a value link to it."""
     n = len(items)
     if not n:
         return Markup("")
@@ -134,6 +136,9 @@ def bars(items: list[tuple[str, int, str]], height: int = 160, label_every: int 
         x = left + i * slot + (slot - bar_w) / 2
         tip = escape(f"{tip_label}: {value(v)}")
         h = plot_h * v / vmax if v else 0
+        href = links[i] if links and v else None
+        if href:
+            out.append(f'<a href="{escape(href)}">')
         # Hit target: the whole column, so short bars are easy to hover.
         out.append(f'<g data-tip="{tip}"><title>{tip}</title>'
                    f'<rect class="hit" x="{left + i * slot}" y="{top}" width="{slot}" height="{plot_h}"/>')
@@ -145,6 +150,8 @@ def bars(items: list[tuple[str, int, str]], height: int = 160, label_every: int 
             out.append(f'<path class="bar" d="M{x:.1f},{base} V{y + r:.1f} Q{x:.1f},{y:.1f} {x + r:.1f},{y:.1f} '
                        f'H{x + bar_w - r:.1f} Q{x + bar_w:.1f},{y:.1f} {x + bar_w:.1f},{y + r:.1f} V{base} Z"/>')
         out.append("</g>")
+        if href:
+            out.append("</a>")
         if label and i % label_every == 0:
             out.append(f'<text class="axis" x="{left + i * slot + slot / 2:.1f}" y="{height - 4}" '
                        f'text-anchor="middle">{escape(label)}</text>')

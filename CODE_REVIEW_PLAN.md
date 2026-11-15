@@ -8,7 +8,7 @@ local KOReader checkout. All of them hold, though several matter less than
 the review suggests.
 
 The suites the review could not run were run: `scripts/test.sh`,
-`scripts/test-concordance.sh unit` and `tests/cloudlibrary/run_tests.sh`
+`scripts/test-concordance.sh unit` and `tests/athenaeum/run_tests.sh`
 all pass with 0 failures. The Concordance integration test (needs rclone)
 was not run.
 
@@ -70,7 +70,7 @@ Done 11 November 2026, with tests for each; all suites pass.
    later.
 4. **KEPUB:** save as `.kepub.epub`.
 5. **Passwords with `%`:** build the `Authorization` header by hand in
-   `cloudlibrary/http.lua`, as `webdav.lua` does.
+   `athenaeum/http.lua`, as `webdav.lua` does.
 
 ### Phase 2: sync correctness
 
@@ -95,7 +95,7 @@ differently from what is written below:
    Applying them at exit is fragile, because KOReader's final flush happens
    after plugins are gone.
 8. **Finding D:** give no signature when any spine item is unreadable.
-9. **Finding E:** skip `keepScanned` for Cloud library's files when its
+9. **Finding E:** skip `keepScanned` for Athenaeum's files when its
    catalog is not loaded. This needs a "loaded" flag from `Library`.
 10. **Upload verification and device IDs:** treat a missing size as
     unverified, and tighten `validDeviceId` to the format Concordance

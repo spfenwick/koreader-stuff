@@ -22,6 +22,13 @@
 #
 # Knuth–Plass releases before 0.6 were tagged vX.Y.Z; its rolling release
 # ("knuthplass") is the same, so installed copies keep updating.
+#
+# Athenaeum was Cloud library ("cloudlibrary") before 0.8.0. Installed copies
+# of Cloud library update from the rolling release "cloudlibrary" and unpack
+# the zip into cloudlibrary.koplugin, so each Athenaeum release is also
+# published as cloudlibrary.koplugin.zip (the same files in a
+# cloudlibrary.koplugin folder) with a plugin.json on that rolling release.
+# Athenaeum then moves itself to athenaeum.koplugin (athenaeum/migrate.lua).
 name: Release plugin
 
 on:
@@ -34,7 +41,7 @@ on:
       plugin:
         description: Plugin to release
         type: choice
-        options: [knuthplass, concordance, cloudlibrary]
+        options: [knuthplass, concordance, athenaeum]
 
 permissions:
   contents: write
@@ -45,7 +52,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PLUGINS: knuthplass concordance cloudlibrary
+  PLUGINS: knuthplass concordance athenaeum
 
 jobs:
   # Which plugins to release: the tag's, the one chosen, or (on a push to
@@ -96,9 +103,9 @@ jobs:
           echo "Releasing: $json"
           echo "plugins=$json" >> "$GITHUB_OUTPUT"
 
-  # All plugins' tests, once: they share the updater. (cloudlibrary's own
+  # All plugins' tests, once: they share the updater. (athenaeum's own
   # tests need a KOReader emulator build, so here its files are only
-  # syntax-checked, by scripts/test.sh; run tests/cloudlibrary/run_tests.sh
+  # syntax-checked, by scripts/test.sh; run tests/athenaeum/run_tests.sh
   # before releasing it.)
   test:
     needs: plan
@@ -178,13 +185,28 @@ jobs:
             '{version: $v, file: $file, url: $url, sha256: $sha}' \
             > out/plugin.json
           cat out/plugin.json
+          # For copies installed as Cloud library (see the top).
+          if [ "$PLUGIN" = athenaeum ]; then
+            mkdir -p out/bridge out/cloudlibrary
+            cp -R athenaeum.koplugin out/bridge/cloudlibrary.koplugin
+            (cd out/bridge && zip -qrX ../cloudlibrary.koplugin.zip cloudlibrary.koplugin)
+            sha=$(sha256sum out/cloudlibrary.koplugin.zip | cut -d' ' -f1)
+            url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/cloudlibrary.koplugin.zip"
+            jq -n --arg v "$VERSION" --arg file cloudlibrary.koplugin.zip --arg url "$url" --arg sha "$sha" \
+              '{version: $v, file: $file, url: $url, sha256: $sha}' \
+              > out/cloudlibrary/plugin.json
+            cat out/cloudlibrary/plugin.json
+          fi
 
       # Unless a tag was pushed, this also creates the tag, on the commit tested.
       - name: Publish
         run: |
+          set -euo pipefail
+          extra=""
+          [ -f out/cloudlibrary.koplugin.zip ] && extra=out/cloudlibrary.koplugin.zip
           gh release create "$TAG" -R "$GITHUB_REPOSITORY" --latest=false --target "$GITHUB_SHA" \
             --title "$TITLE $VERSION" --generate-notes \
-            "out/$PLUGIN.koplugin.zip" out/plugin.json
+            "out/$PLUGIN.koplugin.zip" out/plugin.json $extra
 
       # Last, so the updater only sees plugin.json once the zip is up.
       - name: Point updater at it
@@ -196,3 +218,12 @@ jobs:
               --notes "plugin.json for the plugin's updater; points at the newest $PLUGIN-vX.Y.Z release."
           fi
           gh release upload "$PLUGIN" -R "$GITHUB_REPOSITORY" --clobber out/plugin.json
+          # Copies installed as Cloud library update to this release too.
+          if [ -f out/cloudlibrary/plugin.json ]; then
+            if ! gh release view cloudlibrary -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release create cloudlibrary -R "$GITHUB_REPOSITORY" --prerelease --latest=false \
+                --target "$GITHUB_SHA" --title "Cloud library updates" \
+                --notes "plugin.json for Cloud library's updater: Cloud library is now Athenaeum, and this points at the newest athenaeum-vX.Y.Z release."
+            fi
+            gh release upload cloudlibrary -R "$GITHUB_REPOSITORY" --clobber out/cloudlibrary/plugin.json
+          fi

@@ -30,7 +30,7 @@ check the tables' columns and add the version.
   devices/<device-id>/
     meta.json                     device ID, name (progress sync's "Device hostname",
                                   else the model), plugin versions (Concordance,
-                                  Cloud library, ZenOS) and KOReader's, format
+                                  Athenaeum, ZenOS) and KOReader's, format
                                   version, when written
     seg-0000000001.jsonl.zst      segment files, numbered 1, 2, 3, …
     seg-0000000002.jsonl.zst
@@ -260,12 +260,12 @@ each device can keep its books in different folders:
 - Only openings are synced. Removing a book from the history (by hand, or
   KOReader dropping it) doesn't remove it on the other devices, and it
   stays removed here until the book is opened again somewhere.
-- A book that isn't on this device appears only if Cloud library is
+- A book that isn't on this device appears only if Athenaeum is
   installed and has it in its catalog: tapping it shows its details, to
   download it. Once downloaded, the entry is the downloaded file.
   (ZenOS's Home page and book switcher only show books on the device.)
 - A book that's on this device but has never been opened there and isn't
-  in a collection is found only through Cloud library (it knows which
+  in a collection is found only through Athenaeum (it knows which
   files are which books); otherwise it's added once it's opened.
 - Don't sync `history.lua` with settings sync as well.
 
@@ -294,14 +294,14 @@ the two files as one book.
 - **What isn't**: files whose titles and authors both differ, or a book
   in more than 8 files, are left apart (a UUID shared by mistake).
 
-- **What's read**: EPUBs opened on the device, and with Cloud library the
+- **What's read**: EPUBs opened on the device, and with Athenaeum the
   catalog books in its folder (opened or not), once each (again if the
   file changes), in the background after a sync's network step: a few
   tenths of a second per book on a Kobo, for up to a minute per sync, so
   the first sync or two after updating finish the job. A book Cloud
   library has just downloaded is read at once, so it opens with its other
   versions' status and highlights.
-- **With Cloud library**: books it matched to the catalog by title, and
+- **With Athenaeum**: books it matched to the catalog by title, and
   PDFs, are joined to that catalog book's other files (status, rating,
   statistics; not highlights). Its cloud books show what your devices know:
   the cloud badge gets a check, play or pause mark (finished, reading, on

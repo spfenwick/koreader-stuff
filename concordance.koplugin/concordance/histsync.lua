@@ -16,9 +16,9 @@ KOReader reopens on startup). The book is found:
 
 1. among the files on this device that the sync knows (books opened here,
    books in collections or in the history), its versions' files included;
-2. through Cloud library, when it's installed: the book's UUIDs (from book
+2. through Athenaeum, when it's installed: the book's UUIDs (from book
    identity) are a catalog book, either downloaded (its file) or not (its
-   cloud entry, which Cloud library keeps in the history).
+   cloud entry, which Athenaeum keeps in the history).
 
 A book found neither way is left until it is: it's looked for again after
 every sync.
@@ -315,7 +315,7 @@ function HistSync:apply(force)
         -- Read back from the file just saved, so every entry is a new table.
         -- ZenOS's "last read" order is cached while the history's length and
         -- first and last entries (the tables) stay the same, so a book moved
-        -- in the middle went unnoticed. (Cloud library's hooks keep cloud
+        -- in the middle went unnoticed. (Athenaeum's hooks keep cloud
         -- entries as they are through the re-read.)
         if rh.reload then
             local ok, err = pcall(rh.reload, rh, true)

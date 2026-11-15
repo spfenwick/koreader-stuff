@@ -357,7 +357,7 @@ function Engine:_export(run)
     if run.ann and d.id then
         run.id = true
         if d.id.collect then
-            -- Facts other plugins have for us (Cloud library's matches).
+            -- Facts other plugins have for us (Athenaeum's matches).
             local cok, cerr = pcall(d.id.collect)
             if not cok then self:_problem("engine:id-matches", "Book identity: collecting matches failed", "StatSync: book identity: collecting matches failed:", cerr) end
         end
@@ -380,7 +380,7 @@ function Engine:_export(run)
         -- Book files to read in the subprocess, after the network step.
         local fok, files, complete = pcall(d.id.files)
         if fok and files then
-            -- An incomplete list (Cloud library's catalog not read yet)
+            -- An incomplete list (Athenaeum's catalog not read yet)
             -- doesn't say which files are gone: forgetting them would
             -- have them all read again.
             if complete ~= false then

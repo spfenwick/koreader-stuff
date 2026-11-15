@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Athenaeum">
+  <title>Athenaeum</title>
+  <rect width="64" height="64" rx="14" fill="#111"/>
+  <g fill="#fff">
+    <!-- Pediment and entablature -->
+    <path d="M10 25 32 12 54 25z"/>
+    <rect x="11" y="27" width="42" height="4" rx="1"/>
+    <!-- Columns that are books: spines of different widths, the last leaning -->
+    <rect x="14" y="34" width="7" height="15" rx="1"/>
+    <rect x="23" y="34" width="5.5" height="15" rx="1"/>
+    <rect x="30.5" y="34" width="7.5" height="15" rx="1"/>
+    <rect x="40" y="34" width="5.5" height="15" rx="1"/>
+    <rect x="44.6" y="35.2" width="5" height="14.4" rx="1" transform="rotate(14 49.6 49.6)"/>
+    <!-- Steps -->
+    <rect x="11" y="51" width="42" height="3" rx="1"/>
+  </g>
+  <g fill="#111">
+    <!-- A label band on each spine -->
+    <rect x="14" y="37" width="7" height="2"/>
+    <rect x="23" y="37" width="5.5" height="2"/>
+    <rect x="30.5" y="37" width="7.5" height="2"/>
+    <rect x="40" y="37" width="5.5" height="2"/>
+  </g>
+</svg>

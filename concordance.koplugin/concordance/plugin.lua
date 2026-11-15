@@ -166,7 +166,7 @@ local function metaVersion(path)
     return text and text:match('version%s*=%s*"([%w%.%-%+]+)"')
 end
 
---- Versions of Concordance and Cloud library (when installed and not turned
+--- Versions of Concordance and Athenaeum (when installed and not turned
 -- off) on this device, read from their _meta.lua, for meta.json.
 -- Also KOReader's own version (its short form, such as "2025.10-58") and
 -- ZenOS's, when installed and not turned off. plugins_dir: where to look for
@@ -185,8 +185,18 @@ function Plugin.pluginVersions(plugins_dir)
     out.concordance = metaVersion(own .. "/_meta.lua")
     local disabled = G_reader_settings and G_reader_settings:readSetting("plugins_disabled")
     disabled = type(disabled) == "table" and disabled or {}
-    if not disabled.cloudlibrary then
-        out.cloudlibrary = metaVersion(dir .. "/cloudlibrary.koplugin/_meta.lua")
+    if not disabled.athenaeum then
+        out.athenaeum = metaVersion(dir .. "/athenaeum.koplugin/_meta.lua")
+    end
+    -- Before it was renamed, as Cloud library. Only this plugin's
+    -- cloudlibrary.koplugin has cloudlibrary/updatecore.lua: another plugin
+    -- uses that folder name too.
+    if not out.athenaeum and not disabled.cloudlibrary then
+        local f = io.open(dir .. "/cloudlibrary.koplugin/cloudlibrary/updatecore.lua", "rb")
+        if f then
+            f:close()
+            out.athenaeum = metaVersion(dir .. "/cloudlibrary.koplugin/_meta.lua")
+        end
     end
     for _, z in ipairs(ZENOS_DIRS) do
         local v = not disabled[z[2]] and metaVersion(dir .. "/" .. z[1] .. "/_meta.lua")
@@ -461,13 +471,23 @@ end
 
 local hist_sync
 
---- Where Cloud library has a book with one of these UUIDs (its file, or
--- its cloud entry), when Cloud library is installed.
+--- Athenaeum's library module, when it's running. Before it was renamed
+-- it was Cloud library (cloudlibrary/library): a device may still have that
+-- until it updates. (Only this plugin has a module of that name: the other
+-- cloudlibrary.koplugin's modules aren't in a cloudlibrary folder.)
+local function athenaeumLibrary()
+    local lib = package.loaded["athenaeum/library"] or package.loaded["cloudlibrary/library"]
+    return type(lib) == "table" and lib or nil
+end
+Plugin.athenaeumLibrary = athenaeumLibrary
+
+--- Where Athenaeum has a book with one of these UUIDs (its file, or
+-- its cloud entry), when Athenaeum is installed.
 local function cloudPath(uuids)
-    local CloudLibrary = package.loaded["cloudlibrary/library"]
-    if type(CloudLibrary) ~= "table" or type(CloudLibrary.pathForUuids) ~= "function" then return nil end
-    local ok, path = pcall(CloudLibrary.pathForUuids, uuids)
-    if not ok then logger.warn("Concordance: asking Cloud library failed:", path) end
+    local Athenaeum = athenaeumLibrary()
+    if type(Athenaeum) ~= "table" or type(Athenaeum.pathForUuids) ~= "function" then return nil end
+    local ok, path = pcall(Athenaeum.pathForUuids, uuids)
+    if not ok then logger.warn("Concordance: asking Athenaeum failed:", path) end
     return ok and path or nil
 end
 
@@ -619,58 +639,58 @@ function Plugin.checkReader(ui)
     if n > 0 then logger.warn("Concordance:", n, "things it relies on in KOReader's reader are missing or changed") end
 end
 
---- Book files in Cloud library's folder that are catalog books, when
--- Cloud library is installed: { path, … }, and whether that's all of them
--- (false while Cloud library hasn't read its catalog, or couldn't say).
+--- Book files in Athenaeum's folder that are catalog books, when
+-- Athenaeum is installed: { path, … }, and whether that's all of them
+-- (false while Athenaeum hasn't read its catalog, or couldn't say).
 local function cloudFiles()
-    local CloudLibrary = package.loaded["cloudlibrary/library"]
-    if type(CloudLibrary) ~= "table" or type(CloudLibrary.localFiles) ~= "function" then return {}, true end
-    if type(CloudLibrary.isLoaded) == "function" then
-        local ok_l, loaded = pcall(CloudLibrary.isLoaded)
+    local Athenaeum = athenaeumLibrary()
+    if type(Athenaeum) ~= "table" or type(Athenaeum.localFiles) ~= "function" then return {}, true end
+    if type(Athenaeum.isLoaded) == "function" then
+        local ok_l, loaded = pcall(Athenaeum.isLoaded)
         if not (ok_l and loaded) then return {}, false end
     end
-    local ok, list = pcall(CloudLibrary.localFiles)
-    if not ok then logger.warn("Concordance: asking Cloud library failed:", list) end
+    local ok, list = pcall(Athenaeum.localFiles)
+    if not ok then logger.warn("Concordance: asking Athenaeum failed:", list) end
     if ok and type(list) == "table" then return list, true end
     return {}, false
 end
 
---- Files Cloud library matched to a catalog book without the file naming
+--- Files Athenaeum matched to a catalog book without the file naming
 -- the book's UUID (see concordance/identity.lua).
 local function cloudLinks()
-    local CloudLibrary = package.loaded["cloudlibrary/library"]
-    if type(CloudLibrary) ~= "table" or type(CloudLibrary.links) ~= "function" then return {} end
-    local ok, list = pcall(CloudLibrary.links)
-    if not ok then logger.warn("Concordance: asking Cloud library failed:", list) end
+    local Athenaeum = athenaeumLibrary()
+    if type(Athenaeum) ~= "table" or type(Athenaeum.links) ~= "function" then return {} end
+    local ok, list = pcall(Athenaeum.links)
+    if not ok then logger.warn("Concordance: asking Athenaeum failed:", list) end
     return ok and type(list) == "table" and list or {}
 end
 
---- Before a sync: Cloud library's matches become links, and links this
+--- Before a sync: Athenaeum's matches become links, and links this
 -- device made that it no longer makes are withdrawn. Only once it has
 -- read its catalog: before that it matches nothing, which says nothing.
 local function collectLinks()
     local links = cloudLinks()
     Identity.recordLinks(links)
-    local CloudLibrary = package.loaded["cloudlibrary/library"]
-    if type(CloudLibrary) ~= "table" or type(CloudLibrary.isLoaded) ~= "function"
-            or type(CloudLibrary.folderFiles) ~= "function" or type(CloudLibrary.inCatalog) ~= "function" then
+    local Athenaeum = athenaeumLibrary()
+    if type(Athenaeum) ~= "table" or type(Athenaeum.isLoaded) ~= "function"
+            or type(Athenaeum.folderFiles) ~= "function" or type(Athenaeum.inCatalog) ~= "function" then
         return
     end
-    local ok, loaded = pcall(CloudLibrary.isLoaded)
+    local ok, loaded = pcall(Athenaeum.isLoaded)
     if not (ok and loaded) then return end
-    local ok_f, files = pcall(CloudLibrary.folderFiles)
+    local ok_f, files = pcall(Athenaeum.folderFiles)
     if not ok_f or type(files) ~= "table" then
-        logger.warn("Concordance: asking Cloud library failed:", files)
+        logger.warn("Concordance: asking Athenaeum failed:", files)
         return
     end
-    local n = Identity.retractLinks(links, files, CloudLibrary.inCatalog)
-    if n > 0 then logger.info("Concordance: withdrew", n, "matches Cloud library no longer makes") end
+    local n = Identity.retractLinks(links, files, Athenaeum.inCatalog)
+    if n > 0 then logger.info("Concordance: withdrew", n, "matches Athenaeum no longer makes") end
 end
 
 --- Book files to read for book identity: the EPUBs book data knows about
 -- (books opened on this device), with the sidecar's MD5, and those in
--- Cloud library's folder (downloaded, maybe never opened: no MD5 yet).
--- Also returns whether the list is complete: false when Cloud library's
+-- Athenaeum's folder (downloaded, maybe never opened: no MD5 yet).
+-- Also returns whether the list is complete: false when Athenaeum's
 -- files aren't known just now, so files left out aren't taken as gone.
 function Plugin.identityFiles()
     local lfs = require("libs/libkoreader-lfs")
@@ -869,7 +889,7 @@ function Plugin.engine()
     return controller
 end
 
---- Sets up what other plugins (Cloud library) are told about books, and
+--- Sets up what other plugins (Athenaeum) are told about books, and
 -- can tell Concordance (see concordance/identity.lua).
 function Plugin.setupIdentity()
     Identity.setup{

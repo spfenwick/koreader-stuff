@@ -1,6 +1,6 @@
 # Releasing the plugins
 
-Each plugin (`knuthplass`, `concordance`, `cloudlibrary`) has its own version
+Each plugin (`knuthplass`, `concordance`, `athenaeum`) has its own version
 (`version` in its `_meta.lua`) and its own releases, tagged
 `<plugin>-vX.Y.Z`. Installed copies update themselves from GitHub with the
 updater the plugins share (`shared/updatecore.lua`): once a day when online
@@ -33,6 +33,17 @@ so a release is visible to devices only once its zip is up.
 Knuth–Plass releases up to 0.5.1 were tagged `vX.Y.Z`. Its rolling release
 (`knuthplass`) didn't change, so copies installed from those keep updating.
 
+Athenaeum (`athenaeum`) was Cloud library (`cloudlibrary`) up to 0.7.3. Its
+folder name clashed with another plugin's in ZenPM, which identifies
+KOReader plugins by folder name. Copies installed as Cloud library check the
+`cloudlibrary` rolling release and unpack updates into
+`cloudlibrary.koplugin`, so each Athenaeum release is also published as
+`cloudlibrary.koplugin.zip` (the same files in a `cloudlibrary.koplugin`
+folder), with a `plugin.json` for it on the `cloudlibrary` rolling release.
+Once installed, Athenaeum moves itself to `athenaeum.koplugin` and moves its
+settings (`athenaeum.koplugin/athenaeum/migrate.lua`). Keep publishing both
+until no device reports Cloud library any more.
+
 Concordance replaced Settings sync (`rclonesync`) and Statistics sync
 (`statsync`), as SuperSync, and was then renamed OmniSync (`omnisync`), and
 then Concordance (`concordance`, versions from 0.1.0 again). Their releases
@@ -44,7 +55,7 @@ which is installed by hand once (it takes over OmniSync's data, see
 
 `shared/updatecore.lua` is the canonical copy. Each plugin carries an
 identical copy under its own module name (`knuthplass_updatecore.lua`,
-`concordance/updatecore.lua`, `cloudlibrary/updatecore.lua`): plugins share
+`concordance/updatecore.lua`, `athenaeum/updatecore.lua`): plugins share
 Lua's module cache, so with one name, whichever plugin loaded first would
 supply the updater for all of them, perhaps an older one. After changing it,
 run `scripts/sync-updatecore.sh`; `tests/test_updatecore.lua` fails while a
@@ -54,7 +65,8 @@ release.
 ## On devices
 
 - The first version of a plugin with the updater (Knuth–Plass already has
-  it; Concordance has it from its first release; Cloud library from 0.1.0)
+  it; Concordance has it from its first release; Athenaeum from 0.1.0, as
+  Cloud library)
   has to be copied to the device by hand.
 - Concordance's settings sync never syncs these plugins' folders (even if
   `sync.txt` lists them): the sync and the updater would both write them.

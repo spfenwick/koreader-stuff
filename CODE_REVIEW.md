@@ -1,4 +1,4 @@
-# Code review: Concordance and Cloud library against USER_GUIDE.md
+# Code review: Concordance and Athenaeum against USER_GUIDE.md
 
 Reviewed 10 November 2026, at commit `c01c9ab`.
 
@@ -70,9 +70,9 @@ earlier (for example from a user patch).
 Suggested fix: reject any manifest or listing path with an empty, `.` or
 `..` segment, as `badPattern` already does for patterns.
 
-### 4. Cloud library's guard runs the hooked function twice after a plugin error (confirmed)
+### 4. Athenaeum's guard runs the hooked function twice after a plugin error (confirmed)
 
-- In `cloudlibrary/guard.lua:87-104`, if the hook body throws after it has
+- In `athenaeum/guard.lua:87-104`, if the hook body throws after it has
   already called the original, the wrapper calls the original again.
 - For `FileManager:deleteFile` the second call acts on a file that is
   already gone and returns failure. For `showReader` it would open the book
@@ -84,14 +84,14 @@ return them instead of calling again.
 
 ### 5. Title-only matching can wrongly join two different books
 
-- `cloudlibrary/matcher.lua:170` falls back to the title alone, even when
+- `athenaeum/matcher.lua:170` falls back to the title alone, even when
   the file names an author that contradicts the catalog's.
-- `Library.links()` (`cloudlibrary/library.lua:449`) passes that match to
+- `Library.links()` (`athenaeum/library.lua:449`) passes that match to
   Concordance as a "link" identity fact, which is never removed and is
   synced to every device.
 - A link only counts for a file with no identity fact read from the file
   itself (`concordance/idstore.lua:377-387`). Concordance reads every EPUB
-  in Cloud library's folder, so the scope is narrower than the matcher
+  in Athenaeum's folder, so the scope is narrower than the matcher
   alone suggests:
   - **Permanent wrong joins** are limited to PDFs, other non-EPUB formats,
     and EPUBs with no UUID. Their status, rating and statistics merge with
@@ -165,7 +165,7 @@ unlikely.
 
 ### E. Never-opened cloud files are re-read after KOReader starts in a book
 
-- Cloud library does not load its catalog when KOReader starts in the
+- Athenaeum does not load its catalog when KOReader starts in the
   reader, so its file list is empty (`concordance/plugin.lua:403`).
 - A sync then drops the "already read" record of every downloaded file
   that has not been opened (`concordance/engine.lua:349`,
@@ -181,8 +181,8 @@ catalog's own UUID, which is rarely shared, so the effect is small.
 
 ### Smaller point
 
-Cloud library's matcher and Concordance's scanner parse identifiers
-differently (`cloudlibrary/matcher.lua:64` requires the `dc:` prefix; the
+Athenaeum's matcher and Concordance's scanner parse identifiers
+differently (`athenaeum/matcher.lua:64` requires the `dc:` prefix; the
 scanner does not). A file can be matched by title in one and by UUID in
 the other.
 
@@ -202,21 +202,21 @@ the other.
 - Replace the fixed limit of 8 with one that ignores superseded versions,
   or raise it and report when it is hit.
 - Give no signature when any spine item is unreadable.
-- Skip the "forget files that are gone" step when Cloud library's list is
+- Skip the "forget files that are gone" step when Athenaeum's list is
   empty because its catalog is not loaded.
 
 ## Medium and low findings
 
-- **Empty catalog wipes the cache:** `cloudlibrary/sync.lua:187` deletes
+- **Empty catalog wipes the cache:** `athenaeum/sync.lua:187` deletes
   every unseen book after a full sync. A valid but empty feed (expired
   login, restricted anonymous view) removes all cloud books until the next
   sync. Skip the delete when zero books were seen or the count is far below
   `/stats`.
-- **KEPUB downloads (uncertain):** `cloudlibrary/downloads.lua:25` saves
+- **KEPUB downloads (uncertain):** `athenaeum/downloads.lua:25` saves
   them as `Title.kepub`. KOReader may not open that extension, and the book
   would then show neither as a cloud entry nor as a readable file. Not
   checked against KOReader.
-- **Series numbers:** `cloudlibrary/sync.lua:225` uses the position in the
+- **Series numbers:** `athenaeum/sync.lua:225` uses the position in the
   series feed, so gaps or fractional indexes display wrongly. The guide
   does not mention this.
 - **Work done while offline:** `concordance.koplugin/main.lua:209-232`
@@ -237,9 +237,9 @@ the other.
   (`concordance/netjob.lua:104`) accepts any alphanumeric folder name of 4
   to 64 characters.
 - **Badge mismatch:** a second file of an already matched book goes to
-  "unmatched" (`cloudlibrary/matcher.lua:176`) and gets the "not in the
+  "unmatched" (`athenaeum/matcher.lua:176`) and gets the "not in the
   cloud library" badge.
-- **Passwords containing `%`:** `cloudlibrary/http.lua:30` uses LuaSocket's
+- **Passwords containing `%`:** `athenaeum/http.lua:30` uses LuaSocket's
   `user`/`password` fields, the mangling that Concordance's `DESIGN.md`
   documents and avoids.
 - **First-look dating:** `concordance/booksync.lua:91` dates existing
@@ -261,7 +261,7 @@ the other.
 
 ## Not reviewed, or only skimmed
 
-- **Cloud library:** `search.lua`, `badge.lua`, `zenos_source.lua`,
+- **Athenaeum:** `search.lua`, `badge.lua`, `zenos_source.lua`,
   `timing.lua`, most of `covers.lua`.
 - **Concordance:** parts of
   `collsync.lua` and `histsync.lua`, `migrate.lua`, `updates.lua`, and the
@@ -291,7 +291,7 @@ holds up on reading:
   fail.
 
 Running the existing suites (`scripts/test.sh`,
-`scripts/test-concordance.sh`, `tests/cloudlibrary/run_tests.sh`) is the
+`scripts/test-concordance.sh`, `tests/athenaeum/run_tests.sh`) is the
 cheapest way to strengthen the assessment.
 
 ## Design improvements
@@ -310,7 +310,7 @@ on every device with no means of repair.
 
 2. **Make inferred book matches retractable.** Facts read from a file (its
    UUID, its body signature) can stay permanent. Matches that are guesses,
-   such as Cloud library's title matches, should be a separate record type
+   such as Athenaeum's title matches, should be a separate record type
    that can be withdrawn, so a wrong join can be undone on every device.
    The same applies to the guards: they judge a group by every fact ever
    recorded, so one bad or outdated fact blocks or forces a join for good.
@@ -339,7 +339,7 @@ on every device with no means of repair.
 
    (Finding 2.)
 
-6. **Shrink Cloud library's hook surface.** It already registers as a
+6. **Shrink Athenaeum's hook surface.** It already registers as a
    ZenOS book source. Since the plugin requires ZenOS anyway, a ZenOS-side
    interface could replace the wrappers around `FileChooser`,
    `ReadHistory`, `DocSettings` and the delete functions. Fewer replaced

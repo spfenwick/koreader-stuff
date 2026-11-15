@@ -188,18 +188,35 @@ end
 check(item("Check for updates") and item("Automatic updates"), "update items in the menu")
 
 -- Updates for both plugins are checked together (concordance/updates.lua,
--- tested in test_concordance_updates.lua): Cloud library joins when loaded.
+-- tested in test_concordance_updates.lua): Athenaeum joins when loaded.
 local Updates = require("concordance/updates")
-check(Updates.active() and #plugin:updateEntries() == 1, "no Cloud library: Concordance only")
+check(Updates.active() and #plugin:updateEntries() == 1, "no Athenaeum: Concordance only")
 local cl_updater = { check = function() end, defers_to_concordance = true }
-package.loaded["cloudlibrary/updater"] = cl_updater
-ui.cloudlibrary = { path = TMP .. "/plugins/cloudlibrary.koplugin", version = "0.3.0" }
+package.loaded["athenaeum/updater"] = cl_updater
+ui.athenaeum = { path = TMP .. "/plugins/athenaeum.koplugin", version = "0.3.0" }
 local entries = plugin:updateEntries()
-check(#entries == 2 and entries[2].updater == cl_updater and entries[2].plugin == ui.cloudlibrary
-    and not entries[2].own_automatic, "Cloud library checked with its own updater")
+check(#entries == 2 and entries[2].updater == cl_updater and entries[2].plugin == ui.athenaeum
+    and not entries[2].own_automatic, "Athenaeum checked with its own updater")
 cl_updater.defers_to_concordance = nil
-check(plugin:updateEntries()[2].own_automatic, "an older Cloud library keeps its automatic check")
-ui.cloudlibrary, package.loaded["cloudlibrary/updater"] = nil, nil
+check(plugin:updateEntries()[2].own_automatic, "an older Athenaeum keeps its automatic check")
+ui.athenaeum, package.loaded["athenaeum/updater"] = nil, nil
+-- Before the rename (Cloud library, until the device updates it), and
+-- Athenaeum in the session it moves out of cloudlibrary.koplugin.
+local old_updater = { check = function() end }
+package.loaded["cloudlibrary/updater"] = old_updater
+ui.cloudlibrary = { path = TMP .. "/plugins/cloudlibrary.koplugin", version = "0.7.3" }
+entries = plugin:updateEntries()
+check(#entries == 2 and entries[2].updater == old_updater and entries[2].plugin == ui.cloudlibrary
+    and entries[2].own_automatic, "Cloud library (before the rename) checked with its own updater")
+package.loaded["cloudlibrary/updater"] = nil
+package.loaded["athenaeum/updater"] = cl_updater
+cl_updater.defers_to_concordance = true
+entries = plugin:updateEntries()
+check(#entries == 2 and entries[2].updater == cl_updater and entries[2].plugin == ui.cloudlibrary,
+    "Athenaeum still called cloudlibrary by KOReader (the session it moves)")
+package.loaded["athenaeum/updater"] = nil
+check(#plugin:updateEntries() == 1, "another plugin's cloudlibrary.koplugin: not taken for Athenaeum")
+ui.cloudlibrary = nil
 check(menu.sub_item_table_func()[1].text == "Sync now" and item("Statistics", "Sync now")
     and item("Highlights and books", "Sync now"), "a top-level Sync now and one per kind")
 
@@ -561,11 +578,11 @@ do
     Concordance.trigger = real
 end
 
--- Cloud library's files and matches.
+-- Athenaeum's files and matches.
 S.writeFile(TMP .. "/cloud-book.epub", "not really an epub")
 S.writeFile(TMP .. "/cloud-book.pdf", "%PDF")
 local U = "00000000-0000-4000-8000-0000000000aa"
-package.loaded["cloudlibrary/library"] = {
+package.loaded["athenaeum/library"] = {
     localFiles = function() return { TMP .. "/cloud-book.epub", TMP .. "/cloud-book.pdf", TMP .. "/gone.epub" } end,
     links = function() return { { path = TMP .. "/cloud-book.pdf", md5 = "pdfmd5", uuids = { U }, title = "A PDF" } } end,
 }
@@ -573,27 +590,27 @@ local files = {}
 for _, f in ipairs(P.identityFiles()) do files[f.path] = f end
 check(files[TMP .. "/cloud-book.epub"] and files[TMP .. "/cloud-book.epub"].md5 == nil
     and not files[TMP .. "/cloud-book.pdf"] and not files[TMP .. "/gone.epub"],
-    "Cloud library's EPUBs read for their identity, not yet opened")
+    "Athenaeum's EPUBs read for their identity, not yet opened")
 check(select(2, P.identityFiles()) == true, "the list is complete")
--- Cloud library hasn't read its catalog (KOReader started in a book): its
+-- Athenaeum hasn't read its catalog (KOReader started in a book): its
 -- files aren't listed, and the list says it's incomplete.
-package.loaded["cloudlibrary/library"].isLoaded = function() return false end
+package.loaded["athenaeum/library"].isLoaded = function() return false end
 local partial, complete = P.identityFiles()
 local n_cloud = 0
 for _, f in ipairs(partial) do if f.path == TMP .. "/cloud-book.epub" then n_cloud = n_cloud + 1 end end
-check(n_cloud == 0 and complete == false, "Cloud library's catalog not read: list marked incomplete")
-package.loaded["cloudlibrary/library"].isLoaded = function() return true end
+check(n_cloud == 0 and complete == false, "Athenaeum's catalog not read: list marked incomplete")
+package.loaded["athenaeum/library"].isLoaded = function() return true end
 check(select(2, P.identityFiles()) == true, "catalog read: complete again")
 P.engine().deps.id.collect()
 local Identity = require("concordance/identity")
 check(Identity.available(), "identity set up for other plugins")
 local iconn = P.idStore():open()
 check(iconn:rowexec("SELECT count(*) FROM id_facts WHERE md5 = 'pdfmd5' AND src = 'link'") == 1,
-    "Cloud library's matches recorded as links")
+    "Athenaeum's matches recorded as links")
 iconn:close()
 -- The match is no longer made (the file is still there, the book still in
 -- the catalog): the next sync withdraws the link.
-local cl = package.loaded["cloudlibrary/library"]
+local cl = package.loaded["athenaeum/library"]
 cl.links = function() return {} end
 cl.folderFiles = function() return { { path = TMP .. "/cloud-book.pdf", md5 = "pdfmd5" } } end
 cl.inCatalog = function(u) return u == U end
@@ -606,9 +623,9 @@ cl.isLoaded = function() return true end
 P.engine().deps.id.collect()
 iconn = P.idStore():open()
 check(iconn:rowexec("SELECT count(*) FROM id_facts WHERE md5 = 'pdfmd5' AND src = 'unlink'") == 1,
-    "a match Cloud library no longer makes is withdrawn")
+    "a match Athenaeum no longer makes is withdrawn")
 iconn:close()
-package.loaded["cloudlibrary/library"] = nil
+package.loaded["athenaeum/library"] = nil
 
 -- ZenOS's Home is a page over the file browser: history and collections
 -- from other devices arrive while it's shown, but not under a menu.
@@ -659,10 +676,23 @@ do
     end
     local v = P.pluginVersions()
     check(v and v.concordance == metaVersion("concordance.koplugin/_meta.lua"), "Concordance's version")
-    check(v.cloudlibrary == metaVersion("cloudlibrary.koplugin/_meta.lua"), "Cloud library's version, when installed")
-    settings_data.plugins_disabled = { cloudlibrary = true }
-    check(P.pluginVersions().cloudlibrary == nil, "no Cloud library version when it's turned off")
+    check(v.athenaeum == metaVersion("athenaeum.koplugin/_meta.lua"), "Athenaeum's version, when installed")
+    settings_data.plugins_disabled = { athenaeum = true }
+    check(P.pluginVersions().athenaeum == nil, "no Athenaeum version when it's turned off")
     settings_data.plugins_disabled = nil
+
+    -- Still in cloudlibrary.koplugin (as Cloud library, before the rename):
+    -- reported as Athenaeum; another plugin's cloudlibrary.koplugin isn't.
+    local dir = TMP .. "/rename-plugins"
+    S.mkdirp(dir .. "/cloudlibrary.koplugin/cloudlibrary")
+    S.writeFile(dir .. "/cloudlibrary.koplugin/_meta.lua", 'return { version = "1.4.6" }\n')
+    check(P.pluginVersions(dir).athenaeum == nil, "another plugin's cloudlibrary.koplugin: no Athenaeum version")
+    S.writeFile(dir .. "/cloudlibrary.koplugin/cloudlibrary/updatecore.lua", "-- updater\n")
+    S.writeFile(dir .. "/cloudlibrary.koplugin/_meta.lua", 'return { version = "0.7.3" }\n')
+    check(P.pluginVersions(dir).athenaeum == "0.7.3", "Cloud library: reported as Athenaeum")
+    S.mkdirp(dir .. "/athenaeum.koplugin")
+    S.writeFile(dir .. "/athenaeum.koplugin/_meta.lua", 'return { version = "0.8.0" }\n')
+    check(P.pluginVersions(dir).athenaeum == "0.8.0", "both folders: athenaeum.koplugin's version")
 
     -- KOReader's version and ZenOS's.
     local old_version = package.loaded["version"]

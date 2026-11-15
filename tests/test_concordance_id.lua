@@ -470,7 +470,7 @@ do
     check(facts(P) == facts(Q), "a pack gives the same facts as its segments")
 end
 
--- Cloud library's side: links, files never opened, book states ---------------------------------
+-- Athenaeum's side: links, files never opened, book states ---------------------------------
 
 do
     local BookStore = require("concordance/bookstore")
@@ -489,7 +489,7 @@ do
     fact("z", { U[9] }, "s9", "Other")
     fact("r", { U[2] }, "s2", "Third")
 
-    -- A PDF Cloud library matched by title joins its book (level 1 only).
+    -- A PDF Athenaeum matched by title joins its book (level 1 only).
     check(L:link({ { md5 = "p1", uuids = { U[1]:upper() }, title = "Book", authors = "Ann" } }, "devA") == 1,
         "link recorded")
     check(L:link({ { md5 = "p1", uuids = { U[1] }, title = "Book", authors = "Ann" } }, "devA") == 0,

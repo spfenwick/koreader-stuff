@@ -242,14 +242,14 @@ do
     check(B.rh:files() == "two,one,three", "opened again on A: back on B, on top: " .. B.rh:files())
 end
 
--- A book that isn't on the device: through Cloud library, or not at all ---------------------
+-- A book that isn't on the device: through Athenaeum, or not at all ---------------------
 do
     local a4 = A:book("four")
     local md5 = digest(S.readFile(a4))
     A.rh:open(a4, clock); tick(10)
     round(A, B)
     check(B.rh:files() == "two,one,three", "not on B, no cloud: not added")
-    -- Cloud library loads its catalog: the book's cloud entry.
+    -- Athenaeum loads its catalog: the book's cloud entry.
     B.uuid_of[md5] = "11111111-2222-3333-4444-555555555555"
     B.cloud["11111111-2222-3333-4444-555555555555"] = B.dir .. "/books/cloud-1111.epub"
     round(A, B)
@@ -257,7 +257,7 @@ do
     check(e and B.rh.hist[1] == e, "cloud entry on top once found")
     check(e and e.time == A.rh:timeOf(a4), "at the time it was read")
     check(e and not e.dim and not e.select_enabled, "shown, but never reopened at startup")
-    -- Downloaded: Cloud library now gives the file.
+    -- Downloaded: Athenaeum now gives the file.
     local b4 = B:book("four", nil, true)
     B.cloud["11111111-2222-3333-4444-555555555555"] = b4
     B.rh:remove(B.dir .. "/books/cloud-1111.epub")

@@ -216,17 +216,17 @@ check(A.status.devices == 1, "one device seen")
 -- an ordinary one too (no full listing due).
 local function remoteMeta(d) return Codec.decode(S.readFile(REMOTE .. "/devices/" .. d.id .. "/meta.json") or "") end
 check(meta.deviceName == "Simulated A" and meta.versions == nil, "meta.json: name, and no versions when none given")
-A.device_name, A.plugin_versions = "Bedside Kobo", { concordance = "9.9.9", cloudlibrary = "1.2.3" }
+A.device_name, A.plugin_versions = "Bedside Kobo", { concordance = "9.9.9", athenaeum = "1.2.3" }
 local last_full = A.engine.status.last_full_list
 sync({ A })
 check(last_full and A.engine.status.last_full_list == last_full, "no full listing due: an ordinary sync")
 meta = remoteMeta(A)
 check(meta.deviceName == "Bedside Kobo" and meta.versions and meta.versions.concordance == "9.9.9"
-    and meta.versions.cloudlibrary == "1.2.3", "renamed, with versions: meta.json written again, ordinary sync")
+    and meta.versions.athenaeum == "1.2.3", "renamed, with versions: meta.json written again, ordinary sync")
 A.plugin_versions = { concordance = "9.9.10" }
 sync({ A })
 meta = remoteMeta(A)
-check(meta.versions.concordance == "9.9.10" and meta.versions.cloudlibrary == nil, "a new version: meta.json written again")
+check(meta.versions.concordance == "9.9.10" and meta.versions.athenaeum == nil, "a new version: meta.json written again")
 A.device_name, A.plugin_versions = nil, nil
 sync({ A })
 check(remoteMeta(A).deviceName == "Simulated A", "back to the old name")

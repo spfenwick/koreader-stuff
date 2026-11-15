@@ -306,7 +306,7 @@ function IdStore:recordScan(item, info, device)
 end
 
 --- Records matches made outside the file (src "link"): another plugin
--- (Cloud library) found which catalog book a file is, by its title.
+-- (Athenaeum) found which catalog book a file is, by its title.
 -- list = { { md5, uuids, title, authors }, … }. Only links that don't
 -- count already are written and sent: new ones, and ones withdrawn since
 -- (numbered above the unlink, up to IdFormat.MAX_N). Returns the number of
