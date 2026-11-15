@@ -608,18 +608,22 @@ class Library:
                 by_md5[m] = book
 
         # Superseded files: a book's file that no device reports having on disk
-        # (no "file" identity fact) and that another of its files was opened
-        # after. Its highlights point into a
-        # text that's been replaced, and devices never apply them to the new
-        # file (they share annotations only with the same text), so they're
-        # left out. PDFs and other files identity doesn't read only count as
-        # superseded by a file opened later.
+        # (no "file" identity fact), and either
+        # - another of its files was opened after it, or
+        # - a device reports its sidecar now belongs to another file (a
+        #   "sidecar" fact: the file was replaced in place, and KOReader keeps
+        #   reading the new one under the old MD5, so nothing is opened later).
+        # Its highlights point into a text that's gone, and nothing tells
+        # whether the new file has the same text, so they're left out. PDFs
+        # and other files identity doesn't read only count as superseded by a
+        # file opened later.
+        replaced = {md5 for (md5,) in state.execute(
+            "SELECT DISTINCT md5 FROM id_facts WHERE src = 'sidecar'")}
         for b in books.values():
-            if len(b.editions) < 2:
-                continue
             newest = max(e.last_opened for e in b.editions)
             for e in b.editions:
-                e.superseded = e.md5 not in on_disk and e.last_opened < newest
+                e.superseded = e.md5 not in on_disk and (
+                    e.md5 in replaced or (len(b.editions) > 1 and e.last_opened < newest))
         shown: list[Annotation] = []
         for a in annotations:
             a.book = by_md5[a.md5]
