@@ -422,6 +422,9 @@ end
 -- are drawn from them; nothing is laid out again).
 function Library.redrawStates()
     if not next(Virtual.by_path) then return end
+    -- ZenOS shows the statuses itself too (in its badges, filters, Home).
+    local ok, err = pcall(ZenSource.statesChanged)
+    if not ok then logger.warn("Athenaeum: telling ZenOS of new book states:", err) end
     for _i, w in ipairs(UIManager._window_stack or {}) do
         if w.widget then UIManager:setDirty(w.widget, "ui") end
     end
@@ -528,11 +531,17 @@ Virtual.stateText = function(id)
     if not ok then logger.warn("Athenaeum: reading the book's state from Concordance:", text) end
     return ok and text or nil
 end
-Badge.cloudState = function(path)
+-- A cloud book's status on other devices, for its badge and for ZenOS. A
+-- Concordance error just leaves it out.
+local function cloudState(path)
     local book = Virtual.by_path[path]
-    local st = book and Library.bookState(book.id)
-    return st and st.status
+    if not book then return nil end
+    local ok, st = pcall(Library.bookState, book.id)
+    if not ok then logger.warn("Athenaeum: reading the book's state from Concordance:", st) end
+    return ok and st and st.status or nil
 end
+Badge.cloudState = cloudState
+ZenSource.state = cloudState
 
 function Library.installHistory()
     History.install{

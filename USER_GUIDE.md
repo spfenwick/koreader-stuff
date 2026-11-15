@@ -55,6 +55,7 @@ Sync first from the device whose settings you want to keep. The catalog is share
 - **In the library folder**: cloud books sit beside downloaded ones, in list or mosaic view, sorted the same way.
 - **Covers** download as you browse, plus a batch after each sync. A full sync notices a changed cover when the book's file changed with it; for others, use Refresh all covers.
 - **Badges** on the cover show where a book is: a cloud for cloud-only books; with Concordance, the cloud carries a check, play or pause mark when the book is finished, being read or on hold on another device.
+- **Reading status**: with Concordance, ZenOS also shows a cloud book's status from your other devices, as it does for a downloaded book: its status badge, the status filters, Home and To Be Read. Changing the status of a cloud book needs the book downloaded; once it is, the status on this device is the one shown.
 - **ZenOS tabs**: cloud books appear in Authors, Series and Tags, on Home, and in the reading history. Books in a series are numbered in the order the server lists them, so a gap or a number such as 2.5 shows as the next whole number.
 - **File search** finds cloud books by title, author or series.
 

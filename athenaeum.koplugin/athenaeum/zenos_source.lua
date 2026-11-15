@@ -11,6 +11,9 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   cached folder listings, via listingKey(): a listing is rebuilt when the
   cloud books in it change, and one saved before the plugin was removed
   isn't reused
+  cloud books' reading status (finished, reading, on hold on another
+  device, from Concordance), via status(): ZenOS shows it as it does a
+  local book's (read-only; a downloaded book's own status takes over)
 
 Also, until ZenOS does these itself:
   getGroupedByTags     each book once per tag (ZenOS adds a book again for
@@ -32,6 +35,7 @@ local Guard = require("athenaeum/guard")
 local ZenSource = {
     registered = false,
     enabled = nil, -- function() -> true to list cloud books in groups
+    state = nil,   -- function(path) -> "complete", "reading", "abandoned" or nil
 }
 
 local MODULE = "common/book_sources"
@@ -177,6 +181,13 @@ local function listingKey(folder)
     return Virtual.listingKey()
 end
 
+-- Only cloud books: a downloaded book has its own status in ZenOS.
+local function status(path)
+    if not Virtual.by_path[path] then return nil end
+    local state = ZenSource.state and ZenSource.state(path)
+    return state and { status = state } or nil
+end
+
 --- Registers the source. Returns false when ZenOS refuses it (the startup
 -- check has already made sure ZenOS has book sources).
 function ZenSource.install(virtual)
@@ -199,6 +210,7 @@ function ZenSource.install(virtual)
             return Virtual.bookInfoFor(path, get_cover)
         end),
         listingKey = protect("library", "listingKey", listingKey),
+        status = protect("library", "status", status),
     }
     if not BookSources.register(ID, source) then
         Guard.problem("library", "ZenOS refused the book source")
@@ -307,6 +319,23 @@ function ZenSource.homeOnTop()
     if not ok or type(home) ~= "table" or type(home.isActiveOnTop) ~= "function" then return false end
     local ok_top, top = pcall(home.isActiveOnTop)
     return ok_top and top == true
+end
+
+--- Cloud books' states (from Concordance) may have changed: ZenOS reads
+-- their statuses again (keeping its groupings; a ZenOS without
+-- statusChanged rebuilds those too), and the library folder and Home are
+-- redrawn.
+function ZenSource.statesChanged()
+    if not ZenSource.registered then return end
+    local BookSources = package.loaded[MODULE]
+    if type(BookSources) == "table" and type(BookSources.statusChanged) == "function" then
+        local ok, err = pcall(BookSources.statusChanged)
+        if not ok then logger.warn("Athenaeum: ZenOS book sources statusChanged():", err) end
+    else
+        ZenSource.changed()
+    end
+    Virtual.refresh()
+    ZenSource.refreshHome()
 end
 
 --- Tells ZenOS the cloud books changed; with paths, also that their covers

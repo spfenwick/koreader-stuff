@@ -1878,6 +1878,28 @@ do
     eq(source.listingKey("/"), key, "parent folders count the books")
     check(source.listingKey("/libx") == nil and source.listingKey("/lib/sub") == nil, "no key for other folders")
 
+    -- Reading status from other devices (Concordance): cloud books only.
+    local real_state = ZenSource.state
+    local asked = {}
+    ZenSource.state = function(path) asked[#asked + 1] = path return "complete" end
+    eq(source.status("/lib/cloud-c1.epub").status, "complete", "status of a cloud book")
+    eq(source.status("/lib/a.epub"), nil, "a local book keeps its own status")
+    eq(#asked, 1, "state only looked up for cloud books")
+    ZenSource.state = function() return nil end
+    eq(source.status("/lib/cloud-c1.epub"), nil, "no state: no status")
+    ZenSource.state = real_state
+    ZenOS.changes = {}
+    ZenSource.statesChanged()
+    eq(#ZenOS.changes, 1, "new states, older ZenOS: everything rebuilt")
+    local status_changes = 0
+    package.loaded["common/book_sources"].statusChanged = function() status_changes = status_changes + 1 end
+    local cached_books = source.books()
+    ZenSource.statesChanged()
+    eq(status_changes, 1, "new states: ZenOS reads the statuses again")
+    eq(#ZenOS.changes, 1, "groupings kept")
+    check(source.books() == cached_books, "cloud books list kept")
+    package.loaded["common/book_sources"].statusChanged = nil
+
     ZenOS.changes = {}
     Virtual.setCatalog("/lib", { { id = "c2", title = "Cloud Two" } })
     check(source.listingKey("/lib") ~= key, "key changes with the catalog")
@@ -2000,8 +2022,15 @@ do
     eq(Library.stateText(A_ID), nil, "nonsense rating: nothing to say")
     states[A_ID] = { status = "reading" }
     eq(Virtual.stateText(A_ID), "Reading", "the details sheet asks the library")
+    local ZenSource = require("athenaeum/zenos_source")
+    local real_by_path = Virtual.by_path
+    Virtual.by_path = { ["/lib/cloud-a.epub"] = { id = A_ID } }
+    eq(ZenSource.state("/lib/cloud-a.epub"), "reading", "ZenOS gets the state the badge shows")
+    eq(ZenSource.state("/lib/a.epub"), nil, "no state for other books")
     package.loaded["concordance/identity"].bookState = function() error("boom") end
     eq(Virtual.stateText(A_ID), nil, "a Concordance error leaves the line out")
+    eq(ZenSource.state("/lib/cloud-a.epub"), nil, "a Concordance error leaves the status out")
+    Virtual.by_path = real_by_path
     package.loaded["concordance/identity"] = nil
     -- For Concordance to withdraw links: every file with its MD5, and what's in the catalog.
     Library.file_info["/lib/stray.pdf"] = { md5 = "ms" }
