@@ -1619,6 +1619,7 @@ do
     ReadHistory:reload(true)
     local e = ReadHistory.hist[ReadHistory:getIndexByFile(cloud1) or 0]
     check(e and not e.dim and not e.select_enabled, "read back: shown, never reopened")
+    eq(e and e.text, "Up.epub", "read back: named like the book in the library folder")
     ReadHistory.hist[1].time = 50 -- the cloud entry newest
     table.sort(ReadHistory.hist, function(a, b) return a.time > b.time end)
     ReadHistory:ensureLastFile()
@@ -1645,17 +1646,35 @@ do
     }
     ReadHistory:_flush()
 
-    -- Tapping or long-pressing it in the History view shows its details.
-    local shown, real_show = {}, Virtual.showDetails
-    Virtual.showDetails = function(path) table.insert(shown, path) end
+    ReadHistory:reload(true)
+    eq(ReadHistory.hist[1].text, "Up.epub", "a cloud entry put in by hand is named too")
+
+    -- Tapping or long-pressing it in the History view shows its details;
+    -- long-press adds "Remove from history".
+    local shown, shown_opts, real_show = {}, {}, Virtual.showDetails
+    Virtual.showDetails = function(path, opts) table.insert(shown, path); table.insert(shown_opts, opts or false) end
+    local refreshed = 0
     local manager = { booklist_menu = {
         onMenuSelect = function() return "opened" end, onMenuHold = function() return "held" end,
-    } }
+    }, updateItemTable = function() refreshed = refreshed + 1 end }
     History.wrapHistoryMenu(manager)
     check(manager.booklist_menu:onMenuSelect({ file = cloud1 }) == true and shown[1] == cloud1, "tap: details")
+    check(not shown_opts[1], "tap: no history row")
     check(manager.booklist_menu:onMenuHold({ file = cloud1 }) == true and #shown == 2, "long-press: details")
+    local closed = 0
+    local rows = type(shown_opts[2]) == "table" and shown_opts[2].extra_rows(function() closed = closed + 1 end) or {}
+    local remove = rows[1] and rows[1][1]
+    check(remove and remove.text:find("Remove from history", 1, true), "long-press: Remove from history row")
     eq(manager.booklist_menu:onMenuSelect({ file = down }), "opened", "a file opens as usual")
     Virtual.showDetails = real_show
+    if remove then remove.callback() end
+    check(closed == 1 and refreshed == 1 and not ReadHistory:getIndexByFile(cloud1),
+        "Remove from history: closes the details, removes the entry, redraws the list")
+    check(#(Library.settings().history_cloud or {}) == 0, "and it isn't put back at startup")
+    ReadHistory.hist = {
+        { time = 100, file = cloud1, text = "cloud.epub", dim = false, select_enabled = false },
+    }
+    ReadHistory:_flush()
 
     -- Downloaded: the entry becomes the file.
     local up = folder .. "/Bo Writer - Up.epub"
@@ -1848,13 +1867,20 @@ do
     Settings.save("zenos_groups", true)
 
     check(source.owns("/lib/cloud-c1.epub") and not source.owns("/lib/a.epub"), "owns cloud books only")
-    local shown
+    local shown, shown_opts
     local real_show = Virtual.showDetails
-    Virtual.showDetails = function(path) shown = path end
+    Virtual.showDetails = function(path, opts) shown, shown_opts = path, opts end
     check(source.open("/lib/cloud-c1.epub") == true and shown == "/lib/cloud-c1.epub", "open shows details")
     shown = nil
     check(not source.open("/lib/a.epub") and shown == nil, "other books not handled")
     check(source.showContextMenu(nil, { path = "/lib/cloud-c1.epub" }) == true, "long-press shows details")
+    check(shown_opts == nil, "long-press elsewhere: no history row")
+    check(source.showContextMenu(nil, { path = "/lib/cloud-c1.epub", _zen_is_history = true,
+        _zen_history_path = "/lib/cloud-c1.epub" }) == true and type(shown_opts) == "table"
+        and type(shown_opts.extra_rows) == "function", "long-press on Home's Recently read: history row")
+    local history_rows = shown_opts and shown_opts.extra_rows(function() end) or {}
+    check(history_rows[1] and history_rows[1][1].text:find("Remove from history", 1, true),
+        "Recently read: Remove from history")
 
     -- Open backstop, outside ZenOS's openFile wrapper (ZenOS wraps it later).
     local opened

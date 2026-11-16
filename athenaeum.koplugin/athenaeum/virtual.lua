@@ -305,7 +305,9 @@ local function cancelZenOSOpeningBanner()
     if type(cancel) == "function" then pcall(cancel) end
 end
 
-function Virtual.showDetails(path)
+--- opts.extra_rows: optional function(close) -> more button rows, shown
+-- after the book's own (e.g. "Remove from history" from a history list).
+function Virtual.showDetails(path, opts)
     local book = Virtual.by_path[path]
     if not book then return end
     cancelZenOSOpeningBanner()
@@ -342,6 +344,9 @@ function Virtual.showDetails(path)
     local function close() UIManager:close(dialog) end
     local buttons = Virtual.detailsButtons and Virtual.detailsButtons(book.id, full, close)
         or {{ { text = _("Close"), callback = close } }}
+    if type(opts) == "table" and type(opts.extra_rows) == "function" then
+        for _i, row in ipairs(opts.extra_rows(close) or {}) do table.insert(buttons, row) end
+    end
     dialog = require("athenaeum/details").show{
         path = path,
         cover_file = book.cover,

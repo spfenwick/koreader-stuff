@@ -209,7 +209,7 @@ With both installed, Athenæum knows what you've read on every device, and a boo
 
 - **Cloud badges show reading state.** A cloud-only book's badge gets a check (finished), play (reading) or pause (on hold) mark from your other devices.
 - **Details show your history.** A cloud book's details sheet adds a line such as "Finished · ★★★★☆ · Last read 12 Oct 2026 on Kobo Forma".
-- **History includes cloud books.** A book you read on another device appears in History even if it isn't downloaded here; tap it to see its details and download it. Once downloaded, the entry becomes the file.
+- **History includes cloud books.** A book you read on another device appears in History under its title even if it isn't downloaded here; tap it to see its details and download it, or long-press it to remove it from History (in ZenOS, also from Home's Recently read). Once downloaded, the entry becomes the file.
 - **Downloads open where you left off.** A book Athenæum has just downloaded is matched at once, so it opens with its status and highlights from other devices.
 - **One update check.** Concordance checks both plugins in one go and offers to install both; there's one restart prompt afterwards.
 

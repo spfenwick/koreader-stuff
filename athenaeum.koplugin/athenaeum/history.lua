@@ -17,7 +17,11 @@ keeps those entries working:
                             put back at startup
   FileManagerHistory:onShowHist
                             tapping or long-pressing a cloud entry shows
-                            the book's details
+                            the book's details (long-press adds "Remove
+                            from history")
+
+Cloud entries are named like the book in the library folder ("<title>.epub")
+whenever the catalog has it; their paths only carry the catalog ID.
 
 After each catalog load (History.reconcile): a downloaded book's entry
 becomes its file, a deleted book's entry its cloud entry, and entries for
@@ -26,6 +30,7 @@ books gone from the catalog are greyed out.
 
 local logger = require("logger")
 local lfs = require("libs/libkoreader-lfs")
+local _ = require("gettext")
 local Guard = require("athenaeum/guard")
 local Virtual = require("athenaeum/virtual")
 
@@ -64,6 +69,20 @@ end
 local function cloudPathFor(id)
     local folder = Virtual.folder or (History.folder and History.folder())
     return folder and (folder:gsub("/+$", "") .. "/" .. PREFIX .. id .. ".epub")
+end
+
+-- An entry's name: a cloud book's as in the library folder, else the file's.
+local function nameOf(file)
+    local book = Virtual.by_path[file]
+    return book and book.filename or (file:gsub(".*/", ""))
+end
+
+-- Names the catalog's cloud entries (KOReader saves only paths and times,
+-- so this is redone after every read).
+local function label(rh)
+    for _i, v in ipairs(rh.hist or {}) do
+        if Virtual.by_path[v.file] then v.text = nameOf(v.file) end
+    end
 end
 
 -- Catalog IDs by lowercase UUID, rebuilt when the catalog changes.
@@ -141,9 +160,9 @@ end
 
 --- Inserts an entry at its time position (the history is newest first).
 local function insertAt(rh, file, time)
-    local at = rh.getIndexByTime and rh:getIndexByTime(time, (file:gsub(".*/", ""))) or 1
+    local at = rh.getIndexByTime and rh:getIndexByTime(time, nameOf(file)) or 1
     table.insert(rh.hist, at, {
-        time = time, file = file, text = (file:gsub(".*/", "")),
+        time = time, file = file, text = nameOf(file),
         dim = false, select_enabled = isFile(file),
     })
 end
@@ -167,6 +186,23 @@ function History.restore(rh)
     end
 end
 
+--- For Virtual.showDetails's extra_rows: a "Remove from history" row for
+-- the entry at path. after() runs once it's removed.
+function History.removeRows(path, after)
+    return function(close)
+        local Details = require("athenaeum/details")
+        return Guard.wrapCallbacks({{{
+            text = Details.label("delete", _("Remove from history")),
+            align = "left",
+            callback = function()
+                close()
+                require("readhistory"):removeItemByPath(path)
+                if after then after() end
+            end,
+        }}}, "history")
+    end
+end
+
 function History.wrapHistoryMenu(manager)
     local menu = manager and manager.booklist_menu
     if type(menu) ~= "table" then return end
@@ -175,7 +211,9 @@ function History.wrapHistoryMenu(manager)
         if type(orig) == "function" then
             menu[name] = function(m, item, ...)
                 if Guard.ok("history") and type(item) == "table" and Virtual.by_path[item.file] then
-                    local ok, err = pcall(Virtual.showDetails, item.file)
+                    local opts = name == "onMenuHold" and { extra_rows = History.removeRows(item.file,
+                        function() if manager.updateItemTable then manager:updateItemTable() end end) } or nil
+                    local ok, err = pcall(Virtual.showDetails, item.file, opts)
                     if ok then return true end
                     Guard.fail("history", "history " .. name, err)
                 end
@@ -195,7 +233,7 @@ function History.install(opts)
     local ReadHistory = require("readhistory")
     Guard.hook("history", ReadHistory, "_read", function(orig, self, ...)
         local r = orig(self, ...)
-        if r then undim(self) end
+        if r then undim(self); label(self) end
         return r
     end, "ReadHistory:_read")
     Guard.hook("history", ReadHistory, "clearMissing", function(_orig, self)
@@ -225,6 +263,7 @@ function History.install(opts)
     end
     Guard.call("history", function()
         undim(ReadHistory)
+        label(ReadHistory)
         History.restore(ReadHistory)
     end)
 end
@@ -254,7 +293,7 @@ function History.reconcile()
                 table.remove(rh.hist, i)
             else
                 local e = copy(rh.hist[i])
-                e.file, e.text = cloud, (cloud:gsub(".*/", ""))
+                e.file, e.text = cloud, nameOf(cloud)
                 e.dim, e.select_enabled = false, false
                 rh.hist[i] = e
             end
@@ -279,6 +318,8 @@ function History.reconcile()
             end
         end
     end
+    -- The catalog may name books it didn't before (or differently).
+    label(rh)
     -- Downloaded: the entry is the file (the newer of the two, if both).
     for _i, d in ipairs(downloaded) do
         local i = rh:getIndexByFile(d.cloud)

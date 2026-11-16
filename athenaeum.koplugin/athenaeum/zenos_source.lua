@@ -81,10 +81,21 @@ local function wrapOpenFile()
     end, "filemanagerutil.openFile")
 end
 
+-- Details for a book ZenOS shows from a history list (Home's Recently read
+-- passes _zen_is_history): with "Remove from history", after which Home
+-- forgets the entry and is redrawn.
+local function historyOpts(item, path)
+    if not item._zen_is_history then return nil end
+    local history_path = item._zen_history_path or path
+    return { extra_rows = require("athenaeum/history").removeRows(history_path, function()
+        ZenSource.refreshHome({ history_path })
+    end) }
+end
+
 local function wrapFileDialog(fc)
     our_dialogs[fc] = Guard.hook("zenos", fc, "showFileDialog", function(orig, self, item, ...)
         if type(item) == "table" and Virtual.by_path[item.path] and not selecting() then
-            Virtual.showDetails(item.path)
+            Virtual.showDetails(item.path, historyOpts(item, item.path))
             return true
         end
         return orig(self, item, ...)
@@ -165,9 +176,9 @@ local function books()
     return out
 end
 
-local function show(path)
+local function show(path, opts)
     if not Virtual.by_path[path] or selecting() then return false end
-    Virtual.showDetails(path)
+    Virtual.showDetails(path, opts)
     return true
 end
 
@@ -203,7 +214,9 @@ function ZenSource.install(virtual)
         owns = protect("library", "owns", function(path) return Virtual.by_path[path] ~= nil end),
         open = protect("library", "open", function(path) return show(path) end),
         showContextMenu = protect("library", "showContextMenu", function(_menu, item)
-            return type(item) == "table" and show(item.path or item.file)
+            if type(item) ~= "table" then return false end
+            local path = item.path or item.file
+            return show(path, historyOpts(item, path))
         end),
         invalidate = function() books_cache = nil end,
         bookInfo = protect("library", "bookInfo", function(path, get_cover)
