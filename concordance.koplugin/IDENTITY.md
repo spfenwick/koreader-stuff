@@ -424,6 +424,35 @@ they load in doesn't matter:
   refreshes the groups, so "Download & read" opens the book with its other
   versions' status, highlights and position already applying.
 
+## Cloud books
+
+Built 2026-11-18, Concordance side only (Athenæum doesn't call it yet). A catalog book with no file on this device has no MD5 to key
+its book data by. So `Identity.setBookState(uuid, values, info)` records
+it under the book's key, `uuid:<catalog UUID>` (`BookFormat.uuidKey`), and
+adds a link naming that UUID (`src` `link`, like Athenæum's matches):
+
+- Both formats already take any short token as the key (`isToken`), so
+  older versions read these records: the book data as one more book, the
+  link as an ordinary link. A link names the catalog's own ID, so
+  `computeGroups` joins the key to every file carrying the UUID (as for any
+  catalog link). Devices with identity, older versions included, then
+  apply the values to their files of the book through the usual group join
+  (level 1: status, rating, review, custom metadata, collections). Nothing
+  is ever withdrawn: `retract` only looks at files.
+- Values: properties about the book (`BookFormat.isGroupProp`), not the
+  history; the status can be changed but not cleared, as in KOReader.
+  `BookStore:setBook` records them as changes made now, and later than the
+  record they replace, whatever the clocks say: they were made from the
+  state shown, which `bookState` gave across every version.
+- The link is made, and the groups refreshed, before the values are
+  recorded, so the first change to a cloud book is judged against its
+  versions' records too. This device's files of the book (opened here) are
+  marked to be written once closed.
+- `bookState` gives the result straight away; the records go with the next
+  sync.
+- concordance-web will probably list the key as one of the book's files
+  (its loader makes an edition of every key in `book_merged`); not checked.
+
 ## Order of work
 
 1. Matcher prefix fix in Athenaeum (independent, small). **Done** (Athenaeum 0.2.3).

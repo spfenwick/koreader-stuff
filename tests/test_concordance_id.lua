@@ -476,6 +476,7 @@ do
     local BookStore = require("concordance/bookstore")
     local AnnFormat = require("concordance/annformat")
     local Identity = require("concordance/identity")
+    local BookFormat = require("concordance/bookformat")
     local L = newStore("L")
     local U = {}
     for i = 1, 9 do U[i] = string.format("00000000-0000-4000-8000-%012d", i) end
@@ -558,7 +559,10 @@ do
             scanned[#scanned + 1] = path
             return { md5 = "fresh", uuids = { U[6] }, sig = "s6", title = "Fresh", authors = "F" }
         end,
-        refresh = function() refreshed = refreshed + 1 end,
+        refresh = function()
+            refreshed = refreshed + 1
+            L:refreshGroups()
+        end,
         logger = { warn = function() end },
     }
     local st = Identity.bookState({ U[1]:upper() })
@@ -590,6 +594,60 @@ do
     check(Identity.fileAdded("/l/fresh.epub") == 0 and #scanned == 1, "not read twice")
     check(Identity.fileAdded("/l/fresh.pdf") == 0 and #scanned == 1, "files the scanner doesn't read are skipped")
     package.loaded["libs/libkoreader-lfs"] = real_lfs
+
+    -- Cloud books: state set from a device with no file of the book, under
+    -- its key, joined to its files by a link naming the catalog ID.
+    local key = BookFormat.uuidKey(U[5])
+    check(key == "uuid:" .. U[5] and BookFormat.keyUuid(key) == U[5] and BookFormat.keyUuid("e1") == nil, "keys")
+    local before = refreshed
+    check(Identity.setBookState("urn:uuid:" .. U[5]:upper(), { status = "complete", rating = 5 },
+        { title = "New", authors = { "N", "M" } }) == 2, "cloud book: status and rating set")
+    check(refreshed == before + 1, "groups refreshed once linked")
+    conn = L:open()
+    check(conn:rowexec("SELECT count(*) FROM book_outbox WHERE md5 = '" .. key .. "'") == 2, "both to be sent")
+    check(conn:rowexec("SELECT authors FROM book_books WHERE md5 = '" .. key .. "'") == "N\nM", "book record: authors")
+    check(conn:rowexec("SELECT count(*) FROM id_facts WHERE md5 = '" .. key .. "' AND src = 'link' AND uuids = '"
+        .. U[5] .. "'") == 1, "linked to the catalog ID")
+    conn:close()
+    local of5
+    for _, g in ipairs(L:groups()) do
+        for _, m in ipairs(g.md5s) do if m == key and g.ok then of5 = table.concat(g.md5s, ",") end end
+    end
+    check(of5 == "n1," .. key, "joined to the book's file (" .. tostring(of5) .. ")")
+    Identity.changed()
+    st = Identity.bookState({ U[5] })
+    check(st and st.status == "complete" and st.rating == 5, "the cloud book's state")
+    check(Identity.setBookState(U[5], { status = "complete", rating = 5 }) == 0 and refreshed == before + 1,
+        "the same again: nothing, no refresh (already linked)")
+    check(Identity.setBookState(U[5], { rating = false }) == 1, "rating cleared")
+    Identity.changed()
+    st = Identity.bookState({ U[5] })
+    check(st.status == "complete" and st.rating == nil, "cleared rating applies")
+    check(Identity.setBookState(U[5], { status = false, hist = 5, rating = 9, status2 = 1 }) == 0,
+        "no clearing the status, no history, bad values skipped")
+    check(Identity.setBookState(U[5], { rating = false }) == 0, "clearing what's clear: nothing")
+    local okn, err = Identity.setBookState("not-a-uuid", { status = "complete" })
+    check(okn == nil and err, "not a UUID: an error")
+    -- A change is later than what was shown, even from a clock running ahead.
+    conn = B:open()
+    conn:exec("INSERT OR REPLACE INTO book_merged (md5, prop, updated, device, deleted, hash, value) "
+        .. "VALUES ('e2', 'status', " .. (os.time() + 1000) .. ", 'devB', 0, 'ahead', '\"abandoned\"');")
+    conn:close()
+    Identity.changed()
+    check(Identity.bookState({ U[1] }).status == "abandoned", "another version's status, from a clock ahead")
+    check(Identity.setBookState(U[1], { status = "reading" }) == 1, "set from a device without the book")
+    Identity.changed()
+    check(Identity.bookState({ U[1] }).status == "reading", "the change wins over the clock ahead")
+    -- Sent and read like any book's records, by any device.
+    local out = TMP .. "/cloud-book.jsonl"
+    local bexp = B:export{ device_id = "devC", out_path = out, now = 1, max_records = 100 }
+    check(bexp and S.readFile(out):find('"md5":"' .. key .. '"', 1, true), "sent under the key")
+    local R = BookStore.new{ sq3 = S.SQ3, state_path = TMP .. "/R.sqlite3" }
+    check(R:importSegment(out, "devC", "book-0000000001.jsonl", bexp.size, nil, 1), "another device takes it")
+    conn = R:open()
+    check(conn:rowexec("SELECT value FROM book_merged WHERE md5 = '" .. key .. "' AND prop = 'status'") == '"complete"',
+        "the cloud book's status, received")
+    conn:close()
 end
 
 -- Which files sharing a UUID are one book ---------------------------------------------------

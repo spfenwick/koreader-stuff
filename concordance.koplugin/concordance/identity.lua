@@ -105,6 +105,49 @@ function Identity.bookState(uuids)
     return out
 end
 
+--- Sets the status, rating or other properties of a catalog book from a
+-- device that has no file of it (a cloud book in Athenæum). uuid: the
+-- catalog's ID for the book. values: { status = "complete", rating = 4 or
+-- false (clear), note = …, ["coll.<id>"] = true or false } (properties
+-- about the book: BookFormat.isGroupProp; not the history; the status can't
+-- be cleared). info: { title, authors (a string, or a list) }.
+-- Recorded under the book's key (BookFormat.uuidKey) with an identity link
+-- naming the UUID, so the book's files join it on every device; sent with
+-- the next sync. Returns the number of properties changed, or nil and an
+-- error.
+function Identity.setBookState(uuid, values, info)
+    if not deps then return nil, "Concordance isn't set up" end
+    local IdFormat = require("concordance/idformat")
+    local BookFormat = require("concordance/bookformat")
+    uuid = IdFormat.normalizeUuid(uuid)
+    if not uuid then return nil, "not a UUID" end
+    if type(values) ~= "table" then return nil, "no values" end
+    info = type(info) == "table" and info or {}
+    local title = type(info.title) == "string" and info.title ~= "" and info.title or nil
+    local authors = info.authors
+    if type(authors) == "table" then authors = #authors > 0 and table.concat(authors, "\n") or nil end
+    if type(authors) ~= "string" or authors == "" then authors = nil end
+    local key = BookFormat.uuidKey(uuid)
+    local ok, res = pcall(function()
+        local device = deps.device_id()
+        -- Linked first, and the groups refreshed when that's new, so the
+        -- change is judged against what was shown: every version's records.
+        if deps.id_store():link({ { md5 = key, uuids = { uuid }, title = title, authors = authors } }, device) > 0 then
+            deps.refresh()
+        end
+        -- The book's files here are written once closed (see setBook).
+        return deps.book_store():setBook(key, values, {
+            now = (deps.now or os.time)(), device = device, title = title, authors = authors,
+        })
+    end)
+    if not ok then
+        warn("setting a book's state failed:", res)
+        return nil, tostring(res)
+    end
+    if res.changed > 0 then Identity.changed() end
+    return res.changed
+end
+
 --- Records matches made outside the file: list = { { path, md5 (the
 -- file's partial MD5), uuids, title, authors }, … }. Returns the number of
 -- new facts (sent with the next sync; groups are updated at its end).

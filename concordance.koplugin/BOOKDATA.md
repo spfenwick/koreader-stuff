@@ -33,6 +33,9 @@ other streams):
 | `coll.<id>` | `settings/collection.lua` | `true`: the book is in collection `<id>` |
 | `hist` | `history.lua` | when the book was last opened (epoch seconds) |
 
+A catalog book with no file on this device (a cloud book) is recorded under
+`uuid:<its catalog UUID>` instead: see IDENTITY.md, "Cloud books".
+
 Collections themselves are on a record that isn't a book, MD5
 `collections`: `coll.<id>` → `{ "name": … }`. See
 [Collections and favorites](#collections-and-favorites).

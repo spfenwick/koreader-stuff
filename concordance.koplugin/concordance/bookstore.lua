@@ -419,6 +419,49 @@ function BookStore:_observeIn(conn, opts)
     return res
 end
 
+--- Sets properties of a book that has no file here (a catalog book, under
+-- its key, BookFormat.uuidKey) as this device's changes. values: { [prop]
+-- = value, or false to clear }, properties about the book only
+-- (BookFormat.isGroupProp; not the history, and the status can't be
+-- cleared). opts: now, device, title, authors. A value that's already what
+-- applies to the book (its versions' records too) changes nothing; a change
+-- is later than the record it replaces, whatever the clocks say, as it was
+-- made from what was shown. Returns { changed, skipped }.
+function BookStore:setBook(md5, values, opts)
+    local snap, skipped = self:snapshot(values)
+    return self:_tx(function(conn)
+        ensureBook(conn, md5, opts)
+        if opts.title or opts.authors then
+            local up = conn:prepare(
+                "UPDATE book_books SET title = coalesce(?, title), authors = coalesce(?, authors) WHERE md5 = ?;")
+            up:bind(opts.title, opts.authors, md5):step()
+            up:close()
+        end
+        local merged, eff = loadMerged(conn, md5), loadEffective(conn, md5)
+        local res = { changed = 0, skipped = skipped }
+        for prop, s in pairs(snap) do
+            local m = eff[prop]
+            if not BookFormat.isGroupProp(prop) or prop == BookFormat.HISTORY
+                    or (prop == "status" and s.hash == "") then
+                res.skipped = res.skipped + 1
+            elseif not (s.hash == "" and (not m or m.deleted)) and not (m and not m.deleted and m.hash == s.hash) then
+                local upd = math.max(opts.now, m and m.updated + 1 or 0)
+                local rec = s.hash == "" and { updated = upd, device = opts.device, deleted = true, hash = "" }
+                    or { updated = upd, device = opts.device, deleted = false, hash = s.hash, value = s.json }
+                if BookStore.wins(rec, merged[prop]) then
+                    putMerged(conn, md5, prop, rec)
+                    putOutbox(conn, md5, prop, rec.updated)
+                    merged[prop] = rec
+                    res.changed = res.changed + 1
+                end
+            end
+        end
+        -- This device's files of the book get the change once closed.
+        if res.changed > 0 then updateWriteGroups(conn, { [md5] = true }) end
+        return res
+    end)
+end
+
 -- Applying the merged state ----------------------------------------------------------
 
 --- What to change in a book to match the merged state: the properties in

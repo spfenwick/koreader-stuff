@@ -73,6 +73,24 @@ BookFormat.HISTORY = "hist"
 --- The record holding the collections (not a book; not hex, so no MD5 clashes).
 BookFormat.COLLECTIONS = "collections"
 
+--- A catalog book this device has no file for (a cloud book, from Athenæum)
+-- is recorded under its catalog ID: "uuid:" and the UUID, lowercase. Not
+-- hex, so no MD5 clashes; older versions keep it as one more book. An
+-- identity link names the UUID, so every device joins it to the book's
+-- files like any version of the book (see IDENTITY.md, "Cloud books").
+BookFormat.UUID_PREFIX = "uuid:"
+
+--- The key for the catalog book with this UUID (normalized, lowercase).
+function BookFormat.uuidKey(uuid)
+    return BookFormat.UUID_PREFIX .. uuid
+end
+
+--- The UUID of a catalog book's key, or nil for other keys.
+function BookFormat.keyUuid(md5)
+    return type(md5) == "string" and md5:sub(1, #BookFormat.UUID_PREFIX) == BookFormat.UUID_PREFIX
+        and md5:sub(#BookFormat.UUID_PREFIX + 1) or nil
+end
+
 --- KOReader's own collection, which can't be renamed or removed.
 BookFormat.FAVORITES = "favorites"
 
