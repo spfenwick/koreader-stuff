@@ -1084,7 +1084,49 @@ end
 
 --- Buttons for a cloud book's details sheet, one action per row as in
 -- ZenOS's book menu (tapping outside closes it). close() closes the sheet.
-function Library.detailsButtons(id, full, close)
+local STATUS_ORDER = { "reading", "abandoned", "complete" }
+
+-- With Concordance: rows to set the book's status and rating from here,
+-- where it has no file (Concordance's Identity.setBookState). Tapping the
+-- rating shown clears it. reopen() shows the details again, with the new
+-- state. Nil without Concordance.
+local function stateRows(id, full, reopen)
+    local Identity = Library.identity()
+    if not (Identity and type(Identity.setBookState) == "function") then return nil end
+    local st = Library.bookState(id) or {}
+    local info = { title = full and full.title, authors = full and full.authors }
+    local function set(values)
+        local ok, n, err = pcall(Identity.setBookState, id, values, info)
+        if not ok or n == nil then
+            logger.warn("Athenaeum: setting the book's status in Concordance:", ok and err or n)
+            notify(_("Couldn't save the book's status."))
+        end
+        if reopen then reopen() end
+    end
+    local status_row = {}
+    for _i, status in ipairs(STATUS_ORDER) do
+        local current = st.status == status
+        status_row[#status_row + 1] = {
+            text = STATUS_TEXT[status] .. (current and "  ✓" or ""),
+            enabled = not current,
+            callback = function() set({ status = status }) end,
+        }
+    end
+    local rating = tonumber(st.rating)
+    rating = rating and rating >= 1 and rating <= 5 and math.floor(rating) or nil
+    local stars_row = {}
+    for n = 1, 5 do
+        stars_row[n] = {
+            text = rating and n <= rating and "★" or "☆",
+            callback = function() set({ rating = rating ~= n and n or false }) end,
+        }
+    end
+    return { status_row, stars_row }
+end
+
+--- The details sheet's buttons. reopen(): shows the sheet again (after a
+-- change it shows).
+function Library.detailsButtons(id, full, close, reopen)
     local Details = require("athenaeum/details")
     local choices = Downloads.choices(full and full.formats)
     local busy = Downloads.isQueued(id)
@@ -1122,6 +1164,7 @@ function Library.detailsButtons(id, full, close)
             end,
         }})
     end
+    for _i, row in ipairs(stateRows(id, full, reopen) or {}) do table.insert(rows, row) end
     return rows
 end
 Virtual.detailsButtons = function(...)

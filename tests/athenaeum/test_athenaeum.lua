@@ -2081,6 +2081,50 @@ do
     Library.restoreMatched({ ["/lib/a.epub"] = A_ID }) -- the file isn't really there
     eq(ZenSource.state("/lib/a.epub"), nil, "not restored without its file")
     Library.on_device["/lib/a copy.epub"], Library.copies = nil, nil
+    -- A cloud book's status and rating, set from its details (Concordance).
+    local full = { title = "By UUID", authors = { "Ann" } }
+    local reopened = 0
+    local function reopen() reopened = reopened + 1 end
+    local plain = #Library.detailsButtons(A_ID, full, function() end, reopen)
+    local sets = {}
+    package.loaded["concordance/identity"].setBookState = function(id, values, info)
+        sets[#sets + 1] = { id = id, values = values, info = info }
+        return 1
+    end
+    states[A_ID] = { status = "reading", rating = 3 }
+    local rows = Library.detailsButtons(A_ID, full, function() end, reopen)
+    eq(#rows, plain + 2, "with Concordance: a status row and a rating row")
+    local status_row, stars = rows[#rows - 1], rows[#rows]
+    eq(status_row[1].text .. "|" .. status_row[2].text .. "|" .. status_row[3].text, "Reading  ✓|On hold|Finished",
+        "status buttons, the current one ticked")
+    check(status_row[1].enabled == false and status_row[3].enabled ~= false, "the current status can't be chosen again")
+    eq(stars[1].text .. stars[3].text .. stars[4].text, "★★☆", "the rating as stars")
+    status_row[3].callback()
+    eq(sets[1].id .. " " .. sets[1].values.status .. " " .. sets[1].info.title .. " " .. sets[1].info.authors[1],
+        A_ID .. " complete By UUID Ann", "finished: set in Concordance, with the book's title and authors")
+    eq(reopened, 1, "the details shown again")
+    stars[5].callback()
+    eq(sets[2].values.rating, 5, "five stars")
+    stars[3].callback()
+    eq(sets[3].values.rating, false, "the rating shown again: cleared")
+    states[A_ID] = nil
+    rows = Library.detailsButtons(A_ID, full, function() end, reopen)
+    check(rows[#rows - 1][1].enabled ~= false and rows[#rows][1].text == "☆",
+        "nothing known: no status ticked, no stars")
+    local notified = {}
+    local real_notification = package.loaded["ui/widget/notification"]
+    package.loaded["ui/widget/notification"] = {
+        SOURCE_ALWAYS_SHOW = 1, notify = function(_self, text) notified[#notified + 1] = text end,
+    }
+    package.loaded["concordance/identity"].setBookState = function() return nil, "disk full" end
+    rows[#rows - 1][2].callback()
+    eq(notified[1], "Couldn't save the book's status.", "a failure is reported")
+    package.loaded["concordance/identity"].setBookState = function() error("Concordance bug") end
+    rows[#rows - 1][2].callback()
+    eq(#notified, 2, "an error too")
+    eq(reopened, 5, "the details shown again each time")
+    package.loaded["ui/widget/notification"] = real_notification
+    package.loaded["concordance/identity"].setBookState = nil
     package.loaded["concordance/identity"].bookState = function() error("boom") end
     eq(Virtual.stateText(A_ID), nil, "a Concordance error leaves the line out")
     eq(ZenSource.state("/lib/cloud-a.epub"), nil, "a Concordance error leaves the status out")
