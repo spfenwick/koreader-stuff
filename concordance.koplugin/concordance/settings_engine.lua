@@ -57,9 +57,8 @@ local OWN_SYNCED = { ["settings/concordance/settings.lua"] = true, [Engine.LIST]
 -- Not even looked through.
 local SKIPPED_DIRS = { ["cache"] = true, ["settings/concordance/settings-sync"] = true }
 --- Plugins that update themselves from GitHub: a sync would fight the
--- updater over their folders. (omnisync.koplugin: Concordance's old name,
--- left in plugins/ until it's deleted.)
-Engine.SELF_UPDATING = { "concordance.koplugin", "knuthplass.koplugin", "omnisync.koplugin" }
+-- updater over their folders.
+Engine.SELF_UPDATING = { "concordance.koplugin", "knuthplass.koplugin" }
 
 --- KOReader's main settings: read when it starts, before any plugin, and
 -- written back from memory when it exits. A pulled copy can't be put in

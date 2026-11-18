@@ -1401,7 +1401,7 @@ do
     reset()
 end
 
--- Settings: their own file, moved from settings.reader.lua ----------------------------
+-- Settings: their own file ----------------------------------------------------------
 
 do
     local Settings = require("athenaeum/settings")
@@ -1410,29 +1410,14 @@ do
     os.remove(Settings.path())
     os.remove(Settings.sharedPath())
     Settings.reset()
-    G_reader_settings:saveSetting("athenaeum", { folder = "/books", badge_local = true, show = false })
-    G_reader_settings:saveSetting("athenaeum_updates", { mode = "install", last_check = 123 })
-    eq(Library.settings().folder, "/books", "plugin settings moved")
-    eq(Library.settings().show, false, "false values moved")
-    eq(Updater.getMode(), "install", "updater mode moved")
-    eq(Updater.getSettings().last_check, 123, "updater state moved")
-    eq(G_reader_settings:readSetting("athenaeum"), nil, "removed from settings.reader.lua")
-    eq(G_reader_settings:readSetting("athenaeum_updates"), nil, "updater key removed too")
-    check(lfs.attributes(Settings.path(), "mode") == "file", "settings file written: " .. Settings.path())
-
+    Library.save("folder", "/books")
     Library.save("search", false)
     Updater.setMode("off")
+    check(lfs.attributes(Settings.path(), "mode") == "file", "settings file written: " .. Settings.path())
     Settings.reset()
     eq(Library.settings().search, false, "saved setting read back from the file")
-    eq(Library.settings().folder, "/books", "moved setting kept in the file")
+    eq(Library.settings().folder, "/books", "folder read back from the file")
     eq(Updater.getMode(), "off", "updater mode read back from the file")
-
-    -- A copy written by an older version again: moved over the file's.
-    G_reader_settings:saveSetting("athenaeum", { folder = "/other" })
-    Settings.reset()
-    eq(Library.settings().folder, "/other", "older copy moved again")
-    eq(Library.settings().search, false, "other keys kept")
-    eq(G_reader_settings:readSetting("athenaeum"), nil, "older copy removed")
 
     os.remove(Settings.path())
     os.remove(Settings.sharedPath())

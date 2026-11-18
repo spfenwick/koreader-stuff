@@ -6,16 +6,9 @@ ZenOS only (it needs ZenOS's book sources).
 Tools → Athenaeum: choose the catalog (one of the OPDS plugin's
 catalogs), the folder, and sync.
 
-Formerly Cloud library (cloudlibrary.koplugin): athenaeum/migrate.lua moves
-an installation from the old name, first, before anything else loads.
-
 For tests: settings/athenaeum/fixture.lua, if present, replaces the
 catalog with a fixed list of books and no syncing.
 ]]
-
-local Migrate = require("athenaeum/migrate")
--- Another copy is in athenaeum.koplugin: KOReader skips this one.
-if not Migrate.atLoad() then return { disabled = true } end
 
 local DataStorage = require("datastorage")
 local Dispatcher = require("dispatcher")
@@ -53,7 +46,6 @@ function Athenaeum:onDispatcherRegisterActions()
 end
 
 function Athenaeum:init()
-    Migrate.fixLoadedPlugin(Athenaeum)
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
     local first = not Virtual.installed
@@ -111,8 +103,5 @@ function Athenaeum:onAthenaeumSync()
     require("athenaeum/guard").call("jobs", Library.sync, "quick")
     return true
 end
-
--- After moving out of cloudlibrary.koplugin: KOReader can't find _meta.lua.
-Migrate.addMeta(Athenaeum)
 
 return Athenaeum

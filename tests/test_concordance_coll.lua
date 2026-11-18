@@ -282,18 +282,4 @@ do
     check(c.rc:has("favorites", v2), "the other version goes into the collection too")
 end
 
--- A collection's ID under OmniSync's key: kept, under Concordance's.
-do
-    local st
-    for name, cs in pairs(a.rc.coll_settings) do
-        if name ~= "favorites" and a.rc.coll[name] and cs.concordance_id then st = cs end
-    end
-    local id = st and st.concordance_id
-    check(id ~= nil, "a collection with an ID")
-    if not st then st = {} end
-    st.omnisync_id, st.concordance_id = id, nil
-    a:before()
-    check(st.concordance_id == id and st.omnisync_id == nil, "OmniSync's collection ID kept as Concordance's")
-end
-
 S.finish("concordance collection tests")

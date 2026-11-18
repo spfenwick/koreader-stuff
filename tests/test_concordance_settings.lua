@@ -772,56 +772,20 @@ do
         "no manifest: nothing deleted here, files uploaded\n" .. r.log)
 end
 
--- Taking over OmniSync's files ---------------------------------------------------
-local Migrate = require("concordance/migrate")
-do
-    check(Migrate.convertList("# /settings/omnisync/x\n/settings/gestures.lua\n/settings/omnisync/settings.lua\n"
-        .. "< /plugins/omnisync.koplugin/**\n") == "# /settings/omnisync/x\n/settings/gestures.lua\n"
-        .. "/settings/concordance/settings.lua\n< /plugins/concordance.koplugin/**\n", "list lines renamed, comments kept")
-
-    -- Pulled settings waiting, by OmniSync's paths: put in place first.
-    local O = device("Old")
-    local old = O.kodir .. "/settings/omnisync"
-    write(old .. "/sync.txt", "/settings/gestures.lua\n")
-    write(old .. "/settings-sync/pending.tsv", "copy\tsettings/gestures.lua\ncopy\tsettings/omnisync/settings.lua\n")
-    write(old .. "/settings-sync/staging/settings/gestures.lua",
-        'return { ["tap"] = { omnisync_sync = true, settings = { order = { "omnisync_sync" } } } }\n')
-    write(old .. "/settings-sync/staging/settings/omnisync/settings.lua", "return { pulled = true }\n")
-    local LuaSettings = { open = function(_, path)
-        return { data = dofile(path), flush = function(self)
-            write(path, "return { [\"tap\"] = { concordance_sync = " .. tostring(self.data.tap.concordance_sync)
-                .. ", settings = { order = { \"" .. self.data.tap.settings.order[1] .. "\" } } } }\n")
-        end }
-    end }
-    local done = Migrate.run{ kodir = O.kodir, settings_dir = O.kodir .. "/settings", LuaSettings = LuaSettings }
-    check(done.omnisync and not exists(old) and read(O.kodir .. "/settings/concordance/settings.lua") == "return { pulled = true }\n"
-        and not Engine.isPending(O.paths), "pulled settings put in place first, then moved")
-    local tap = dofile(O.kodir .. "/settings/gestures.lua").tap
-    check(tap.concordance_sync and tap.omnisync_sync == nil and tap.settings.order[1] == "concordance_sync",
-        "pulled gestures for OmniSync's syncs renamed")
-    check(#Migrate.run{ kodir = O.kodir, settings_dir = O.kodir .. "/settings", LuaSettings = LuaSettings } == 0, "only once")
-end
-
 -- The plugin ----------------------------------------------------------------------
 
--- A device that used OmniSync: Concordance takes over its data.
+-- A device with Concordance's own files.
 local P = device("P")
-local old_state = P.kodir .. "/settings/omnisync"
-write(old_state .. "/sync.txt", "/settings/gestures.lua\n/settings/omnisync/settings.lua\n")
-write(old_state .. "/settings-sync/state.tsv", "sync\tsettings/gestures.lua\tg1\nsync\tsettings/omnisync/sync.txt\tl1\n"
-    .. "sync\tsettings/omnisync/settings.lua\ts1\n")
-write(old_state .. "/device.lua", 'return { device_id = "abcdef0123456789", status = { last_success = 7 } }\n')
-write(old_state .. "/settings.lua", 'return { allow_wifi = true }\n')
-write(old_state .. "/state.sqlite3", "db")
-write(old_state .. "/state.sqlite3-wal", "wal")
-write(P.kodir .. "/cache/omnisync/settings-cache.tsv", "/some/file\t1\t2\th\n")
-write(P.kodir .. "/settings/profiles.lua",
-    'return { ["Night"] = { omnisync_statistics = true, settings = { order = { "omnisync_statistics" } } } }\n')
+local own_state = P.kodir .. "/settings/concordance"
+write(P.paths.list, "/settings/gestures.lua\n")
+write(P.paths.state .. "/state.tsv", "sync\tsettings/gestures.lua\tg1\n")
+write(own_state .. "/device.lua", 'return { device_id = "abcdef0123456789", status = { last_success = 7 } }\n')
+write(own_state .. "/settings.lua", 'return { allow_wifi = true }\n')
 write(P.kodir .. "/settings/gestures.lua", "return { p = 1 }\n")
 touch(P.kodir .. "/settings/gestures.lua", os.time() - 7200) -- the server's is newer
 
 local shown, notified, restarts, flushed, broadcast = {}, {}, {}, 0, {}
-local saved = { omnisync_updates = { mode = "install", last_check = 5 } }
+local saved = {}
 _G.G_reader_settings = {
     readSetting = function(_, key) return saved[key] end,
     saveSetting = function(_, key, value) saved[key] = value end,
@@ -906,58 +870,22 @@ stub("ffi/util", {
 -- out of this test's (tests/test_concordance_problems.lua covers them).
 require("concordance/problems").enable = function() end
 
--- A copy of the plugin, next to OmniSync (still on).
+-- A copy of the plugin.
 local plugin_copy = base .. "/plugins/concordance.koplugin"
 os.execute("mkdir -p " .. q(plugin_copy) .. " && cp -r concordance.koplugin/. " .. q(plugin_copy))
-write(base .. "/plugins/omnisync.koplugin/main.lua", "-- old\n")
 
 local function loadPlugin()
     local Plugin = dofile(plugin_copy .. "/main.lua")
     return Plugin:new{ ui = { menu = { registerToMainMenu = function() end } } }
 end
 
--- First start: OmniSync is running too, so it's only turned off.
 local plugin = loadPlugin()
-local sdir = P.kodir .. "/settings"
-check(saved.plugins_disabled and saved.plugins_disabled.omnisync and flushed == 1, "OmniSync turned off, saved")
-check(restarts[1] and restarts[1]:find("OmniSync's new name"), "asked to restart: " .. tostring(restarts[1]))
-check(exists(old_state .. "/device.lua") and not exists(sdir .. "/concordance/device.lua")
-    and saved.concordance_updates == nil, "nothing moved while OmniSync runs")
-check(plugin.addToMainMenu == nil and plugin.trigger == nil, "Concordance does nothing until the restart")
-restarts, flushed = {}, 0
-
--- Second start: OmniSync is off, its data moves.
-plugin = loadPlugin()
 local Settings = require("concordance/plugin")
-local p_list = read(P.paths.list) or ""
-check(not exists(old_state) and p_list == "/settings/gestures.lua\n/settings/concordance/settings.lua\n",
-    "migrated: the list, its line for OmniSync's settings renamed\n" .. p_list)
-check(read(P.paths.state .. "/state.tsv") == "sync\tsettings/gestures.lua\tg1\n",
-    "settings sync's state kept, but not for OmniSync's own files (sent again by their new paths)")
 check(Settings.deviceState().device_id == "abcdef0123456789" and Settings.deviceState().status.last_success == 7,
-    "migrated: device ID and status")
-check(Settings.settings().allow_wifi == true, "migrated: settings")
-check(read(sdir .. "/concordance/state.sqlite3") == "db" and read(sdir .. "/concordance/state.sqlite3-wal") == "wal",
-    "migrated: database, with its side files")
-check(read(P.paths.cache) == "/some/file\t1\t2\th\n" and not exists(P.kodir .. "/cache/omnisync"), "migrated: cache")
-local night = dofile(sdir .. "/profiles.lua").Night
-check(night.concordance_statistics and night.omnisync_statistics == nil and night.settings.order[1] == "concordance_statistics",
-    "migrated: gestures for OmniSync's syncs")
-check(read(sdir .. "/gestures.lua") == "return { p = 1 }\n", "gestures without OmniSync's left alone")
+    "device ID and status read")
+check(Settings.settings().allow_wifi == true, "settings read")
 check(Settings.autoStats() and Settings.autoAnnotations(), "automatic syncs on by default")
-check(saved.concordance_updates and saved.concordance_updates.mode == "install" and not saved.concordance_updates.last_check,
-    "migrated: update mode")
-check(#restarts == 0 and notified[1] and notified[1]:find("took over OmniSync's", 1, true),
-    "migration reported: " .. tostring(notified[1]))
--- Only once.
-write(old_state .. "/sync.txt", "/other.lua\n")
-loadPlugin()
-check(read(P.paths.list) == p_list and exists(old_state), "a second start migrates nothing again")
-os.execute("rm -rf " .. q(old_state))
-write(P.paths.list, "/settings/gestures.lua\n")
-notified = {}
-plugin = loadPlugin()
-check(#notified == 0, "nothing more to report")
+check(#restarts == 0 and #notified == 0 and flushed == 0, "nothing to report at start")
 
 local menu_items = {}
 plugin:addToMainMenu(menu_items)

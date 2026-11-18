@@ -169,19 +169,6 @@ Settings.save("folder", "/here")
 eq(Settings.all().folder, "/here", "folder only read from this device's file")
 eq(Settings.all().search, false, "shared key read")
 
--- Moving from Cloud library (settings.reader.lua) ----------------------------------
-
-clean()
-G_reader_settings:saveSetting("cloudlibrary", { folder = "/books", badge_local = true })
-G_reader_settings:saveSetting("cloudlibrary_updates", { mode = "notify" })
-all = Settings.all()
-eq(all.folder, "/books", "Cloud library: folder moved")
-eq(all.badge_local, true, "Cloud library: badge moved")
-eq(file(Settings.path()).badge_local, nil, "Cloud library: badge not left in this device's file")
-eq(file(Settings.sharedPath()).badge_local, true, "Cloud library: badge in the shared file")
-eq(file(Settings.path()).updates.mode, "notify", "Cloud library: updater state moved")
-eq(G_reader_settings:readSetting("cloudlibrary"), nil, "Cloud library: removed from settings.reader.lua")
-
 clean()
 lfs.rmdir(root .. "/athenaeum")
 lfs.rmdir(root)

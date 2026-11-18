@@ -6,9 +6,8 @@ shared/updatecore.lua; see RELEASING.md).
 With Concordance running, updates for both plugins are checked together
 there (concordance/updates.lua): "Check for updates" runs that combined
 check, and the automatic check is left to Concordance's. Only with a
-Concordance that knows this plugin as Athenaeum (handles("athenaeum")): an
-older one looks for Cloud library's updater, doesn't find it, and would
-never check this plugin.
+Concordance that checks this plugin (handles("athenaeum")): an older one
+would never check it.
 --]]
 
 local _ = require("gettext")

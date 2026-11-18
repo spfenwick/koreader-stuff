@@ -48,19 +48,6 @@ device folder>` decompresses them and prints each record with its short
 tags spelled out (`"t":"e"` as `"type":"event"`, `dur` as `duration`, …);
 `--pretty` puts a field on each line, `--dates` shows times as dates.
 
-### Moving from Statistics/
-
-Until OmniSync 0.5.0 this folder was `<folder on server>/Statistics/`. Before
-updating any device to OmniSync 0.5.0, rename it on the server to `Reading/`, and
-to keep devices still on older versions working, make `Statistics` a
-link to it (on the server's disk, e.g. `ln -s Reading Statistics`, if your
-WebDAV server follows links). A device that synced with `Statistics/`
-takes `Reading/` on the same server to be the same folder, so nothing is
-sent again. If a device updates before the folder is renamed, it finds its
-own files missing and stops before writing anything (on "Sync now" it
-asks whether to send everything: don't). Once the folder is renamed, its
-next sync carries on, with nothing sent again.
-
 **Packs:** most syncs upload a small file, so once a day each device packs
 its own small files into one, once it has at least 100 of a kind: up to
 500 in a pack. The pack is an ordinary file, the device's next one, and

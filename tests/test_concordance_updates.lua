@@ -203,10 +203,9 @@ do
     check(table.concat(fetches, ",") == "athenaeum", "without Concordance: its own check")
     Updates.entries = entries
 
-    -- A Concordance from before the rename knows only Cloud library: it
-    -- wouldn't check Athenaeum, so Athenaeum checks for itself.
-    check(Updates.handles("athenaeum") and Updates.handles("cloudlibrary") and not Updates.handles("zenos"),
-        "Concordance checks Athenaeum, and Cloud library as it was")
+    -- A Concordance without handles() wouldn't check Athenaeum, so
+    -- Athenaeum checks for itself.
+    check(Updates.handles("athenaeum") and not Updates.handles("zenos"), "Concordance checks Athenaeum")
     reset()
     local handles = Updates.handles
     Updates.handles = nil

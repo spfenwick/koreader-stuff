@@ -39,20 +39,16 @@ local Plugin = {}
 --                   allow_wifi, time_limit
 --   device.lua      this device's own: device_id, status, ann_scanned
 --   state.sqlite3   what was sent and received, merged annotations and book data
---
--- concordance/migrate.lua moves OmniSync's files here on first start.
 Plugin.DIR = "concordance"
 Plugin.SHARED_FILE = Plugin.DIR .. "/settings.lua"
 Plugin.DEVICE_FILE = Plugin.DIR .. "/device.lua"
 Plugin.STATE_FILE = Plugin.DIR .. "/state.sqlite3"
 
 --- Folder on the server when none is set. Settings sync uses its Files/
--- subfolder; statistics, highlights and book data its Reading/ subfolder
--- (Statistics/ until 0.5.0: see STATISTICS.md, "Moving from Statistics/").
+-- subfolder; statistics, highlights and book data its Reading/ subfolder.
 Plugin.DEFAULT_ROOT = "/KOReader"
 Plugin.SETTINGS_DIR = "Files"
 Plugin.STATS_DIR = "Reading"
-Plugin.OLD_STATS_DIR = "Statistics"
 
 --- Makes settings/concordance/ if it isn't there; returns the settings folder.
 function Plugin.ensureDir()
@@ -77,7 +73,7 @@ local function openFiles()
     return files
 end
 
---- Forgets the open settings files (after migrate.lua wrote them, and in tests).
+--- Forgets the open settings files (in tests).
 function Plugin.reload()
     files = nil
 end
@@ -187,16 +183,6 @@ function Plugin.pluginVersions(plugins_dir)
     disabled = type(disabled) == "table" and disabled or {}
     if not disabled.athenaeum then
         out.athenaeum = metaVersion(dir .. "/athenaeum.koplugin/_meta.lua")
-    end
-    -- Before it was renamed, as Cloud library. Only this plugin's
-    -- cloudlibrary.koplugin has cloudlibrary/updatecore.lua: another plugin
-    -- uses that folder name too.
-    if not out.athenaeum and not disabled.cloudlibrary then
-        local f = io.open(dir .. "/cloudlibrary.koplugin/cloudlibrary/updatecore.lua", "rb")
-        if f then
-            f:close()
-            out.athenaeum = metaVersion(dir .. "/cloudlibrary.koplugin/_meta.lua")
-        end
     end
     for _, z in ipairs(ZENOS_DIRS) do
         local v = not disabled[z[2]] and metaVersion(dir .. "/" .. z[1] .. "/_meta.lua")
@@ -479,12 +465,9 @@ end
 
 local hist_sync
 
---- Athenaeum's library module, when it's running. Before it was renamed
--- it was Cloud library (cloudlibrary/library): a device may still have that
--- until it updates. (Only this plugin has a module of that name: the other
--- cloudlibrary.koplugin's modules aren't in a cloudlibrary folder.)
+--- Athenaeum's library module, when it's running.
 local function athenaeumLibrary()
-    local lib = package.loaded["athenaeum/library"] or package.loaded["cloudlibrary/library"]
+    local lib = package.loaded["athenaeum/library"]
     return type(lib) == "table" and lib or nil
 end
 Plugin.athenaeumLibrary = athenaeumLibrary
@@ -747,10 +730,6 @@ function Plugin.engine()
             if problem then return false, problem end
             -- Another server or folder: send and import everything there.
             local location = Plugin.serverLocation()
-            -- Statistics/ renamed Reading/ (0.5.0): the same place, not a new one.
-            local mok, merr = pcall(store.moveLocation, store,
-                Plugin.serverLocation(nil, Plugin.OLD_STATS_DIR), location)
-            if not mok then return false, "state database: " .. tostring(merr) end
             local lok, changed = pcall(store.useLocation, store, location)
             if not lok then return false, "state database: " .. tostring(changed) end
             if changed then

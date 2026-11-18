@@ -11,8 +11,7 @@ its stream (see bookformat.lua and BOOKDATA.md):
 
 KOReader keys collections by name, so the ID is kept in the collection's
 settings in collection.lua (`concordance_id`), which KOReader carries over
-when a collection is renamed. (OmniSync called it `omnisync_id`: read
-when there's no `concordance_id`, and replaced by it.) A collection without one gets an ID from its
+when a collection is renamed. A collection without one gets an ID from its
 name ("favorites" for Favorites), so collections of the same name made on
 two devices before they synced are one; if that ID is already a
 collection of another name, it gets a random one.
@@ -112,8 +111,7 @@ function CollSync:_ids(rc, merged)
             st = { order = 1 }
             rc.coll_settings[name] = st
         end
-        local id = name == FAV and FAV or st.concordance_id or st.omnisync_id
-        if st.omnisync_id ~= nil then st.omnisync_id = nil; dirty = true end
+        local id = name == FAV and FAV or st.concordance_id
         if type(id) ~= "string" or not BookFormat.collId(propOf(id)) or ids[id] then
             todo[#todo + 1] = name -- none yet, or a copy of another's
         else

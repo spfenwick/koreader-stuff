@@ -13,17 +13,9 @@ catalog databases and covers), not in KOReader's settings.reader.lua:
   between devices), and "updates", the updater's state (updater.lua),
   which changes at each check.
 
-(Cloud library's settings/cloudlibrary is renamed settings/athenaeum by
-migrate.lua.)
-
 Up to 0.8.1 everything was in settings.lua. The shared keys found there are
 moved to shared.lua when it doesn't have them yet (so a shared.lua pulled
 from another device wins), and removed from settings.lua.
-
-Earlier versions (as Cloud library) kept them in settings.reader.lua,
-under "cloudlibrary" and "cloudlibrary_updates". Those are moved here when
-found (each time, so a copy written by an older version of the plugin isn't
-lost) and removed from settings.reader.lua.
 ]]
 
 local DataStorage = require("datastorage")
@@ -33,8 +25,6 @@ local util = require("util")
 
 local Settings = {}
 
-local OLD_PLUGIN_KEY = "cloudlibrary"
-local OLD_UPDATES_KEY = "cloudlibrary_updates"
 Settings.UPDATES_KEY = "updates"
 
 --- The keys kept in shared.lua. Everything else is this device's own.
@@ -58,28 +48,8 @@ function Settings.sharedPath()
     return dir() .. "/shared.lua"
 end
 
-local function migrate(s)
-    local moved = false
-    local old = G_reader_settings:readSetting(OLD_PLUGIN_KEY)
-    if type(old) == "table" then
-        for k, v in pairs(old) do s.data[k] = v end
-        moved = true
-    end
-    local old_updates = G_reader_settings:readSetting(OLD_UPDATES_KEY)
-    if type(old_updates) == "table" then
-        s.data[Settings.UPDATES_KEY] = old_updates
-        moved = true
-    end
-    if moved then
-        s:flush()
-        G_reader_settings:delSetting(OLD_PLUGIN_KEY)
-        G_reader_settings:delSetting(OLD_UPDATES_KEY)
-        logger.info("Athenaeum: settings moved to", Settings.path())
-    end
-end
-
--- Shared keys in settings.lua (from 0.8.1 or earlier, or just moved from
--- settings.reader.lua) go to shared.lua, unless it already has them.
+-- Shared keys in settings.lua (from 0.8.1 or earlier) go to shared.lua,
+-- unless it already has them.
 local function split(s, sh)
     local found = false
     for k in pairs(Settings.SHARED) do
@@ -101,7 +71,6 @@ local function open()
     util.makePath(dir())
     store = LuaSettings:open(Settings.path())
     shared = LuaSettings:open(Settings.sharedPath())
-    migrate(store)
     split(store, shared)
 end
 

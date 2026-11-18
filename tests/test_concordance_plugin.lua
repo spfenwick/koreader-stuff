@@ -1,10 +1,10 @@
 -- Exercises concordance.koplugin's KOReader glue for statistics and
--- highlights (main.lua, concordance/plugin.lua, concordance/migrate.lua) with
+-- highlights (main.lua, concordance/plugin.lua) with
 -- KOReader's UI modules stubbed, but the rest real: KOReader's statistics
 -- plugin as the open book's, forked subprocesses, and a WebDAV server
 -- (rclone). Checks the flush of unsaved page times, the server taken from
 -- Cloud storage by name, separate syncs of statistics and highlights, the
--- automatic sync settings, taking over Statistics sync's data, and the
+-- automatic sync settings, and the
 -- refresh of the open book's totals.
 
 local S = dofile("tests/concordance/support.lua")
@@ -38,9 +38,9 @@ _G.G_reader_settings = {
 
 -- The open book: KOReader's statistics plugin, with page times not yet written.
 local dev = S.newDevice("reader", TMP .. "/settings")
--- OmniSync's shared settings: taken over.
-os.execute("mkdir -p '" .. dev.dir .. "/omnisync'")
-S.writeFile(dev.dir .. "/omnisync/settings.lua", 'return { allow_wifi = false, time_limit = 120 }\n')
+-- Shared settings already saved on this device.
+os.execute("mkdir -p '" .. dev.dir .. "/concordance'")
+S.writeFile(dev.dir .. "/concordance/settings.lua", 'return { allow_wifi = false, time_limit = 120 }\n')
 local book = { md5 = string.rep("c", 32), title = "Open book", authors = "Someone", pages = 200 }
 dev:read(book, { { 1, 1000, 30 } })
 local stats = dev.stats
@@ -205,31 +205,13 @@ check(#entries == 2 and entries[2].updater == cl_updater and entries[2].plugin =
 cl_updater.defers_to_concordance = nil
 check(plugin:updateEntries()[2].own_automatic, "an older Athenaeum keeps its automatic check")
 ui.athenaeum, package.loaded["athenaeum/updater"] = nil, nil
--- Before the rename (Cloud library, until the device updates it), and
--- Athenaeum in the session it moves out of cloudlibrary.koplugin.
-local old_updater = { check = function() end }
-package.loaded["cloudlibrary/updater"] = old_updater
-ui.cloudlibrary = { path = TMP .. "/plugins/cloudlibrary.koplugin", version = "0.7.3" }
-entries = plugin:updateEntries()
-check(#entries == 2 and entries[2].updater == old_updater and entries[2].plugin == ui.cloudlibrary
-    and entries[2].own_automatic, "Cloud library (before the rename) checked with its own updater")
-package.loaded["cloudlibrary/updater"] = nil
-package.loaded["athenaeum/updater"] = cl_updater
-cl_updater.defers_to_concordance = true
-entries = plugin:updateEntries()
-check(#entries == 2 and entries[2].updater == cl_updater and entries[2].plugin == ui.cloudlibrary,
-    "Athenaeum still called cloudlibrary by KOReader (the session it moves)")
-package.loaded["athenaeum/updater"] = nil
-check(#plugin:updateEntries() == 1, "another plugin's cloudlibrary.koplugin: not taken for Athenaeum")
-ui.cloudlibrary = nil
 check(menu.sub_item_table_func()[1].text == "Sync now" and item("Statistics", "Sync now")
     and item("Highlights and books", "Sync now"), "a top-level Sync now and one per kind")
 
 local P = require("concordance/plugin")
 local function fileData(name) return dofile(dev.dir .. "/" .. name) end
 local saved = fileData("concordance/settings.lua")
-check(saved.allow_wifi == false and saved.time_limit == 120 and not io.open(dev.dir .. "/omnisync/settings.lua"),
-    "OmniSync's settings moved")
+check(saved.allow_wifi == false and saved.time_limit == 120, "saved settings read")
 check(item("Folder on server: /KOReader"), "default folder shown in the menu")
 check(P.autoStats() and P.autoAnnotations(), "automatic syncs on by default")
 
@@ -249,7 +231,6 @@ check(P.serverLocation({ address = "https://me:secret@dav.example.com/dav/" })
 
 -- Automatic sync is on: the start-up trigger syncs both, flushing the open book first.
 loop:run(60)
-check(wasShown("took over"), "taking over Statistics sync's data reported")
 local st = P.deviceState().status
 check(st and st.last_success and not st.last_error, "automatic sync at start succeeded: " .. tostring(st and st.last_error))
 check(st and st.uploaded_events == 3, "the unsaved page times were flushed and sent (" .. tostring(st and st.uploaded_events) .. ")")
@@ -381,52 +362,12 @@ check(P.deviceState().status.imported_events == 5, "rebuild re-imported both dev
     .. tostring(P.deviceState().status.imported_events) .. ")")
 check(dev:totalsMatch(), "totals still match after rebuild")
 
--- Taking over OmniSync's data ----------------------------------------------------
--- As if this device had used OmniSync: its database, device ID and settings
--- in its folder. Nothing is sent again to the same folder.
-local function mv(from, to) assert(os.rename(from, to)) end
-mv(dev.dir .. "/concordance", dev.dir .. "/omnisync")
-local root_before = P.settings().root
-P.reload()
-dofile("concordance.koplugin/main.lua") -- KOReader starting
-check(S.readFile(dev.dir .. "/concordance/state.sqlite3") and P.deviceState().device_id == id
-    and P.deviceState().ann_scanned ~= nil and P.settings().root == root_before
-    and not io.open(dev.dir .. "/omnisync/state.sqlite3"), "OmniSync's database, device ID and settings moved")
-item("Statistics", "Sync now").callback()
-loop:run(60)
-st = P.deviceState().status
-check(not st.last_error and st.uploaded_events == 0, "nothing sent again after the move: "
-    .. tostring(st.uploaded_events) .. ", " .. tostring(st.last_error))
-
--- Upgrading from before the Statistics/ folder was renamed Reading/: the
--- user renamed it on the server; the old location is taken as the new one.
-do
-    local conn = S.SQ3.open(dev.dir .. "/concordance/state.sqlite3")
-    local old = P.serverLocation(nil, P.OLD_STATS_DIR)
-    check(old == server.url .. "/KOReader/Statistics/", "the old location: " .. tostring(old))
-    conn:exec("UPDATE meta SET value = '" .. old .. "' WHERE key = 'location';")
-    conn:close()
-    local files_before = count(DAVDIR .. id, "%.zst$")
-    item("Statistics", "Sync now").callback()
-    loop:run(60)
-    item("Highlights and books", "Sync now").callback()
-    loop:run(60)
-    st = P.deviceState().status
-    check(not st.last_error and st.uploaded_events == 0 and st.ann_uploaded == 0,
-        "folder renamed: nothing sent again (" .. tostring(st.uploaded_events) .. ", " .. tostring(st.last_error) .. ")")
-    check(count(DAVDIR .. id, "%.zst$") == files_before, "folder renamed: no new files")
-    conn = S.SQ3.open(dev.dir .. "/concordance/state.sqlite3")
-    local r = conn:exec("SELECT value FROM meta WHERE key = 'location';")
-    conn:close()
-    check(r and r[1][1] == server.url .. "/KOReader/Reading/", "location now the new folder")
-end
-
 -- A database that doesn't know its folder (moved on the server, files and
 -- all): the next folder with this device's files is taken as the same place.
 Store.new{ sq3 = S.SQ3, stats_path = dev.db, state_path = dev.dir .. "/concordance/state.sqlite3" }:forgetLocation()
 local function cp(from, to) os.execute("cp -r " .. S.q(from) .. " " .. S.q(to)) end
 S.mkdirp(server.dir .. "/Moved")
-cp(server.dir .. "/" .. (root_before or "KOReader"):gsub("^/", "") .. "/Reading", server.dir .. "/Moved/Reading")
+cp(server.dir .. "/" .. (P.settings().root or "KOReader"):gsub("^/", "") .. "/Reading", server.dir .. "/Moved/Reading")
 local own_files = count(server.dir .. "/Moved/Reading/devices/" .. id, "%.zst$")
 -- First a folder without this device's files (the copy not made yet, or
 -- the wrong folder): stopped before writing anything, and asked.
@@ -685,19 +626,6 @@ do
     settings_data.plugins_disabled = { athenaeum = true }
     check(P.pluginVersions().athenaeum == nil, "no Athenaeum version when it's turned off")
     settings_data.plugins_disabled = nil
-
-    -- Still in cloudlibrary.koplugin (as Cloud library, before the rename):
-    -- reported as Athenaeum; another plugin's cloudlibrary.koplugin isn't.
-    local dir = TMP .. "/rename-plugins"
-    S.mkdirp(dir .. "/cloudlibrary.koplugin/cloudlibrary")
-    S.writeFile(dir .. "/cloudlibrary.koplugin/_meta.lua", 'return { version = "1.4.6" }\n')
-    check(P.pluginVersions(dir).athenaeum == nil, "another plugin's cloudlibrary.koplugin: no Athenaeum version")
-    S.writeFile(dir .. "/cloudlibrary.koplugin/cloudlibrary/updatecore.lua", "-- updater\n")
-    S.writeFile(dir .. "/cloudlibrary.koplugin/_meta.lua", 'return { version = "0.7.3" }\n')
-    check(P.pluginVersions(dir).athenaeum == "0.7.3", "Cloud library: reported as Athenaeum")
-    S.mkdirp(dir .. "/athenaeum.koplugin")
-    S.writeFile(dir .. "/athenaeum.koplugin/_meta.lua", 'return { version = "0.8.0" }\n')
-    check(P.pluginVersions(dir).athenaeum == "0.8.0", "both folders: athenaeum.koplugin's version")
 
     -- KOReader's version and ZenOS's.
     local old_version = package.loaded["version"]

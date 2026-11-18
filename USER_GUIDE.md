@@ -21,19 +21,6 @@ Concordance also has an optional web app, Concordance web, for browsing your boo
 
 Every book in your catalog appears in your library folder, whether it's on the device or not. Books not yet downloaded are "cloud books": they look and sort like real books, with covers, and download when you want them.
 
-Athenæum was called Cloud library before version 0.8.0. Its old folder name, `cloudlibrary.koplugin`, is also used by another plugin, which made the two clash in package managers such as ZenPM.
-
-### Moving from Cloud library
-
-Cloud library updates itself to Athenæum like any other update (Check for updates, or automatically). When KOReader restarts after the update, Athenæum finishes the move by itself:
-
-- Its folder is renamed from `plugins/cloudlibrary.koplugin` to `plugins/athenaeum.koplugin`.
-- Its settings, catalogs and covers move from `settings/cloudlibrary/` to `settings/athenaeum/`. Nothing is downloaded again.
-- Gestures, profiles and keyboard shortcuts set to **Cloud library: quick sync** become **Athenæum: quick sync**.
-- If you also installed Athenæum by hand, the old `cloudlibrary.koplugin` folder is removed. Another plugin's `cloudlibrary.koplugin` is left alone.
-
-Between installing the update and restarting, the running Cloud library may report that part of it was turned off: its files have already been replaced. Restart KOReader to finish. With Concordance installed, update it too: an older Concordance doesn't know the new name, so until it's updated, Athenæum checks for its own updates and Concordance doesn't use Athenæum's catalog (its matched files and cloud books).
-
 ### Setting up
 
 1. Add your library's catalog in KOReader's OPDS catalog plugin (with its username and password).

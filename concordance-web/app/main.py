@@ -491,20 +491,11 @@ def read_devices() -> list[dict]:
 # as "2025.10-58": year, month, point release, commits since).
 PLUGIN_NAMES = {"concordance": "Concordance", "athenaeum": "Athenæum", "zenos": "ZenOS",
                 "koreader": "KOReader"}
-# Old names: Athenaeum was Cloud library ("cloudlibrary"), which devices with
-# an older Concordance still report.
-PLUGIN_ALIASES = {"cloudlibrary": "athenaeum"}
 
 
 def _device_versions(d: dict) -> dict[str, str]:
-    """A device's versions under the plugins' current names."""
-    out: dict[str, str] = {}
-    for k, v in (d.get("versions") or {}).items():
-        if isinstance(v, str):
-            name = PLUGIN_ALIASES.get(k, k)
-            if k == name or name not in out:
-                out[name] = v
-    return out
+    """A device's versions (the ones given as text)."""
+    return {k: v for k, v in (d.get("versions") or {}).items() if isinstance(v, str)}
 
 _KOREADER_VERSION = re.compile(r"v?(\d{4})\.(\d{2})(?:\.(\d+))?(?:-(\d+))?")
 

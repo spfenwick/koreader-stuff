@@ -33,23 +33,11 @@ so a release is visible to devices only once its zip is up.
 Knuth–Plass releases up to 0.5.1 were tagged `vX.Y.Z`. Its rolling release
 (`knuthplass`) didn't change, so copies installed from those keep updating.
 
-Athenaeum (`athenaeum`) was Cloud library (`cloudlibrary`) up to 0.7.3. Its
-folder name clashed with another plugin's in ZenPM, which identifies
-KOReader plugins by folder name. Copies installed as Cloud library check the
-`cloudlibrary` rolling release and unpack updates into
-`cloudlibrary.koplugin`, so each Athenaeum release is also published as
-`cloudlibrary.koplugin.zip` (the same files in a `cloudlibrary.koplugin`
-folder), with a `plugin.json` for it on the `cloudlibrary` rolling release.
-Once installed, Athenaeum moves itself to `athenaeum.koplugin` and moves its
-settings (`athenaeum.koplugin/athenaeum/migrate.lua`). Keep publishing both
-until no device reports Cloud library any more.
-
+Athenaeum (`athenaeum`) was Cloud library (`cloudlibrary`) up to 0.7.3.
 Concordance replaced Settings sync (`rclonesync`) and Statistics sync
 (`statsync`), as SuperSync, and was then renamed OmniSync (`omnisync`), and
-then Concordance (`concordance`, versions from 0.1.0 again). Their releases
-stay as they were; installed copies of them don't update to Concordance,
-which is installed by hand once (it takes over OmniSync's data, see
-`concordance.koplugin/README.md`).
+then Concordance (`concordance`, versions from 0.1.0 again). No copies under
+the old names are left, so nothing moves from them any more.
 
 ## The shared updater
 
@@ -65,8 +53,7 @@ release.
 ## On devices
 
 - The first version of a plugin with the updater (Knuth–Plass already has
-  it; Concordance has it from its first release; Athenaeum from 0.1.0, as
-  Cloud library)
+  it; Concordance has it from its first release; Athenaeum from 0.1.0)
   has to be copied to the device by hand.
 - Concordance's settings sync never syncs these plugins' folders (even if
   `sync.txt` lists them): the sync and the updater would both write them.

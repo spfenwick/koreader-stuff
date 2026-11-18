@@ -16,11 +16,6 @@ check, and its automatic check is left to Concordance's. Its updater says
 so with `defers_to_concordance`; without that (an older version), its
 automatic check is its own and isn't repeated here.
 
-Athenaeum was called Cloud library (cloudlibrary/updater.lua) before; a
-Cloud library still on a device is checked here the same way, and its
-update is Athenaeum (see athenaeum/migrate.lua). Before handles(), a
-Concordance only knew Cloud library, so Athenaeum asks.
-
     Updates.register(fn)          fn() -> { { updater = U, plugin = { path, version } }, … }
     Updates.check(interactive)    the combined check
     Updates.scheduleCheck(delay)  once per session, automatic
@@ -43,7 +38,7 @@ function Updates.active() return Updates.entries ~= nil end
 
 --- True for the plugins this checks besides Concordance (by their updater's
 -- name).
-function Updates.handles(name) return name == "athenaeum" or name == "cloudlibrary" end
+function Updates.handles(name) return name == "athenaeum" end
 
 --- The plugins, or only those that can be updated (loaded by KOReader
 -- from a folder, with a version).

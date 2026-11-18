@@ -24,8 +24,7 @@ KOReader's Cloud storage:
   newest position saved from any version with the same text. See
   [IDENTITY.md](IDENTITY.md#progress-level-2).
 
-It was called OmniSync, and takes over OmniSync's data on each device
-(see [Moving from OmniSync](#moving-from-omnisync)).
+It was called OmniSync.
 
 ## Install
 
@@ -112,42 +111,6 @@ into a book when it's opened, whether or not automatic sync is on.
   Files/                   settings sync (manifest.tsv, files/ as in KOReader's folder)
   Reading/devices/         statistics, highlights and book data, a folder per device
 ```
-
-OmniSync kept the device folders in `Statistics/` until its 0.5.0 (see
-[STATISTICS.md](STATISTICS.md#moving-from-statistics)). Statistics sync kept
-its device folders one level deeper, in `/KOReader/Statistics/v2/devices/`.
-
-## Moving from OmniSync
-
-Concordance was called OmniSync (`omnisync.koplugin`). It takes over
-OmniSync's data on each device, so nothing has to be sent or received
-again, and it uses the same server and folder.
-
-1. Copy `concordance.koplugin` into `plugins/` and restart KOReader. If
-   OmniSync is still on, Concordance turns it off and asks you to restart:
-   the two can't both run while the data moves.
-2. After the restart, Concordance moves OmniSync's data and says so. Delete
-   `omnisync.koplugin` from `plugins/`.
-
-What's moved, on the first start without OmniSync:
-
-| From | To |
-|---|---|
-| `settings/omnisync/` (settings, device ID, sync database, settings sync's state) | `settings/concordance/` |
-| `cache/omnisync/` | `cache/concordance/` |
-| `/settings/omnisync/…` lines in `sync.txt` | `/settings/concordance/…` |
-| OmniSync's automatic updates setting | Concordance's |
-| gestures and profiles for OmniSync's syncs | Concordance's |
-| collections' `omnisync_id` in `collection.lua` | `concordance_id` |
-
-Settings sync sends the list and `settings.lua` again under their new
-paths, `Files/files/settings/concordance/`. The old copies in
-`Files/files/settings/omnisync/` aren't synced any more; delete them once
-every device has moved.
-
-OmniSync's updater doesn't find Concordance, so each device needs this once
-by hand. Until a device has moved, gestures it gets from devices that have
-(through settings sync) don't run its syncs.
 
 ## Where things are kept
 

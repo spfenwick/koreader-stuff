@@ -14,9 +14,6 @@ the same on several devices, through a server set up in Cloud storage.
   custom metadata, handmade table of contents), synced with annotations:
   concordance/bookstore.lua and concordance/booksync.lua. See DESIGN.md,
   ANNOTATIONS.md and BOOKDATA.md.
-
-concordance/migrate.lua takes over OmniSync's data (Concordance's old
-name) on this device, the first time.
 --]]
 
 local ConfirmBox = require("ui/widget/confirmbox")
@@ -62,51 +59,16 @@ local function notify(text)
     UIManager:show(InfoMessage:new{ text = text })
 end
 
--- Runs as KOReader loads its plugins, before any of them is started: first
--- take over OmniSync's data, then put settings pulled last time in place
--- before their plugins read them.
-local migrated, startup
+-- Runs as KOReader loads its plugins, before any of them is started: put
+-- settings pulled last time in place before their plugins read them.
+local startup
 do
     local ok, err = pcall(function()
-        local plugin_path = debug.getinfo(1, "S").source:match("^@(.*)/[^/]+$")
-        migrated = require("concordance/migrate").run{
-            kodir = dataDir(),
-            settings_dir = require("datastorage"):getSettingsDir(),
-            plugins_dir = plugin_path and plugin_path:match("^(.*)/[^/]+$"),
-            LuaSettings = require("luasettings"),
-            reader_settings = G_reader_settings,
-            logger = logger,
-        }
-        Plugin.reload()
-    end)
-    if not ok then logger.warn("Concordance: migrating:", err) end
-    -- OmniSync is running this time: it was turned off, and Concordance does
-    -- nothing until the restart (it would start without OmniSync's data).
-    if migrated and migrated.restart then
-        local Waiting = WidgetContainer:extend{ name = "concordance", is_doc_only = false }
-        function Waiting:init()
-            if migrated.shown then return end
-            migrated.shown = true
-            UIManager:nextTick(function()
-                UIManager:askForRestart(_([[Concordance is OmniSync's new name. OmniSync is now turned off; restart KOReader, and Concordance takes over its data and settings.
-
-Then delete omnisync.koplugin from KOReader's plugins folder.]]))
-            end)
-        end
-        return Waiting
-    end
-    ok, err = pcall(function()
         local p = settingsPaths()
         local applied = SettingsEngine.applyPending(p)
         if applied ~= nil then
             startup = { ok = applied, log = p.apply_log }
             logger.info("Concordance: put pulled settings in place:", applied)
-            -- From a device still on OmniSync, they can name its gestures.
-            local Migrate = require("concordance/migrate")
-            Migrate.renameGestures({
-                settings_dir = require("datastorage"):getSettingsDir(),
-                LuaSettings = require("luasettings"),
-            }, Migrate.stepper({}, logger))
         end
     end)
     if not ok then
@@ -162,12 +124,6 @@ function Concordance:init()
     end
     Updates.register(function() return self:updateEntries() end)
     Updates.scheduleCheck()
-    if migrated and migrated.omnisync and not migrated.shown then
-        migrated.shown = true
-        UIManager:nextTick(function()
-            notify(_([[Concordance took over OmniSync's data and settings on this device. Delete omnisync.koplugin from KOReader's plugins folder.]]))
-        end)
-    end
     if startup and not startup.shown then
         startup.shown = true
         UIManager:nextTick(function()
@@ -1045,16 +1001,11 @@ Turn off KOReader's "Export annotations on book closing" (in the reader's Bookma
 end
 
 --- Athenaeum's running instance and its own updater, when it's
--- installed and enabled (it loaded its updater at start). Also Cloud
--- library, as it was called before (until the device updates it: its
--- update is Athenaeum), and Athenaeum in the session it moves itself out
--- of cloudlibrary.koplugin (KOReader still calls it cloudlibrary then).
--- Only this plugin has a cloudlibrary/updater module: the other
--- cloudlibrary.koplugin's ui.cloudlibrary isn't taken for it.
+-- installed and enabled (it loaded its updater at start).
 function Concordance:athenaeum()
     local ui = self.ui or {}
-    local updater = package.loaded["athenaeum/updater"] or package.loaded["cloudlibrary/updater"]
-    local plugin = ui.athenaeum or ui.cloudlibrary
+    local updater = package.loaded["athenaeum/updater"]
+    local plugin = ui.athenaeum
     if plugin and plugin.path and plugin.version and type(updater) == "table" and updater.check then
         return plugin, updater
     end
@@ -1062,8 +1013,7 @@ end
 
 --- The plugins checked together for updates (concordance/updates.lua): this
 -- one and Athenaeum, each with its own updater and settings. An Athenaeum
--- (or Cloud library) from before it handed its automatic check to
--- Concordance keeps it.
+-- from before it handed its automatic check to Concordance keeps it.
 function Concordance:updateEntries()
     local entries = { { updater = Updater, plugin = self } }
     local plugin, updater = self:athenaeum()
