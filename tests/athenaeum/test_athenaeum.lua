@@ -2114,6 +2114,32 @@ do
     eq(menu_closed, 4, "the menu closed each time")
     package.loaded["ui/widget/notification"] = real_notification
     package.loaded["concordance/identity"].setBookState = nil
+    -- Downloading from the details: one format, a plain row; several, a
+    -- "Download" row opening a menu of them, the preferred first.
+    local real_download = Library.download
+    local downloads = {}
+    Library.download = function(id, opts) downloads[#downloads + 1] = { id = id, ext = opts.ext, open = opts.open } end
+    local one = Library.detailsButtons(A_ID, { formats = { { href = "/x/a.epub" } } }, function() end)
+    check(not one[1][1].text:find("\u{E841}", 1, true) and one[1][1].text:find("Download", 1, true)
+        and one[1][1].align == "left", "one format: a plain Download row")
+    one[1][1].callback()
+    eq(downloads[1] and downloads[1].ext, "epub", "one format: downloaded")
+    local formats = { { href = "/x/a.pdf" }, { href = "/x/a.epub" }, { href = "/x/a.mobi" } }
+    local several = Library.detailsButtons(A_ID, { formats = formats }, function() end)
+    check(several[2][1].text:find("Download & read", 1, true) ~= nil, "Download & read second")
+    several[2][1].callback()
+    check(downloads[2].ext == "epub" and downloads[2].open, "Download & read: the preferred format")
+    check(not several[3] or not several[3][1].text:find("Download", 1, true), "no row per format on the sheet")
+    local fclosed = 0
+    local frows = Library.formatRows(A_ID, require("athenaeum/downloads").choices(formats),
+        function() fclosed = fclosed + 1 end)
+    local function flabel(i) return (frows[i][1].text:gsub("^[^%w]*%s%s", "")) end
+    eq(#frows, 3, "a row per format")
+    eq(flabel(1) .. "|" .. flabel(2) .. "|" .. flabel(3), "EPUB|PDF|MOBI", "the preferred first")
+    check(frows[1][1].align == "left", "left-aligned, as ZenOS's menus")
+    frows[2][1].callback()
+    check(fclosed == 1 and downloads[3].ext == "pdf" and not downloads[3].open, "a format chosen: menu closed, downloaded")
+    Library.download = real_download
     package.loaded["concordance/identity"].bookState = function() error("boom") end
     eq(Virtual.stateText(A_ID), nil, "a Concordance error leaves the line out")
     eq(ZenSource.state("/lib/cloud-a.epub"), nil, "a Concordance error leaves the status out")

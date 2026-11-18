@@ -1144,23 +1144,62 @@ local function statusRow(id, full, close)
     }}
 end
 
---- The details sheet's buttons. close(): closes the sheet.
+--- The rows of a cloud book's "Download" menu, drawn like ZenOS's submenus:
+-- one format per row, the preferred first (Downloads.choices). Choosing one
+-- closes the menu (close_menu) and downloads that format.
+function Library.formatRows(id, choices, close_menu)
+    local Details = require("athenaeum/details")
+    local busy = Downloads.isQueued(id)
+    local rows = {}
+    for _i, c in ipairs(choices) do
+        rows[#rows + 1] = {{
+            text = Details.label("download", c.ext:upper()),
+            align = "left",
+            enabled = not busy,
+            callback = function()
+                if close_menu then close_menu() end
+                Library.download(id, { ext = c.ext })
+            end,
+        }}
+    end
+    return rows
+end
+
+--- The details sheet's buttons. close(): closes the sheet. A book in more
+-- than one format has a "Download ›" row opening a menu of them, as ZenOS
+-- puts choices behind a row; "Download & read" takes the preferred one.
 function Library.detailsButtons(id, full, close)
     local Details = require("athenaeum/details")
     local choices = Downloads.choices(full and full.formats)
     local busy = Downloads.isQueued(id)
     local first = choices[1]
-    local label = first and #choices > 1 and first.ext:upper() or nil
-    local rows = {
-        {{
-            text = Details.label("download", label and T(_("Download %1"), label) or _("Download")),
+    local download
+    if #choices > 1 then
+        local arrow = Details.icon("arrow_right")
+        download = {
+            text = Details.label("download", _("Download")) .. (arrow and "  " .. arrow or ""),
+            align = "left",
+            enabled = not busy,
+            callback = function()
+                close()
+                local menu
+                local rows = Library.formatRows(id, choices, function() UIManager:close(menu) end)
+                menu = Details.menu(_("Download"), Guard.wrapCallbacks(rows))
+            end,
+        }
+    else
+        download = {
+            text = Details.label("download", _("Download")),
             align = "left",
             enabled = first ~= nil and not busy,
             callback = function()
                 close()
                 Library.download(id, { ext = first and first.ext })
             end,
-        }},
+        }
+    end
+    local rows = {
+        { download },
         {{
             text = Details.label("reading", _("Download & read")),
             align = "left",
@@ -1171,18 +1210,6 @@ function Library.detailsButtons(id, full, close)
             end,
         }},
     }
-    for i = 2, math.min(#choices, 4) do
-        local c = choices[i]
-        table.insert(rows, {{
-            text = Details.label("download", T(_("Download %1"), c.ext:upper())),
-            align = "left",
-            enabled = not busy,
-            callback = function()
-                close()
-                Library.download(id, { ext = c.ext })
-            end,
-        }})
-    end
     local status = statusRow(id, full, close)
     if status then table.insert(rows, status) end
     return rows
