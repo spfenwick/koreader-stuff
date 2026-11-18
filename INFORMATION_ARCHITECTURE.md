@@ -44,14 +44,18 @@ What works well:
     (level 2) joining.
 - **KOReader's own book info dialog** writes `custom_metadata.lua`, which
   does sync.
-- **Cloud books** that aren't downloaded get a sidecar at their virtual
-  path. That edit has no MD5, so it never syncs. It also probably doesn't
-  move to the real file when the book is downloaded (not checked).
+- ~~Cloud books get a sidecar at their virtual path.~~ Correction: the
+  editor refuses paths that aren't files (`service.lua`, `M.load`), so cloud
+  books can't be edited at all.
 
-Suggestion: for books in the Athenæum library, make `editsEmbedded()` return
-false, so edits always go to `custom_metadata.lua` and Concordance syncs
-them. A further question is whether CWA or the device should be the
-canonical place for edits.
+**Fixed 2026-11-18, in Athenæum only (no ZenOS change):**
+`Library.installMetadataHook()` wraps ZenOS's `editsEmbedded` (Guard feature
+`metadata`). While Concordance is installed, EPUBs in the library folder keep
+their edits in `custom_metadata.lua`, which Concordance syncs. Books outside
+the library are left to ZenOS, so they still embed edits and still have the
+problems above. This depends on a ZenOS internal; if ZenOS changes it, the
+startup check turns the feature off and shows it on the Status screen. Still
+open: whether CWA or the device should be the canonical place for edits.
 
 ### 2. Catalog changes don't reach books already downloaded
 
