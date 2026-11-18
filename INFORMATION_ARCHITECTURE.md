@@ -96,6 +96,10 @@ Its `status()` returns only `{status}`.
   count books finished on another device. `bookState` doesn't return the date
   of the status change, although the merged record holds it (`updated`).
 
+**Partly fixed 2026-11-18 (Athenæum 0.9.2):** `status()` now gives the
+rating as well, and answers for the library's downloaded books that haven't
+been opened here, not just cloud books. `finished_at` is still missing.
+
 ### 6. Two separate OPDS readers
 
 Athenæum (on the device) and concordance-web (on the server) each read and

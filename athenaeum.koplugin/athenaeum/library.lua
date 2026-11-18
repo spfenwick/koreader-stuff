@@ -183,6 +183,22 @@ function Library.loadShowingProgress(touchmenu_instance)
     if not ok then error(err, 0) end
 end
 
+-- path -> catalog ID for the library's files of catalog books (matched files
+-- and second copies), built when first needed from the matches it names;
+-- nil after they change in place (unmatch, restoreMatched).
+local path_ids, path_ids_of
+
+--- The catalog ID of a file in the library folder, or nil.
+local function catalogIdForFile(path)
+    if not (Library.on_device and Library.on_device[path]) then return nil end
+    if not path_ids or path_ids_of[1] ~= Library.matched or path_ids_of[2] ~= Library.copies then
+        path_ids, path_ids_of = {}, { Library.matched, Library.copies }
+        for p, id in pairs(Library.copies or {}) do path_ids[p] = id end
+        for id, p in pairs(Library.matched or {}) do path_ids[p] = id end
+    end
+    return path_ids[path]
+end
+
 -- What a load depends on, besides the catalog and the folder's files.
 local function loadKey(server, folder, s)
     return table.concat({ server and server.url or "", server and server.username or "",
@@ -202,6 +218,7 @@ function Library.load()
         Library.stats = {}
         Library.catalog = {}
         Library.matched, Library.on_device, Library.not_in_catalog = {}, {}, {}
+        Library.copies = {}
         Library.by_title, Library.file_info = {}, {}
         Covers.configure(nil)
         showCatalog(folder, {})
@@ -231,6 +248,7 @@ function Library.load()
     end
     Library.catalog = books -- every catalog book, in the database's order
     Library.matched = matched
+    Library.copies = copies or {}
     Library.by_title = by_title
     Library.file_info = files
     Library.on_device = {}
@@ -361,6 +379,7 @@ function Library.unmatch(paths)
             changed[path] = id
         end
     end
+    path_ids = nil
     if next(changed) == nil or not Library.catalog then return changed end
     -- As Library.load() builds it, so the reload finds nothing new to show.
     local cloud = {}
@@ -381,6 +400,7 @@ function Library.restoreMatched(changed)
             any = true
         end
     end
+    path_ids = nil
     if any then
         local cloud = {}
         for _i, b in ipairs(Library.catalog or {}) do
@@ -531,17 +551,29 @@ Virtual.stateText = function(id)
     if not ok then logger.warn("Athenaeum: reading the book's state from Concordance:", text) end
     return ok and text or nil
 end
--- A cloud book's status on other devices, for its badge and for ZenOS. A
--- Concordance error just leaves it out.
-local function cloudState(path)
+-- What Concordance knows of a cloud book, or of a catalog book's file in the
+-- library folder. A Concordance error just leaves it out.
+local function stateForPath(path)
     local book = Virtual.by_path[path]
-    if not book then return nil end
-    local ok, st = pcall(Library.bookState, book.id)
+    local id = book and book.id or catalogIdForFile(path)
+    if not id then return nil end
+    local ok, st = pcall(Library.bookState, id)
     if not ok then logger.warn("Athenaeum: reading the book's state from Concordance:", st) end
-    return ok and st and st.status or nil
+    return ok and type(st) == "table" and st or nil
 end
-Badge.cloudState = cloudState
-ZenSource.state = cloudState
+-- A cloud book's status on other devices, for its badge.
+Badge.cloudState = function(path)
+    if not Virtual.by_path[path] then return nil end
+    local st = stateForPath(path)
+    return st and st.status or nil
+end
+-- For ZenOS: cloud books, and the library's files (ZenOS asks only about
+-- books without a sidecar, so a book opened here keeps its own).
+ZenSource.state = function(path)
+    local st = stateForPath(path)
+    if not st or not (st.status or st.rating) then return nil end
+    return { status = st.status, rating = st.rating }
+end
 
 function Library.installHistory()
     History.install{

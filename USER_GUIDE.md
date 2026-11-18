@@ -208,6 +208,7 @@ With both installed, Athenæum knows what you've read on every device, and a boo
 ### What you see
 
 - **Cloud badges show reading state.** A cloud-only book's badge gets a check (finished), play (reading) or pause (on hold) mark from your other devices.
+- **Downloaded books show it too, before you open them.** In ZenOS, a book downloaded into the library but not opened here yet shows its status and rating from your other devices. Once you open it, it has its own, kept in step by Concordance.
 - **Details show your history.** A cloud book's details sheet adds a line such as "Finished · ★★★★☆ · Last read 12 Oct 2026 on Kobo Forma".
 - **History includes cloud books.** A book you read on another device appears in History under its title even if it isn't downloaded here; tap it to see its details and download it, or long-press it to remove it from History (in ZenOS, also from Home's Recently read). Once downloaded, the entry becomes the file.
 - **Metadata edits sync.** In ZenOS, editing the metadata of an EPUB in the library folder keeps your changes in KOReader's custom metadata rather than writing them into the file, so Concordance carries them to your other devices.

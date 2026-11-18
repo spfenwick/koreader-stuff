@@ -1216,6 +1216,7 @@ do
     Badge.noncloud_enabled = false
     menu.item_group[2].entry.path = "/lib/cloud-x.epub"
     local state
+    local real_cloud_state = Badge.cloudState
     Badge.cloudState = function(path) return path == "/lib/cloud-x.epub" and state or nil end
     local function light()
         bb:fill(Blitbuffer.COLOR_GRAY)
@@ -1236,7 +1237,7 @@ do
     end
     state = "something else"
     check(Badge.kind("/lib/cloud-x.epub") == "cloud", "unknown status: plain cloud")
-    Badge.cloudState = nil
+    Badge.cloudState = real_cloud_state
 
     -- ZenOS Home covers (cover_common.make_cover_widget): badged when built
     -- for Home, painted after the cover.
@@ -1908,13 +1909,15 @@ do
     eq(source.listingKey("/"), key, "parent folders count the books")
     check(source.listingKey("/libx") == nil and source.listingKey("/lib/sub") == nil, "no key for other folders")
 
-    -- Reading status from other devices (Concordance): cloud books only.
+    -- Reading status and rating from other devices (Concordance), as the
+    -- library gives them (ZenSource.state, tested with Concordance below).
     local real_state = ZenSource.state
-    local asked = {}
-    ZenSource.state = function(path) asked[#asked + 1] = path return "complete" end
-    eq(source.status("/lib/cloud-c1.epub").status, "complete", "status of a cloud book")
-    eq(source.status("/lib/a.epub"), nil, "a local book keeps its own status")
-    eq(#asked, 1, "state only looked up for cloud books")
+    ZenSource.state = function(path)
+        return path == "/lib/cloud-c1.epub" and { status = "complete", rating = 4 } or nil
+    end
+    local st = source.status("/lib/cloud-c1.epub")
+    eq(st.status .. " " .. st.rating, "complete 4", "status and rating of a cloud book")
+    eq(source.status("/lib/a.epub"), nil, "nothing known: nothing given")
     ZenSource.state = function() return nil end
     eq(source.status("/lib/cloud-c1.epub"), nil, "no state: no status")
     ZenSource.state = real_state
@@ -2053,10 +2056,31 @@ do
     states[A_ID] = { status = "reading" }
     eq(Virtual.stateText(A_ID), "Reading", "the details sheet asks the library")
     local ZenSource = require("athenaeum/zenos_source")
+    local Badge = require("athenaeum/badge")
     local real_by_path = Virtual.by_path
     Virtual.by_path = { ["/lib/cloud-a.epub"] = { id = A_ID } }
-    eq(ZenSource.state("/lib/cloud-a.epub"), "reading", "ZenOS gets the state the badge shows")
-    eq(ZenSource.state("/lib/a.epub"), nil, "no state for other books")
+    eq(ZenSource.state("/lib/cloud-a.epub").status, "reading", "ZenOS gets the state the badge shows")
+    eq(Badge.cloudState("/lib/cloud-a.epub"), "reading", "the badge's state")
+    eq(ZenSource.state("/lib/elsewhere.epub"), nil, "no state for books not in the catalog")
+    -- The library's downloaded books (ZenOS asks only while they have no
+    -- sidecar here): their catalog book's state, with the rating.
+    states[A_ID] = { status = "complete", rating = 5 }
+    local st = ZenSource.state("/lib/a.epub")
+    eq(st and (st.status .. " " .. st.rating), "complete 5", "a matched file gets its book's state")
+    eq(Badge.cloudState("/lib/a.epub"), nil, "no cloud badge for a downloaded book")
+    Library.copies = { ["/lib/a copy.epub"] = A_ID }
+    Library.on_device["/lib/a copy.epub"] = true
+    eq(ZenSource.state("/lib/a copy.epub").status, "complete", "a second copy too")
+    states[A_ID] = { rating = 3 }
+    eq(ZenSource.state("/lib/a.epub").rating, 3, "a rating alone")
+    states[A_ID] = { last_read = t }
+    eq(ZenSource.state("/lib/a.epub"), nil, "neither status nor rating: nothing")
+    states[A_ID] = { status = "reading" }
+    Library.unmatch({ "/lib/a.epub" })
+    eq(ZenSource.state("/lib/a.epub"), nil, "unmatched (deleted): nothing")
+    Library.restoreMatched({ ["/lib/a.epub"] = A_ID }) -- the file isn't really there
+    eq(ZenSource.state("/lib/a.epub"), nil, "not restored without its file")
+    Library.on_device["/lib/a copy.epub"], Library.copies = nil, nil
     package.loaded["concordance/identity"].bookState = function() error("boom") end
     eq(Virtual.stateText(A_ID), nil, "a Concordance error leaves the line out")
     eq(ZenSource.state("/lib/cloud-a.epub"), nil, "a Concordance error leaves the status out")
