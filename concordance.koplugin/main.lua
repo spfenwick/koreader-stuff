@@ -363,6 +363,72 @@ function Concordance:onCloseDocument()
     UIManager:scheduleIn(CLOSE_DELAY, function() self.trigger("close") end)
 end
 
+-- Syncs after a book's status, rating or metadata changes here -------------------------
+
+--- Seconds to wait after a change, so changes made together (a status and a
+-- rating) go in one sync.
+local CHANGE_DELAY = 3
+local change_tick
+
+--- A book's status, rating, review or metadata changed on this device:
+-- sync highlights and books soon, while Wi-Fi is on already (never turned
+-- on for this). Nothing when their automatic syncs are off.
+function Concordance.bookChanged()
+    if not Plugin.autoAnnotations() then return end
+    if change_tick then UIManager:unschedule(change_tick) end
+    change_tick = function()
+        change_tick = nil
+        if NetworkMgr:isConnected() then Concordance.trigger("change", { stats = false, ann = true }) end
+    end
+    UIManager:scheduleIn(CHANGE_DELAY, change_tick)
+end
+Plugin.onBookChanged = Concordance.bookChanged
+
+--- Calls fn after orig, whatever it returns; an error in fn is logged, the
+-- original's results stand.
+local function after(orig, fn)
+    return function(...)
+        local function pack(...) return { n = select("#", ...), ... } end
+        local r = pack(orig(...))
+        local ok, err = pcall(fn, ...)
+        if not ok then logger.warn("Concordance: noticing a book change failed:", err) end
+        return unpack(r, 1, r.n)
+    end
+end
+
+--- Where KOReader (and ZenOS) change a book's status, rating or review
+-- without an event: the file browser's status buttons, the book information
+-- dialog, ZenOS's menus (filemanagerutil.saveSummary), and the reader's book
+-- status page (BookStatusWidget, on closing it if something changed).
+-- Metadata edits send BookMetadataChanged (onBookMetadataChanged).
+-- Installed once per KOReader run (the flag is in the plugin module, which
+-- outlives a reload of this file); they call Plugin.onBookChanged, the
+-- latest bookChanged.
+local function installChangeHooks()
+    if Plugin.change_hooks then return end
+    Plugin.change_hooks = true
+    local function changed() if Plugin.onBookChanged then Plugin.onBookChanged() end end
+    local ok, fmu = pcall(require, "apps/filemanager/filemanagerutil")
+    if ok and type(fmu) == "table" and type(fmu.saveSummary) == "function" then
+        fmu.saveSummary = after(fmu.saveSummary, changed)
+    else
+        logger.warn("Concordance: filemanagerutil.saveSummary not found: status changes sync later")
+    end
+    local okw, BookStatusWidget = pcall(require, "ui/widget/bookstatuswidget")
+    if okw and type(BookStatusWidget) == "table" and type(BookStatusWidget.onClose) == "function" then
+        BookStatusWidget.onClose = after(BookStatusWidget.onClose, function(self)
+            if self.updated then changed() end
+        end)
+    end
+end
+
+installChangeHooks()
+
+function Concordance.onBookMetadataChanged()
+    -- Not Concordance applying what came from other devices.
+    if not Plugin.bookSync().broadcasting then Concordance.bookChanged() end
+end
+
 -- Syncs every few minutes while the file browser is shown --------------------------
 
 --- (Re)starts the wait for the next sync from the file browser, a full

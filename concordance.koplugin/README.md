@@ -85,6 +85,10 @@ Statistics and highlights sync automatically (each unless turned off): when
 a book is opened (only while Wi-Fi is on) or closed, on wake-up, when the network connects, and 20 seconds
 after KOReader starts; and, if "Sync in the file browser" is set, that often
 while the file browser is shown and Wi-Fi is on (it never turns Wi-Fi on).
+Highlights and books also sync a few seconds after a book's status, rating,
+review or metadata is changed on the device (from the file browser, the
+book information dialog, the reader's book status page, a metadata editor,
+or Athenæum's buttons on a cloud book), while Wi-Fi is on.
 Without a network connection an automatic sync is
 skipped; nothing is queued, the next sync catches up. "Turn on Wi-Fi for
 automatic syncs" makes automatic syncs turn Wi-Fi on the way KOReader's network

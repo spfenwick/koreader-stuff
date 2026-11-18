@@ -139,6 +139,11 @@ stub("docsettings", {
 stub("libs/libkoreader-lfs", require("lfs"))
 stub("ui/event", { new = function(_, name, args) return { name = name, args = args } end })
 stub("ui/widget/multiconfirmbox", { new = function(_, o) o.multi = true; return o end })
+-- Where KOReader changes a book's status without an event (see main.lua).
+local fmu = { saveSummary = function(ds) return ds, "second" end }
+stub("apps/filemanager/filemanagerutil", fmu)
+local status_widget = { onClose = function() return true end }
+stub("ui/widget/bookstatuswidget", status_widget)
 
 package.path = "concordance.koplugin/?.lua;" .. package.path
 
@@ -717,6 +722,62 @@ do
     package.loaded["version"] = { getShortVersion = function() error("no git-rev") end }
     check(P.pluginVersions(plugins).koreader == nil, "no KOReader version when reading it fails")
     package.loaded["version"] = old_version
+end
+
+-- A book's status, rating or metadata changed here: a sync soon.
+do
+    local Pl = package.loaded["concordance/plugin"]
+    local triggered = {}
+    local real_trigger = Concordance.trigger
+    Concordance.trigger = function(reason, what) triggered[#triggered + 1] = { reason = reason, what = what } end
+    -- main.lua was loaded twice above: the hooks call the latest one's.
+    local real_changed = Pl.onBookChanged
+    Pl.onBookChanged = Concordance.bookChanged
+    local function newTask(n_before)
+        return #loop.tasks > n_before and loop.tasks[#loop.tasks].fn or nil
+    end
+    local function due()
+        local t = loop.tasks[#loop.tasks]
+        loop:unschedule(t.fn)
+        t.fn()
+    end
+    connected = true
+    local n = #loop.tasks
+    local a, b = fmu.saveSummary("ds", {})
+    check(a == "ds" and b == "second", "saveSummary still returns what it did")
+    check(newTask(n) and math.abs(loop:pending(newTask(n)) - 3) < 0.5, "status changed: a sync in 3 seconds")
+    fmu.saveSummary("ds", {})
+    check(#loop.tasks == n + 1, "changes together: one sync")
+    due()
+    check(#triggered == 1 and triggered[1].reason == "change" and triggered[1].what.ann
+        and not triggered[1].what.stats, "highlights and books synced")
+    status_widget.onClose({ updated = true })
+    due()
+    check(#triggered == 2, "the reader's book status page changed something: synced")
+    n = #loop.tasks
+    status_widget.onClose({ updated = false })
+    check(#loop.tasks == n, "nothing changed there: no sync")
+    plugin:onBookMetadataChanged()
+    due()
+    check(#triggered == 3, "metadata edited: synced")
+    n = #loop.tasks
+    local bs = Pl.bookSync()
+    bs.broadcasting = true
+    plugin:onBookMetadataChanged()
+    bs.broadcasting = false
+    check(#loop.tasks == n, "Concordance applying changes: no sync")
+    Pl.onBookChanged()
+    connected = false
+    due()
+    check(#triggered == 4 - 1, "Wi-Fi off: no sync (never turned on for this)")
+    connected = true
+    local auto = Pl.settings().auto_annotations
+    Pl.settings().auto_annotations = false
+    fmu.saveSummary("ds", {})
+    check(#loop.tasks == n, "automatic syncs of highlights and books off: no sync")
+    Pl.settings().auto_annotations = auto
+    Concordance.trigger = real_trigger
+    Pl.onBookChanged = real_changed
 end
 
 server.stop()

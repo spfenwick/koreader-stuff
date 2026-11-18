@@ -121,7 +121,7 @@ This relies on two things: each device's clock being roughly right (KOReader set
 | Handmade table of contents, hidden flows | WebDAV | Automatically |
 | Collections, favorites and reading history | WebDAV | Automatically |
 
-Automatic syncs run when a book is opened (only if Wi-Fi is already on) or closed, on wake-up, when the network connects, and 20 seconds after KOReader starts. With **Sync in the file browser** set (every 5, 15, 30 or 60 minutes; never by default), they also run that often while the file browser is shown and Wi-Fi is on. They run in the background, so reading isn't interrupted. Without a network they're skipped and the next sync catches up, unless you turn on **Turn on Wi-Fi for automatic syncs**.
+Automatic syncs run when a book is opened (only if Wi-Fi is already on) or closed, on wake-up, when the network connects, and 20 seconds after KOReader starts. Highlights and books also sync a few seconds after you change a book's status, rating, review or metadata (only if Wi-Fi is already on). With **Sync in the file browser** set (every 5, 15, 30 or 60 minutes; never by default), they also run that often while the file browser is shown and Wi-Fi is on. They run in the background, so reading isn't interrupted. Without a network they're skipped and the next sync catches up, unless you turn on **Turn on Wi-Fi for automatic syncs**.
 
 ### Settings sync
 

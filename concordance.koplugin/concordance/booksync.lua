@@ -50,11 +50,17 @@ function BookSync:_readerUI()
     return ok and ReaderUI.instance or nil
 end
 
+--- Sends an event to every widget. While it's being handled,
+-- self.broadcasting is true: a BookMetadataChanged sent from here is
+-- Concordance applying changes, not a change made on this device.
 function BookSync:_broadcast(name, arg)
     local um = self.deps.ui_manager
     if not (um and um.broadcastEvent) then return end
     local Event = self:_mod("event", "ui/event")
-    um:broadcastEvent(Event:new(name, arg))
+    self.broadcasting = true
+    local ok, err = pcall(um.broadcastEvent, um, Event:new(name, arg))
+    self.broadcasting = false
+    if not ok then error(err, 0) end
 end
 
 function BookSync:_bookList()

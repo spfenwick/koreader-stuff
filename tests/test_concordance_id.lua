@@ -547,7 +547,7 @@ do
 
     -- The interface other plugins use.
     check(not Identity.available() and Identity.bookState({ U[1] }) == nil, "not set up: nothing")
-    local refreshed, this_device, names = 0, "devB", {}
+    local refreshed, this_device, names, here = 0, "devB", {}, 0
     local scanned = {}
     Identity.setup{
         id_store = function() return L end, book_store = function() return B end,
@@ -563,6 +563,7 @@ do
             refreshed = refreshed + 1
             L:refreshGroups()
         end,
+        changed_here = function() here = here + 1 end,
         logger = { warn = function() end },
     }
     local st = Identity.bookState({ U[1]:upper() })
@@ -603,6 +604,7 @@ do
     check(Identity.setBookState("urn:uuid:" .. U[5]:upper(), { status = "complete", rating = 5 },
         { title = "New", authors = { "N", "M" } }) == 2, "cloud book: status and rating set")
     check(refreshed == before + 1, "groups refreshed once linked")
+    check(here == 1, "a change made here: a sync asked for")
     conn = L:open()
     check(conn:rowexec("SELECT count(*) FROM book_outbox WHERE md5 = '" .. key .. "'") == 2, "both to be sent")
     check(conn:rowexec("SELECT authors FROM book_books WHERE md5 = '" .. key .. "'") == "N\nM", "book record: authors")
@@ -617,8 +619,8 @@ do
     Identity.changed()
     st = Identity.bookState({ U[5] })
     check(st and st.status == "complete" and st.rating == 5, "the cloud book's state")
-    check(Identity.setBookState(U[5], { status = "complete", rating = 5 }) == 0 and refreshed == before + 1,
-        "the same again: nothing, no refresh (already linked)")
+    check(Identity.setBookState(U[5], { status = "complete", rating = 5 }) == 0 and refreshed == before + 1
+        and here == 1, "the same again: nothing, no refresh (already linked), no sync")
     check(Identity.setBookState(U[5], { rating = false }) == 1, "rating cleared")
     Identity.changed()
     st = Identity.bookState({ U[5] })

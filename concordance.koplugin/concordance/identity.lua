@@ -144,7 +144,10 @@ function Identity.setBookState(uuid, values, info)
         warn("setting a book's state failed:", res)
         return nil, tostring(res)
     end
-    if res.changed > 0 then Identity.changed() end
+    if res.changed > 0 then
+        Identity.changed()
+        if deps.changed_here then deps.changed_here() end -- a sync soon
+    end
     return res.changed
 end
 

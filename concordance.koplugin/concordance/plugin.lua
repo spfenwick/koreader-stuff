@@ -914,6 +914,7 @@ function Plugin.setupIdentity()
             Plugin.engine():refreshIdentity()
             Identity.changed()
         end,
+        changed_here = function() if Plugin.onBookChanged then Plugin.onBookChanged() end end,
         logger = logger,
     }
 end
