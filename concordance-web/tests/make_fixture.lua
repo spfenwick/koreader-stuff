@@ -56,6 +56,17 @@ local BOOKS = {
       uuid = nil, link = "1a2b3c4d-0000-4000-8000-000000000002" },
 }
 for _, b in ipairs(BOOKS) do b.md5 = md5(b.key) end
+
+-- Cloud books (Athenaeum): status or rating set on device 2, which has no
+-- file of them, under the catalog book's key and linked to its UUID. One no
+-- device has a file of; one joined to Moby-Dick's files.
+local CLOUD = {
+    { uuid = "1a2b3c4d-0000-4000-8000-000000000009", title = "Persuasion", authors = "Jane Austen",
+      status = "complete", rating = 4 },
+    { uuid = "1a2b3c4d-0000-4000-8000-000000000002", title = "Moby-Dick; or, The Whale", authors = "Herman Melville",
+      rating = 4 },
+}
+for _, c in ipairs(CLOUD) do c.key = BookFormat.uuidKey(c.uuid) end
 local by = {}
 for _, b in ipairs(BOOKS) do by[b.key] = b end
 
@@ -286,8 +297,13 @@ do
         prop(by.moby.md5, "hist", books_used[2].moby, books_used[2].moby, d2),
     }
     table.insert(body2, 3, BookFormat.bookLine{ md5 = by.moby.md5, title = by.moby.title, authors = by.moby.authors })
+    for _, c in ipairs(CLOUD) do
+        table.insert(body2, 4, BookFormat.bookLine{ md5 = c.key, title = c.title, authors = c.authors })
+        if c.status then r2[#r2 + 1] = prop(c.key, "status", c.status, NOW - 10 * DAY, d2) end
+        if c.rating then r2[#r2 + 1] = prop(c.key, "rating", c.rating, NOW - 10 * DAY, d2) end
+    end
     for _, r in ipairs(r2) do body2[#body2 + 1] = r end
-    body2[#body2 + 1] = BookFormat.trailerLine(3, #r2)
+    body2[#body2 + 1] = BookFormat.trailerLine(3 + #CLOUD, #r2)
     writeSegment(d2, BookFormat.segmentName(1), body2)
 end
 
@@ -305,6 +321,13 @@ for i, dev in ipairs(DEVICES) do
         if i == 2 and b.link then
             body[#body + 1] = IdFormat.recordLine{ md5 = b.md5, src = "link", uuids = { b.link },
                 title = b.title, authors = b.authors }
+            n = n + 1
+        end
+    end
+    if i == 2 then
+        for _, c in ipairs(CLOUD) do
+            body[#body + 1] = IdFormat.recordLine{ md5 = c.key, src = "link", uuids = { c.uuid },
+                title = c.title, authors = c.authors }
             n = n + 1
         end
     end

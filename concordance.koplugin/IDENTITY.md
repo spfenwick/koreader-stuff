@@ -450,8 +450,8 @@ adds a link naming that UUID (`src` `link`, like Athenæum's matches):
   marked to be written once closed.
 - `bookState` gives the result straight away; the records go with the next
   sync.
-- concordance-web will probably list the key as one of the book's files
-  (its loader makes an edition of every key in `book_merged`); not checked.
+- concordance-web merges the key's book data into the book but doesn't
+  list it as a file; a book only the key knows is shown without files.
 
 ## Order of work
 

@@ -83,6 +83,10 @@
   {% endif %}
 
   <section>
+    {% if book.cloud_only %}
+    <h2>Files</h2>
+    <p class="small muted">No device has a file of this book: its status was set from the catalog, in Athenæum.</p>
+    {% else %}
     <details class="editions">
       <summary><h2>Files <span class="count">{{ book.editions | length }}</span></h2></summary>
       <table>
@@ -95,6 +99,7 @@
       </table>
       {% if book.editions | length > 1 %}<p class="small"><a href="/versions#{{ book.id }}">How these files were matched</a></p>{% endif %}
     </details>
+    {% endif %}
   </section>
 </article>
 {% endblock %}

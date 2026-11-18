@@ -49,6 +49,27 @@ for path in / /books "$book" "$book/highlights.md" /highlights "/highlights?q=wh
     echo "$code $path"
     [ "$code" = 200 ] || fail=1
 done
+# Cloud books (a catalog book's key): never listed as a file.
+cloud="/book/uuid:1a2b3c4d-0000-4000-8000-000000000009"
+if curl -sf "$base$cloud" | grep -q 'No device has a file of this book'; then
+    echo "200 $cloud (a book only its catalog key knows)"
+else
+    echo "smoke: $cloud doesn't show as a book without files" >&2
+    fail=1
+fi
+moby=$(curl -sf "$base/books?q=Moby" | grep -o '/book/[0-9a-f]\{32\}' | head -1)
+for path in /versions "$moby"; do
+    if curl -sf "$base$path" | grep -q 'uuid:'; then
+        echo "smoke: a catalog book's key shown as a file on $path" >&2
+        fail=1
+    fi
+done
+if curl -sf "$base$moby" | grep -q 'Files <span class="count">2</span>'; then
+    echo "200 $moby (two files, its catalog key not counted)"
+else
+    echo "smoke: $moby doesn't list its two files" >&2
+    fail=1
+fi
 # The app's version at the bottom of every page.
 web_version=$(sed -n 's/^VERSION = "\([0-9][0-9.]*\)".*/\1/p' "$(dirname "$0")/../app/version.py")
 if curl -sf "$base/" | grep -q "Concordance web $web_version[ <]"; then

@@ -26,6 +26,9 @@ from datetime import date, datetime
 from pathlib import Path
 
 COLLECTIONS_MD5 = "collections"
+# A catalog book's key: its status or rating set on a device with no file of
+# it (a cloud book in Athenaeum). See the plugin's IDENTITY.md, "Cloud books".
+CLOUD_PREFIX = "uuid:"
 META_KEYS = ("title", "authors", "series", "series_index", "keywords", "language", "description")
 GROUP_PROPS = {"status", "rating", "note", "hist"} | {f"meta.{k}" for k in META_KEYS}
 STATUS_LABELS = {"reading": "Reading", "complete": "Finished", "abandoned": "On hold"}
@@ -226,6 +229,12 @@ class Edition:
     # book was opened after it. Its highlights are left out (see Book.superseded).
     superseded: bool = False
 
+    @property
+    def cloud(self) -> bool:
+        """Not a file: a catalog book's key (CLOUD_PREFIX), which holds what was
+        set for it on a device without a file of it."""
+        return self.md5.startswith(CLOUD_PREFIX)
+
 
 @dataclass
 class Book:
@@ -246,6 +255,11 @@ class Book:
     @property
     def md5s(self) -> list[str]:
         return [e.md5 for e in self.editions]
+
+    @property
+    def cloud_only(self) -> bool:
+        """No device has a file of it: only what was set for its catalog book."""
+        return all(e.cloud for e in self.editions)
 
     def value(self, prop: str):
         rec = self.props.get(prop)
@@ -591,6 +605,10 @@ class Library:
         for md5s in members.values():
             md5s.sort()
             eds = sorted((editions[m] for m in md5s), key=lambda e: -e.read_time)
+            # A catalog book's key isn't a file: its book data counts (merged
+            # below, over md5s), but it's only listed when there's no file.
+            files = [e for e in eds if not e.cloud]
+            file_md5s = [m for m in md5s if not editions[m].cloud]
             merged: dict[str, Record] = {}
             for m in md5s:
                 if m in by_title:
@@ -600,7 +618,7 @@ class Library:
                         continue
                     if rec.beats(merged.get(prop)):
                         merged[prop] = rec
-            book = Book(id=md5s[0], editions=eds, props=merged)
+            book = Book(id=(file_md5s or md5s)[0], editions=files or eds, props=merged)
             letters: dict[str, str] = {}
             for e in eds:  # the most-read file's text is A
                 e.uuids = file_uuids.get(e.md5, set())
