@@ -155,13 +155,23 @@ function BookSync:readOpen(ui, book)
     return values, times
 end
 
+--- The file's partial MD5, as KOReader computes it when the book is first
+-- opened, or nil.
+function BookSync:_fileMd5(path)
+    local ok, md5 = pcall(self.deps.partial_md5 or require("util").partialMD5, path)
+    return ok and type(md5) == "string" and md5 ~= "" and md5 or nil
+end
+
 --- A closed book's sidecar: { md5, title, authors }, values, times, fresh;
--- or nil when it has none or no MD5.
+-- or nil when it has none, or no MD5 and the file can't be read. A sidecar
+-- made without opening the book (the file browser's status buttons make
+-- one) has no MD5 yet: the file's is the one KOReader will give it.
 function BookSync:readClosed(path, ds)
     local DocSettings = self:_DocSettings()
     ds = ds or DocSettings:open(path)
     local md5 = ds:readSetting("partial_md5_checksum")
-    if type(md5) ~= "string" or md5 == "" then return nil end
+    if type(md5) ~= "string" or md5 == "" then md5 = self:_fileMd5(path) end
+    if not md5 then return nil end
     local props = ds:readSetting("doc_props") or {}
     local values, times = {}, {}
     local summary = ds:readSetting("summary")
@@ -487,9 +497,13 @@ function BookSync:_eachFile(paths, fn, done)
     self.deps.schedule(0, step)
 end
 
---- Reads again the sidecars of books in the reading history (and books
--- seen before) that changed since they were last read, and records their
--- changes. done(stats) when finished. Returns false if already running.
+--- Reads again the sidecars of books in the reading history, books seen
+-- before and the library's files (deps.library_files(), from Athenaeum)
+-- that changed since they were last read, and records their changes.
+-- The library's files are there for books never opened here: a status or
+-- rating set from the file browser makes a sidecar, but doesn't put the
+-- book in the history. done(stats) when finished. Returns false if already
+-- running.
 function BookSync:refresh(done)
     if self.refreshing then return false end
     self.refreshing = true
@@ -505,7 +519,20 @@ function BookSync:refresh(done)
         end
     end
     for p in pairs(known) do
-        if not listed[p] then paths[#paths + 1] = p end
+        if not listed[p] then
+            listed[p] = true
+            paths[#paths + 1] = p
+        end
+    end
+    if self.deps.library_files then
+        local ok, files = pcall(self.deps.library_files)
+        if not ok then self.log.warn("Concordance: asking for the library's files failed:", files) end
+        for _, p in ipairs(ok and type(files) == "table" and files or {}) do
+            if type(p) == "string" and not listed[p] then
+                listed[p] = true
+                paths[#paths + 1] = p
+            end
+        end
     end
     local ui = self:_readerUI()
     local open_file = ui and ui.document and ui.document.file

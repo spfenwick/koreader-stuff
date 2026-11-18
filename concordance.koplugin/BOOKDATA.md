@@ -132,6 +132,11 @@ fills in "reading" and removes the reset marker.
   again. That catches changes made in the file browser (status, rating,
   review, metadata), by other tools, or by writes from Concordance itself
   (which then compare equal). The first time, every sidecar is read.
+  With Athenæum, its library folder's files are checked too: a book never
+  opened here isn't in the history, but setting its status or rating from
+  the file browser gives it a sidecar. That sidecar has no MD5 (KOReader
+  writes one on first open), so the file's partial MD5 is used, the one
+  KOReader will give it.
 - `book_local` holds what each property was when last looked at (`""` for
   none); a different value is a change, a value gone is a clear (except
   the status, and except after a reset, above).

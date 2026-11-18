@@ -382,6 +382,14 @@ function Plugin.bookSync()
         schedule = function(delay, fn)
             if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
         end,
+        -- Athenaeum's library files: books never opened here can have a
+        -- sidecar too (see BookSync:refresh).
+        library_files = function()
+            local lib = Plugin.athenaeumLibrary()
+            if not (lib and type(lib.localFiles) == "function") then return nil end
+            if type(lib.isLoaded) == "function" and not lib.isLoaded() then return nil end
+            return lib.localFiles()
+        end,
     }
     return book_sync
 end

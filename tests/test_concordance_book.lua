@@ -610,4 +610,51 @@ do
     check(cm and cm.custom_props.title == "The Tome", "open book: custom metadata file written")
 end
 
+-- Books never opened here: the library's files (from Athenaeum) ---------------------------
+do
+    local a, b = newDev("unopened-a"), newDev("unopened-b")
+    local MD = string.rep("d", 32)
+    -- A has the book downloaded but never opened: not in the history.
+    local pa = a.dir .. "/books/unopened.epub"
+    S.writeFile(pa, "book")
+    local spare = a.dir .. "/books/no-sidecar.epub"
+    S.writeFile(spare, "book")
+    -- B has read it.
+    local pb = b:book("unopened", { partial_md5_checksum = MD, doc_props = { title = "Unopened" },
+                                    summary = { status = "reading", modified = "2026-01-01" } })
+    b.sync:refresh(); b:run()
+    -- A marks it finished from the file browser: a sidecar with the summary
+    -- only (no MD5, no doc_props), as KOReader's status buttons make it.
+    tick(100)
+    writeSidecar(pa, { summary = { status = "complete", rating = 4, modified = os.date("%Y-%m-%d", clock) } })
+    local md5_asked = {}
+    a.sync.deps.partial_md5 = function(path) md5_asked[#md5_asked + 1] = path return path == pa and MD or nil end
+    a.sync:refresh(); a:run()
+    check(a.store:counts().outbox == 0, "without the library's files: the unopened book isn't looked at")
+    a.sync.deps.library_files = function() error("Athenaeum bug") end
+    a.sync:refresh(); a:run()
+    check(not a.sync.refreshing and a.store:counts().outbox == 0, "the library failing: refresh still finishes")
+    a.sync.deps.library_files = function() return { pa, spare, pa } end
+    a.sync:refresh(); a:run()
+    check(a:merged(MD, "status") == "complete" and a:merged(MD, "rating") == 4,
+        "status and rating set on an unopened library book recorded, under the file's MD5")
+    check(a.store:files()[pa] and a.store:files()[pa].md5 == MD, "the book is known from now on")
+    check(#md5_asked == 1 and md5_asked[1] == pa, "the file's MD5 read only for the sidecar without one")
+    check(a:send(b) == 2, "status and rating sent")
+    b.sync:afterSync(nil); b:run()
+    local sb = readSidecar(pb).summary
+    check(sb.status == "complete" and sb.rating == 4, "written into the other device's copy")
+    -- Unchanged: not read again.
+    md5_asked = {}
+    a.sync:refresh(); a:run()
+    check(#md5_asked == 0 and a.store:counts().outbox == 0, "unchanged sidecar: not read again")
+    -- A sidecar without an MD5 whose file can't be read: skipped.
+    local other = a.dir .. "/books/unreadable.epub"
+    S.writeFile(other, "book")
+    writeSidecar(other, { summary = { status = "abandoned", modified = "2026-02-02" } })
+    a.sync.deps.library_files = function() return { other } end
+    a.sync:refresh(); a:run()
+    check(a.store:files()[other] == nil and a.store:counts().outbox == 0, "no MD5 to be had: skipped")
+end
+
 S.finish("concordance book data tests")
