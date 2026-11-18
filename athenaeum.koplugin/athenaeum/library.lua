@@ -1086,50 +1086,66 @@ end
 -- ZenOS's book menu (tapping outside closes it). close() closes the sheet.
 -- "unread": no status (KOReader's "new"); setting it clears the status, on
 -- every device (Concordance 0.3.4).
+-- Each with ZenOS's icon for it, as its "Read status" menu shows them.
 local STATUS_ORDER = { "unread", "reading", "abandoned", "complete" }
+local STATUS_ICON = { unread = "status", reading = "reading", abandoned = "on_hold", complete = "finished" }
 
--- With Concordance: rows to set the book's status and rating from here,
--- where it has no file (Concordance's Identity.setBookState). Tapping the
--- rating shown clears it. reopen() shows the details again, with the new
--- state. Nil without Concordance.
-local function stateRows(id, full, reopen)
+--- The rows of a cloud book's "Read status" menu, drawn like ZenOS's (one
+-- status per row, the current one ticked and not choosable). Choosing one
+-- closes the menu (close_menu) and sets it in Concordance
+-- (Identity.setBookState, with the book's info). Nil without Concordance.
+function Library.statusRows(id, full, close_menu)
     local Identity = Library.identity()
     if not (Identity and type(Identity.setBookState) == "function") then return nil end
+    local Details = require("athenaeum/details")
+    local check = Details.icon("check") or "✓"
     local st = Library.bookState(id) or {}
     local info = { title = full and full.title, authors = full and full.authors }
     local function set(values)
+        if close_menu then close_menu() end
         local ok, n, err = pcall(Identity.setBookState, id, values, info)
         if not ok or n == nil then
             logger.warn("Athenaeum: setting the book's status in Concordance:", ok and err or n)
             notify(_("Couldn't save the book's status."))
         end
-        if reopen then reopen() end
     end
-    local status_row = {}
+    local rows = {}
     local shown = STATUS_TEXT[st.status] and st.status or "unread"
     for _i, status in ipairs(STATUS_ORDER) do
         local current = shown == status
-        status_row[#status_row + 1] = {
-            text = (status == "unread" and _("Unread") or STATUS_TEXT[status]) .. (current and "  ✓" or ""),
+        local label = status == "unread" and _("Unread") or STATUS_TEXT[status]
+        rows[#rows + 1] = {{
+            text = Details.label(STATUS_ICON[status], label) .. (current and "  " .. check or ""),
+            align = "left",
             enabled = not current,
             callback = function() set({ status = status ~= "unread" and status or false }) end,
-        }
+        }}
     end
-    local rating = tonumber(st.rating)
-    rating = rating and rating >= 1 and rating <= 5 and math.floor(rating) or nil
-    local stars_row = {}
-    for n = 1, 5 do
-        stars_row[n] = {
-            text = rating and n <= rating and "★" or "☆",
-            callback = function() set({ rating = rating ~= n and n or false }) end,
-        }
-    end
-    return { status_row, stars_row }
+    return rows
 end
 
---- The details sheet's buttons. reopen(): shows the sheet again (after a
--- change it shows).
-function Library.detailsButtons(id, full, close, reopen)
+-- With Concordance: the details sheet's "Read status" row, as in ZenOS's
+-- book menu: it closes the sheet (close) and opens the status menu. Nil
+-- without Concordance.
+local function statusRow(id, full, close)
+    local Identity = Library.identity()
+    if not (Identity and type(Identity.setBookState) == "function") then return nil end
+    local Details = require("athenaeum/details")
+    local arrow = Details.icon("arrow_right")
+    return {{
+        text = Details.label("read_status", _("Read status")) .. (arrow and "  " .. arrow or ""),
+        align = "left",
+        callback = function()
+            close()
+            local menu
+            local rows = Library.statusRows(id, full, function() UIManager:close(menu) end)
+            if rows then menu = Details.menu(_("Read status"), Guard.wrapCallbacks(rows)) end
+        end,
+    }}
+end
+
+--- The details sheet's buttons. close(): closes the sheet.
+function Library.detailsButtons(id, full, close)
     local Details = require("athenaeum/details")
     local choices = Downloads.choices(full and full.formats)
     local busy = Downloads.isQueued(id)
@@ -1167,7 +1183,8 @@ function Library.detailsButtons(id, full, close, reopen)
             end,
         }})
     end
-    for _i, row in ipairs(stateRows(id, full, reopen) or {}) do table.insert(rows, row) end
+    local status = statusRow(id, full, close)
+    if status then table.insert(rows, status) end
     return rows
 end
 Virtual.detailsButtons = function(...)

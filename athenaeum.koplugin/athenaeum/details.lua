@@ -56,6 +56,19 @@ local function applyFont(rows)
     return rows
 end
 
+--- A titled menu of rows, drawn like ZenOS's submenus (its book menu's
+-- "Read status"). Returns the dialog.
+function Details.menu(title, rows)
+    local UIManager = require("ui/uimanager")
+    local dialog = require("ui/widget/buttondialog"):new{
+        title = title,
+        title_align = "center",
+        buttons = applyFont(rows),
+    }
+    UIManager:show(dialog)
+    return dialog
+end
+
 local function showCoverFullscreen(image_file)
     local UIManager = require("ui/uimanager")
     local ImageViewer = require("ui/widget/imageviewer")

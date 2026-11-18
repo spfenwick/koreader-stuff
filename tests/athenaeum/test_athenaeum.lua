@@ -2081,51 +2081,52 @@ do
     Library.restoreMatched({ ["/lib/a.epub"] = A_ID }) -- the file isn't really there
     eq(ZenSource.state("/lib/a.epub"), nil, "not restored without its file")
     Library.on_device["/lib/a copy.epub"], Library.copies = nil, nil
-    -- A cloud book's status and rating, set from its details (Concordance).
+    -- A cloud book's status, set from its details (Concordance): a "Read
+    -- status" row opening a menu drawn like ZenOS's.
     local full = { title = "By UUID", authors = { "Ann" } }
-    local reopened = 0
-    local function reopen() reopened = reopened + 1 end
-    local plain = #Library.detailsButtons(A_ID, full, function() end, reopen)
+    local plain = #Library.detailsButtons(A_ID, full, function() end)
     local sets = {}
     package.loaded["concordance/identity"].setBookState = function(id, values, info)
         sets[#sets + 1] = { id = id, values = values, info = info }
         return 1
     end
     states[A_ID] = { status = "reading", rating = 3 }
-    local rows = Library.detailsButtons(A_ID, full, function() end, reopen)
-    eq(#rows, plain + 2, "with Concordance: a status row and a rating row")
-    local status_row, stars = rows[#rows - 1], rows[#rows]
-    eq(status_row[1].text .. "|" .. status_row[2].text .. "|" .. status_row[3].text .. "|" .. status_row[4].text,
-        "Unread|Reading  ✓|On hold|Finished", "status buttons, the current one ticked")
-    check(status_row[2].enabled == false and status_row[4].enabled ~= false, "the current status can't be chosen again")
-    eq(stars[1].text .. stars[3].text .. stars[4].text, "★★☆", "the rating as stars")
-    status_row[4].callback()
+    local closed = 0
+    local rows = Library.detailsButtons(A_ID, full, function() closed = closed + 1 end)
+    eq(#rows, plain + 1, "with Concordance: one Read status row (no rating row)")
+    check(rows[#rows][1].text:find("Read status", 1, true) ~= nil and rows[#rows][1].align == "left",
+        "the Read status row")
+    local menu_closed = 0
+    local function closeMenu() menu_closed = menu_closed + 1 end
+    local srows = Library.statusRows(A_ID, full, closeMenu)
+    local function label(i) return (srows[i][1].text:gsub("^[^%w]*%s%s", "")) end
+    eq(#srows, 4, "four statuses, one per row")
+    eq(label(1) .. "|" .. label(2) .. "|" .. label(3) .. "|" .. label(4),
+        "Unread|Reading  ✓|On hold|Finished", "status rows, the current one ticked")
+    check(srows[2][1].enabled == false and srows[4][1].enabled ~= false and srows[1][1].align == "left",
+        "the current status can't be chosen again")
+    srows[4][1].callback()
     eq(sets[1].id .. " " .. sets[1].values.status .. " " .. sets[1].info.title .. " " .. sets[1].info.authors[1],
         A_ID .. " complete By UUID Ann", "finished: set in Concordance, with the book's title and authors")
-    eq(reopened, 1, "the details shown again")
-    stars[5].callback()
-    eq(sets[2].values.rating, 5, "five stars")
-    stars[3].callback()
-    eq(sets[3].values.rating, false, "the rating shown again: cleared")
-    status_row[1].callback()
-    eq(sets[4].values.status, false, "unread: the status cleared")
+    eq(menu_closed, 1, "the menu closed")
+    srows[1][1].callback()
+    eq(sets[2].values.status, false, "unread: the status cleared")
     states[A_ID] = nil
-    rows = Library.detailsButtons(A_ID, full, function() end, reopen)
-    check(rows[#rows - 1][1].text == "Unread  ✓" and rows[#rows - 1][1].enabled == false
-        and rows[#rows - 1][2].enabled ~= false and rows[#rows][1].text == "☆",
-        "nothing known: unread, no stars")
+    srows = Library.statusRows(A_ID, full, closeMenu)
+    check(label(1) == "Unread  ✓" and srows[1][1].enabled == false and srows[2][1].enabled ~= false,
+        "nothing known: unread")
     local notified = {}
     local real_notification = package.loaded["ui/widget/notification"]
     package.loaded["ui/widget/notification"] = {
         SOURCE_ALWAYS_SHOW = 1, notify = function(_self, text) notified[#notified + 1] = text end,
     }
     package.loaded["concordance/identity"].setBookState = function() return nil, "disk full" end
-    rows[#rows - 1][2].callback()
+    srows[2][1].callback()
     eq(notified[1], "Couldn't save the book's status.", "a failure is reported")
     package.loaded["concordance/identity"].setBookState = function() error("Concordance bug") end
-    rows[#rows - 1][2].callback()
+    srows[2][1].callback()
     eq(#notified, 2, "an error too")
-    eq(reopened, 6, "the details shown again each time")
+    eq(menu_closed, 4, "the menu closed each time")
     package.loaded["ui/widget/notification"] = real_notification
     package.loaded["concordance/identity"].setBookState = nil
     package.loaded["concordance/identity"].bookState = function() error("boom") end

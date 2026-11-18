@@ -176,7 +176,7 @@ end
 Virtual.canFetchCovers = nil -- function() -> true if covers can be downloaded now
 Virtual.requestCovers = nil  -- function(books) -> true if they'll be downloaded
 Virtual.coversBusy = nil     -- function() -> true while downloading
-Virtual.detailsButtons = nil -- function(id, full_book, close, reopen) -> ButtonDialog rows
+Virtual.detailsButtons = nil -- function(id, full_book, close) -> ButtonDialog rows
 Virtual.stateText = nil      -- function(id) -> a line on the book's status from other devices, or nil
 
 --- "ready", "pending" (can be downloaded now) or "none".
@@ -342,11 +342,7 @@ function Virtual.showDetails(path, opts)
     end
     local dialog
     local function close() UIManager:close(dialog) end
-    local function reopen()
-        close()
-        if Virtual.by_path[path] then Virtual.showDetails(path, opts) end
-    end
-    local buttons = Virtual.detailsButtons and Virtual.detailsButtons(book.id, full, close, reopen)
+    local buttons = Virtual.detailsButtons and Virtual.detailsButtons(book.id, full, close)
         or {{ { text = _("Close"), callback = close } }}
     if type(opts) == "table" and type(opts.extra_rows) == "function" then
         for _i, row in ipairs(opts.extra_rows(close) or {}) do table.insert(buttons, row) end
