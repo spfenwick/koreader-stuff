@@ -227,8 +227,9 @@ function BookSync:observe(ui)
     if not book then return nil, why end
     local values, times = self:readOpen(ui, book)
     local fresh = self.loaded and self.loaded.ui == ui and self.loaded.fresh
-    if fresh then
-        -- KOReader filled in "reading": not the user's.
+    if fresh and not (values.status == "reading" and self.deps.store:statusCleared(book.md5)) then
+        -- KOReader filled in "reading": not the user's. Unless the book was
+        -- marked unread: then opening it is reading it.
         values.status = false
     end
     local res = self.deps.store:observe{
@@ -255,13 +256,18 @@ local function deepcopy(v)
 end
 
 --- Puts summary ops (status, rating, note) into a summary table. Returns
--- whether it changed.
-local function applySummary(summary, ops, now)
+-- whether it changed. A cleared status (the book marked unread elsewhere)
+-- is removed, unless keep_status: the open book is being read.
+local function applySummary(summary, ops, now, keep_status)
     local changed = false
     for _, op in ipairs(ops) do
         if op.prop == "status" then
-            if op.value ~= nil then -- a status is never removed
+            if op.value ~= nil then
                 summary.status = op.value
+                summary.modified = os.date("%Y-%m-%d", op.updated > 0 and op.updated or now)
+                changed = true
+            elseif not keep_status and summary.status ~= nil then
+                summary.status = nil
                 summary.modified = os.date("%Y-%m-%d", op.updated > 0 and op.updated or now)
                 changed = true
             end
@@ -406,7 +412,7 @@ function BookSync:apply(ui, force)
             summary = {}
             ui.doc_settings:saveSetting("summary", summary)
         end
-        applySummary(summary, summary_ops, self.deps.now())
+        applySummary(summary, summary_ops, self.deps.now(), true)
         local BookList = self:_bookList()
         if BookList and BookList.setBookInfoCacheProperty then
             BookList.setBookInfoCacheProperty(book.path, "status", summary.status)

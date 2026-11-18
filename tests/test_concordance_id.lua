@@ -623,8 +623,12 @@ do
     Identity.changed()
     st = Identity.bookState({ U[5] })
     check(st.status == "complete" and st.rating == nil, "cleared rating applies")
-    check(Identity.setBookState(U[5], { status = false, hist = 5, rating = 9, status2 = 1 }) == 0,
-        "no clearing the status, no history, bad values skipped")
+    check(Identity.setBookState(U[5], { hist = 5, rating = 9, status = "done" }) == 0,
+        "no history, bad values skipped")
+    check(Identity.setBookState(U[5], { status = false }) == 1, "marked unread: the status cleared")
+    Identity.changed()
+    st = Identity.bookState({ U[5] })
+    check(st == nil or st.status == nil, "unread: no status")
     check(Identity.setBookState(U[5], { rating = false }) == 0, "clearing what's clear: nothing")
     local okn, err = Identity.setBookState("not-a-uuid", { status = "complete" })
     check(okn == nil and err, "not a UUID: an error")
@@ -645,8 +649,8 @@ do
     local R = BookStore.new{ sq3 = S.SQ3, state_path = TMP .. "/R.sqlite3" }
     check(R:importSegment(out, "devC", "book-0000000001.jsonl", bexp.size, nil, 1), "another device takes it")
     conn = R:open()
-    check(conn:rowexec("SELECT value FROM book_merged WHERE md5 = '" .. key .. "' AND prop = 'status'") == '"complete"',
-        "the cloud book's status, received")
+    check(conn:rowexec("SELECT deleted FROM book_merged WHERE md5 = '" .. key .. "' AND prop = 'status'") == 1,
+        "the cloud book's status (unread: cleared), received")
     conn:close()
 end
 

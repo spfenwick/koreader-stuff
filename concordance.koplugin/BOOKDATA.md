@@ -113,6 +113,24 @@ sync. When a group changes, its books' closed-book
 writes are looked at again and they count as changed for the open book,
 so a link that arrives after the values did needs nothing more.
 
+### Unread
+
+Added in 0.3.4. A cleared status (`x` record for `status`) marks the book
+unread: Athenæum's Unread button on a cloud book makes one
+(`Identity.setBookState`). KOReader has no unread status; a book without
+one is "new". So:
+
+- Closed books get their status removed (the rating and review stay).
+- The open book keeps its status: it's being read. The clear is written
+  once it's closed, unless it's been changed since.
+- Opening a book marked unread is reading it: KOReader's "reading" is then
+  recorded as a change made now, later than the clear, instead of being
+  the weakest value.
+- A sidecar losing its status is still never taken for a clear. Only
+  Athenæum's button makes one.
+- Older versions (0.3.3 and before) never remove a status: their copies
+  keep theirs until opened and changed.
+
 ### Reset settings
 
 KOReader's "Reset settings" (and a deleted `.sdr` folder) leaves a sidecar

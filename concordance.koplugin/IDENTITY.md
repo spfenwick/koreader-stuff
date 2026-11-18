@@ -440,7 +440,8 @@ adds a link naming that UUID (`src` `link`, like Athenæum's matches):
   (level 1: status, rating, review, custom metadata, collections). Nothing
   is ever withdrawn: `retract` only looks at files.
 - Values: properties about the book (`BookFormat.isGroupProp`), not the
-  history; the status can be changed but not cleared, as in KOReader.
+  history. A cleared status marks the book unread (0.3.4): see BOOKDATA.md,
+  "Unread".
   `BookStore:setBook` records them as changes made now, and later than the
   record they replace, whatever the clocks say: they were made from the
   state shown, which `bookState` gave across every version.

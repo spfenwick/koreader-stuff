@@ -1084,7 +1084,9 @@ end
 
 --- Buttons for a cloud book's details sheet, one action per row as in
 -- ZenOS's book menu (tapping outside closes it). close() closes the sheet.
-local STATUS_ORDER = { "reading", "abandoned", "complete" }
+-- "unread": no status (KOReader's "new"); setting it clears the status, on
+-- every device (Concordance 0.3.4).
+local STATUS_ORDER = { "unread", "reading", "abandoned", "complete" }
 
 -- With Concordance: rows to set the book's status and rating from here,
 -- where it has no file (Concordance's Identity.setBookState). Tapping the
@@ -1104,12 +1106,13 @@ local function stateRows(id, full, reopen)
         if reopen then reopen() end
     end
     local status_row = {}
+    local shown = STATUS_TEXT[st.status] and st.status or "unread"
     for _i, status in ipairs(STATUS_ORDER) do
-        local current = st.status == status
+        local current = shown == status
         status_row[#status_row + 1] = {
-            text = STATUS_TEXT[status] .. (current and "  ✓" or ""),
+            text = (status == "unread" and _("Unread") or STATUS_TEXT[status]) .. (current and "  ✓" or ""),
             enabled = not current,
-            callback = function() set({ status = status }) end,
+            callback = function() set({ status = status ~= "unread" and status or false }) end,
         }
     end
     local rating = tonumber(st.rating)

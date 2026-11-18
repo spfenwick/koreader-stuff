@@ -107,10 +107,10 @@ end
 
 --- Sets the status, rating or other properties of a catalog book from a
 -- device that has no file of it (a cloud book in Athenæum). uuid: the
--- catalog's ID for the book. values: { status = "complete", rating = 4 or
--- false (clear), note = …, ["coll.<id>"] = true or false } (properties
--- about the book: BookFormat.isGroupProp; not the history; the status can't
--- be cleared). info: { title, authors (a string, or a list) }.
+-- catalog's ID for the book. values: { status = "complete" or false
+-- (unread: devices then remove the book's status), rating = 4 or false
+-- (clear), note = …, ["coll.<id>"] = true or false } (properties about the
+-- book: BookFormat.isGroupProp; not the history). info: { title, authors (a string, or a list) }.
 -- Recorded under the book's key (BookFormat.uuidKey) with an identity link
 -- naming the UUID, so the book's files join it on every device; sent with
 -- the next sync. Returns the number of properties changed, or nil and an

@@ -610,6 +610,66 @@ do
     check(cm and cm.custom_props.title == "The Tome", "open book: custom metadata file written")
 end
 
+-- Unread: a cleared status (a cloud book marked unread in Athenaeum) ----------------------
+do
+    local a, b = newDev("unread-a"), newDev("unread-b")
+    local MD = string.rep("e", 32)
+    local pa = a:book("unread", { partial_md5_checksum = MD, doc_props = { title = "Unread" },
+                                  summary = { status = "complete", rating = 4, modified = "2026-01-01" } })
+    local pb = b:book("unread", { partial_md5_checksum = MD, doc_props = { title = "Unread" },
+                                  summary = { status = "complete", rating = 4, modified = "2026-01-01" } })
+    a.sync:refresh(); a:run()
+    b.sync:refresh(); b:run()
+    a:send(b)
+    b:send(a)
+    tick(100)
+    local done = a.store:setBook(MD, { status = false }, { now = clock, device = "unread-a" })
+    check(done.changed == 1 and a:merged(MD, "status") == "(cleared)", "status cleared: marked unread")
+    check(a.store:statusCleared(MD), "marked unread")
+    check(a:send(b) == 1, "the clear sent")
+    b.sync:afterSync(nil); b:run()
+    local sb = readSidecar(pb).summary
+    check(sb.status == nil and sb.rating == 4, "B's closed book: status removed, rating kept")
+    b.sync:refresh(); b:run()
+    check(b.store:counts().outbox == 0 and b.store:counts().write == 0, "B: nothing echoed, nothing left to write")
+
+    -- B opens it: KOReader sets "reading", which this time is the user's.
+    tick(100)
+    local doc = { partial_md5_checksum = MD, summary = sb }
+    local ub = {
+        rolling = true, document = { file = pb }, doc_props = { title = "Unread" },
+        doc_settings = { readSetting = function(_, k) return doc[k] end, saveSetting = function(_, k, v) doc[k] = v end,
+                         getCustomMetadataFile = function() end },
+        handleEvent = function() end,
+    }
+    ub.dialog = ub
+    b.ui = ub
+    b.cache[pb] = nil -- the stand-in cache was reset by the write
+    b.sync:onReadSettings(ub, { readSetting = function(_, k) return doc[k] end })
+    doc.summary = { status = "reading", rating = 4, modified = os.date("%Y-%m-%d", clock) } -- what ReaderUI does next
+    b.sync:onReaderReady(ub)
+    check(doc.summary.status == "reading", "opened after being marked unread: reading")
+    local v, upd = b:merged(MD, "status")
+    check(v == "reading" and upd > clock - 100, "recorded as a change made now (" .. tostring(v) .. ")")
+    check(not b.store:statusCleared(MD), "no longer unread")
+    tick(5)
+    b.sync:onClose(ub)
+    b.ui = nil
+    check(b:send(a) == 1, "the reading sent")
+    a.sync:afterSync(nil); a:run()
+    check(readSidecar(pa).summary.status == "reading", "A's closed book: reading")
+
+    -- Marked unread while open elsewhere: the open book keeps its status.
+    tick(100)
+    a.store:setBook(MD, { status = false }, { now = clock, device = "unread-a" })
+    a:send(b)
+    doc.summary = { status = "reading", modified = os.date("%Y-%m-%d", clock) }
+    b.ui = ub
+    b.sync:afterSync({ book_affected = { [MD] = true } }); b:run()
+    check(doc.summary.status == "reading", "the open book keeps its status while it's read")
+    b.ui = nil
+end
+
 -- Books never opened here: the library's files (from Athenaeum) ---------------------------
 do
     local a, b = newDev("unopened-a"), newDev("unopened-b")

@@ -2,5 +2,5 @@ local _ = require("gettext")
 return {
     fullname = _("Athenæum"),
     description = _([[Formerly Cloud library. Shows every book in your OPDS library in the file browser, downloaded or not. Needs ZenOS.]]),
-    version = "0.9.4",
+    version = "0.9.5",
 }

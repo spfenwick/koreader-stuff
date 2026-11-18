@@ -404,7 +404,10 @@ function BookStore:_observeIn(conn, opts)
         elseif not same and (first or prev ~= s.hash) then
             local upd
             if prop == "status" and (first or prev == "") and AnnFormat.decodeValue(s.json) == "reading" then
-                upd = 0
+                -- KOReader's "reading" on opening a book without a status is
+                -- as old as can be; but opening a book marked unread (its
+                -- status cleared) is reading it, after that.
+                upd = m and m.deleted and math.max(now, m.updated + 1) or 0
             elseif first then
                 upd = times[prop] or 0
             else
@@ -422,8 +425,8 @@ end
 --- Sets properties of a book that has no file here (a catalog book, under
 -- its key, BookFormat.uuidKey) as this device's changes. values: { [prop]
 -- = value, or false to clear }, properties about the book only
--- (BookFormat.isGroupProp; not the history, and the status can't be
--- cleared). opts: now, device, title, authors. A value that's already what
+-- (BookFormat.isGroupProp; not the history; a cleared status marks the
+-- book unread). opts: now, device, title, authors. A value that's already what
 -- applies to the book (its versions' records too) changes nothing; a change
 -- is later than the record it replaces, whatever the clocks say, as it was
 -- made from what was shown. Returns { changed, skipped }.
@@ -441,8 +444,7 @@ function BookStore:setBook(md5, values, opts)
         local res = { changed = 0, skipped = skipped }
         for prop, s in pairs(snap) do
             local m = eff[prop]
-            if not BookFormat.isGroupProp(prop) or prop == BookFormat.HISTORY
-                    or (prop == "status" and s.hash == "") then
+            if not BookFormat.isGroupProp(prop) or prop == BookFormat.HISTORY then
                 res.skipped = res.skipped + 1
             elseif not (s.hash == "" and (not m or m.deleted)) and not (m and not m.deleted and m.hash == s.hash) then
                 local upd = math.max(opts.now, m and m.updated + 1 or 0)
@@ -459,6 +461,15 @@ function BookStore:setBook(md5, values, opts)
         -- This device's files of the book get the change once closed.
         if res.changed > 0 then updateWriteGroups(conn, { [md5] = true }) end
         return res
+    end)
+end
+
+--- Whether the book was marked unread: the status that applies to it (its
+-- versions' records too) is a clear.
+function BookStore:statusCleared(md5)
+    return self:_read(function(conn)
+        local m = loadEffective(conn, md5).status
+        return m ~= nil and m.deleted == true
     end)
 end
 
