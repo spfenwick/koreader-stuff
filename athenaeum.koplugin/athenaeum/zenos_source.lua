@@ -11,7 +11,8 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   cached folder listings, via listingKey(): a listing is rebuilt when the
   cloud books in it change, and one saved before the plugin was removed
   isn't reused
-  reading status and rating from other devices (from Concordance), via
+  reading status, rating and the date a book was finished from other
+  devices (from Concordance), via
   status(), for cloud books and for the library's downloaded books not
   opened here: ZenOS shows them as it does a local book's (read-only; ZenOS
   asks only about books without a sidecar, so a book opened here keeps its
@@ -37,7 +38,7 @@ local Guard = require("athenaeum/guard")
 local ZenSource = {
     registered = false,
     enabled = nil, -- function() -> true to list cloud books in groups
-    state = nil,   -- function(path) -> { status, rating } or nil
+    state = nil,   -- function(path) -> { status, rating, finished_at } or nil
 }
 
 local MODULE = "common/book_sources"
@@ -197,7 +198,8 @@ end
 -- Cloud books and the library's files (see ZenSource.state).
 local function status(path)
     local state = ZenSource.state and ZenSource.state(path)
-    return type(state) == "table" and { status = state.status, rating = state.rating } or nil
+    return type(state) == "table"
+        and { status = state.status, rating = state.rating, finished_at = state.finished_at } or nil
 end
 
 --- Registers the source. Returns false when ZenOS refuses it (the startup

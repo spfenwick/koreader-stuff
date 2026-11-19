@@ -632,7 +632,8 @@ end
 
 --- The state of every book known by a UUID, as another plugin shows it
 -- for a book that may not be on this device (Athenaeum's cloud books):
--- { [uuid] = { status, rating, last_read, last_device } }. A UUID's book is
+-- { [uuid] = { status, status_at, rating, last_read, last_device } }, status_at
+-- being when the status was set (Unix time; 0 when not known). A UUID's book is
 -- every file whose identity facts name it, with their joined versions; each
 -- property is the winner across them. used = IdStore.usedFacts(conn).
 -- A UUID named by files that aren't all one joined book (different books
@@ -699,6 +700,7 @@ function BookStore:statesByUuid(usedFacts)
             }
             if st.last_read then st.last_device = best[HIST].device end
             if type(st.status) ~= "string" or not BookFormat.STATUSES[st.status] then st.status = nil end
+            if st.status then st.status_at = best.status.updated end
             if st.status or st.rating or st.last_read then out[uuid] = st end
         end
         return out

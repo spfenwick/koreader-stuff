@@ -98,7 +98,14 @@ Its `status()` returns only `{status}`.
 
 **Partly fixed 2026-11-18 (Athenæum 0.9.2):** `status()` now gives the
 rating as well, and answers for the library's downloaded books that haven't
-been opened here, not just cloud books. `finished_at` is still missing.
+been opened here, not just cloud books.
+
+**Fixed 2026-11-19:** Concordance's `bookState` now returns `status_at`, the
+time of the winning status record (`updated`). Athenæum passes it to ZenOS
+as `finished_at` for finished books, so books finished on another device
+count in "finished this month/year". The date is when Concordance first
+noticed the change (book closed, sync, or sidecar re-read), not the exact
+moment the book was finished.
 
 ### 6. Two separate OPDS readers
 
@@ -117,5 +124,5 @@ apart.
 ## Suggested order
 
 1. #1: it can lose data and send clears to other devices.
-2. #5: small, and fills in data ZenOS already supports.
+2. ~~#5~~ (done).
 3. #4.

@@ -537,6 +537,8 @@ do
     local s1 = states[U[1]]
     check(s1 and s1.status == "complete" and s1.rating == 4 and s1.last_read == 1700000000 and s1.last_device == "devB",
         "state: newest status, the linked PDF's rating, last read")
+    check(s1.status_at == 20, "state: when the status was set")
+    check(states[U[9]].status_at == nil, "no status: no status time")
     check(states[U[4]] and states[U[4]].status == "complete", "state through the joined group (another UUID)")
     check(states[U[9]] and states[U[9]].rating == 2 and states[U[9]].status == nil, "a book on its own")
     check(states[U[5]] == nil, "nothing known: no state")

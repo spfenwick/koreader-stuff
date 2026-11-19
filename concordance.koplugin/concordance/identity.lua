@@ -5,9 +5,11 @@ finding it as package.loaded["concordance/identity"] (nothing is shared when
 Concordance isn't installed). See IDENTITY.md, "Athenaeum's side".
 
     Identity.available()        true once Concordance has set it up
-    Identity.bookState(uuids)   { status, rating, last_read, last_device }
-                                for the book with one of these UUIDs, from
-                                every device's book data, or nil
+    Identity.bookState(uuids)   { status, status_at, rating, last_read,
+                                last_device } for the book with one of these
+                                UUIDs, from every device's book data, or nil;
+                                status_at is when the status was set (Unix
+                                time, 0 when not known)
     Identity.fileAdded(path)    a book file just arrived (a download): read
                                 its identity now, so its versions' book data
                                 and annotations apply when it's first opened
@@ -92,7 +94,8 @@ function Identity.bookState(uuids)
         if st then found = st; break end
     end
     if not found then return nil end
-    local out = { status = found.status, rating = found.rating, last_read = found.last_read }
+    local out = { status = found.status, status_at = found.status_at, rating = found.rating,
+                  last_read = found.last_read }
     if found.last_device then
         if found.last_device == deps.device_id() then
             out.last_device = Identity.THIS_DEVICE

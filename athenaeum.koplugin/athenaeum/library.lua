@@ -450,8 +450,8 @@ function Library.redrawStates()
     end
 end
 
---- A cloud book's state from Concordance: { status, rating, last_read,
--- last_device }, or nil.
+--- A cloud book's state from Concordance: { status, status_at, rating,
+-- last_read, last_device }, or nil.
 function Library.bookState(id)
     local Identity = type(id) == "string" and Library.identity()
     if not Identity or type(Identity.bookState) ~= "function" then return nil end
@@ -572,7 +572,10 @@ end
 ZenSource.state = function(path)
     local st = stateForPath(path)
     if not st or not (st.status or st.rating) then return nil end
-    return { status = st.status, rating = st.rating }
+    -- A finished book's date counts it in ZenOS's books finished this month
+    -- and year (0, not known, is left out by ZenOS).
+    local finished_at = st.status == "complete" and tonumber(st.status_at) or nil
+    return { status = st.status, rating = st.rating, finished_at = finished_at }
 end
 
 function Library.installHistory()

@@ -1898,10 +1898,11 @@ do
     -- library gives them (ZenSource.state, tested with Concordance below).
     local real_state = ZenSource.state
     ZenSource.state = function(path)
-        return path == "/lib/cloud-c1.epub" and { status = "complete", rating = 4 } or nil
+        return path == "/lib/cloud-c1.epub" and { status = "complete", rating = 4, finished_at = 1700000000 } or nil
     end
     local st = source.status("/lib/cloud-c1.epub")
     eq(st.status .. " " .. st.rating, "complete 4", "status and rating of a cloud book")
+    eq(st.finished_at, 1700000000, "when it was finished")
     eq(source.status("/lib/a.epub"), nil, "nothing known: nothing given")
     ZenSource.state = function() return nil end
     eq(source.status("/lib/cloud-c1.epub"), nil, "no state: no status")
@@ -2049,9 +2050,13 @@ do
     eq(ZenSource.state("/lib/elsewhere.epub"), nil, "no state for books not in the catalog")
     -- The library's downloaded books (ZenOS asks only while they have no
     -- sidecar here): their catalog book's state, with the rating.
-    states[A_ID] = { status = "complete", rating = 5 }
+    states[A_ID] = { status = "complete", status_at = 1700000000, rating = 5 }
     local st = ZenSource.state("/lib/a.epub")
     eq(st and (st.status .. " " .. st.rating), "complete 5", "a matched file gets its book's state")
+    eq(st.finished_at, 1700000000, "finished: the status's date")
+    states[A_ID] = { status = "reading", status_at = 1700000000 }
+    eq(ZenSource.state("/lib/a.epub").finished_at, nil, "not finished: no date")
+    states[A_ID] = { status = "complete", rating = 5 }
     eq(Badge.cloudState("/lib/a.epub"), nil, "no cloud badge for a downloaded book")
     Library.copies = { ["/lib/a copy.epub"] = A_ID }
     Library.on_device["/lib/a copy.epub"] = true
