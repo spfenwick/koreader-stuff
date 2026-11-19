@@ -18,6 +18,12 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   asks only about books without a sidecar, so a book opened here keeps its
   own)
 
+Not history(): cloud books read elsewhere are already in ReadHistory.hist
+(Concordance puts them there, athenaeum/history.lua keeps them), which
+every history view reads, ZenOS's History tab included. Giving them
+through history() as well would make two paths for the same entries; see
+INFORMATION_ARCHITECTURE.md, #4.
+
 Also, until ZenOS does these itself:
   getGroupedByTags     each book once per tag (ZenOS adds a book again for
                        each time a tag appears in its keywords)

@@ -87,6 +87,17 @@ dismissal handling, but Athenæum doesn't use it. Choose one. The hook is
 cleaner, but without the patches cloud books would disappear from KOReader's
 own History view.
 
+**Decided 2026-11-19: keep the patches; Athenæum doesn't supply
+`history()`.** Cloud entries stay in `ReadHistory.hist`, because every
+history view reads it. ZenOS's History tab is KOReader's `FileManagerHistory`
+restyled, so it reads `ReadHistory.hist` directly. Only Home and the book
+switcher go through `book_sources.mergeHistory`. With the hook alone, cloud
+books would drop out of ZenOS's History tab as well as KOReader's. Removing
+an entry already works: ZenOS's "Remove from history" removes it from
+`ReadHistory` and calls `dismissHistory`, and Concordance doesn't put it back
+unless the book is read again later. The cost is that Athenæum depends on
+`ReadHistory` internals, which Guard turns off if they change.
+
 ### 5. Athenæum gives ZenOS less than the book-source contract allows
 
 Its `status()` returns only `{status}`.
@@ -125,4 +136,4 @@ apart.
 
 1. #1: it can lose data and send clears to other devices.
 2. ~~#5~~ (done).
-3. #4.
+3. ~~#4~~ (decided: keep the patches).
