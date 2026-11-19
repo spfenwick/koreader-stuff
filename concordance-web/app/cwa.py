@@ -3,8 +3,11 @@
 Matching: Concordance's book identity records each file's UUIDs, which include
 the Calibre library UUID, and that UUID is the <id> of the book's OPDS entry.
 So the catalog ("all books", /opds/books/letter/00, page by page) is read
-once a day into a UUID -> cover link map. Files that carry a calibre:<id>
-identifier match by ID as well.
+once a day into a UUID -> cover link map. Files match by UUID only, as on a
+device: Athenaeum's matches by title (and of PDFs) arrive as identity links
+naming the UUID. A Calibre book ID (calibre:<id>) is only unique within one
+library, so a file whose UUID isn't in the catalog (from another library,
+most likely) isn't matched by it.
 
 Covers are fetched by the app (the browser never sees the CWA login), kept
 in <data dir>/covers/, and checked again with If-None-Match after a week.
@@ -114,10 +117,8 @@ class CWA:
         self.crawl_lock = threading.Lock()
         self.fetch_locks: dict[str, threading.Lock] = {}
         self.by_uuid: dict[str, str] = {}   # Calibre UUID -> cover href (absolute)
-        self.by_id: dict[int, str] = {}     # Calibre book ID -> cover href
         # Calibre UUID (or "id:<n>") -> {"desc", "tags", "series", "series_index", "series_pos"}
         self.info: dict[str, dict] = {}
-        self.info_ids: dict[int, str] = {}  # Calibre book ID -> key in info
         self.version = 0                    # of the saved catalog
         self.catalog_url = ""               # the server the catalog was read from
         self.read_at: float | None = None
@@ -224,10 +225,10 @@ class CWA:
             return
         self.crawling = True
         try:
-            by_uuid, by_id, info, info_ids, count = self._crawl()
+            by_uuid, info, count = self._crawl()
             with self.lock:
-                self.by_uuid, self.by_id, self.books = by_uuid, by_id, count
-                self.info, self.info_ids, self.version = info, info_ids, CATALOG_VERSION
+                self.by_uuid, self.books = by_uuid, count
+                self.info, self.version = info, CATALOG_VERSION
                 self.catalog_url = self.url
                 self.read_at = time.time()
                 self.last_error = ""
@@ -255,9 +256,7 @@ class CWA:
         if not url:
             raise CWAError("No \"All\" entry in the catalog's alphabetical index.")
         by_uuid: dict[str, str] = {}
-        by_id: dict[int, str] = {}
         info: dict[str, dict] = {}
-        info_ids: dict[int, str] = {}
         count = 0
         for page_url, feed in self._pages(url):
             for entry in feed.findall(ATOM + "entry"):
@@ -265,24 +264,17 @@ class CWA:
                 if book is None:
                     continue
                 count += 1
-                key, uuid, calibre_id, cover = book
+                key, uuid, _, cover = book
                 data = self._entry_info(entry)
                 if key and data:
                     info[key] = data
-                    if calibre_id is not None:
-                        info_ids[calibre_id] = key
-                if not cover:
-                    continue
-                href = urllib.parse.urljoin(page_url, cover)
-                if uuid:
-                    by_uuid[uuid] = href
-                if calibre_id is not None:
-                    by_id[calibre_id] = href
+                if cover and uuid:
+                    by_uuid[uuid] = urllib.parse.urljoin(page_url, cover)
         try:
-            self._crawl_series(root_url, root, info, info_ids)
+            self._crawl_series(root_url, root, info)
         except CWAError as e:  # series hidden for this user, say: the rest still counts
             log.info("CWA series: %s", e)
-        return by_uuid, by_id, info, info_ids, count
+        return by_uuid, info, count
 
     def _pages(self, url: str):
         """(url, feed) for each page of a paged feed, following "next" links."""
@@ -341,7 +333,7 @@ class CWA:
             data["tags"] = tags
         return data
 
-    def _crawl_series(self, root_url: str, root: ET.Element, info: dict, info_ids: dict) -> None:
+    def _crawl_series(self, root_url: str, root: ET.Element, info: dict) -> None:
         """Adds each book's series (and place in it) from the series feeds."""
         series_url = self._section(root, root_url, "/series")
         if not series_url:
@@ -365,12 +357,10 @@ class CWA:
                     if book is None:
                         continue
                     pos += 1
-                    key, _, calibre_id, _ = book
+                    key = book[0]
                     if not key:
                         continue
                     data = info.setdefault(key, {})
-                    if calibre_id is not None:
-                        info_ids.setdefault(calibre_id, key)
                     if data.get("series") not in (None, name):
                         data.pop("series_index", None)  # the entry text named another series
                     data["series"], data["series_pos"] = name, pos
@@ -394,9 +384,7 @@ class CWA:
     def _save_catalog(self) -> None:
         with self.lock:
             data = {"version": self.version, "url": self.catalog_url, "read_at": self.read_at,
-                    "books": self.books, "by_uuid": self.by_uuid,
-                    "by_id": {str(k): v for k, v in self.by_id.items()},
-                    "info": self.info, "info_ids": {str(k): v for k, v in self.info_ids.items()}}
+                    "books": self.books, "by_uuid": self.by_uuid, "info": self.info}
         tmp = self.catalog_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data))
         tmp.replace(self.catalog_path)
@@ -408,13 +396,10 @@ class CWA:
             self.read_at = data.get("read_at")
             self.books = data.get("books", 0)
             self.by_uuid = dict(data.get("by_uuid", {}))
-            self.by_id = {int(k): v for k, v in data.get("by_id", {}).items()}
             if "info" in data:
                 self.info = dict(data["info"])
-                self.info_ids = {int(k): v for k, v in data.get("info_ids", {}).items()}
             else:  # version 2: descriptions only, until it's read again
                 self.info = {k: {"desc": v} for k, v in data.get("descs", {}).items()}
-                self.info_ids = {int(k): v for k, v in data.get("desc_ids", {}).items()}
             self.version = data.get("version", 1)
         except (OSError, ValueError, AttributeError):
             pass
@@ -429,8 +414,8 @@ class CWA:
     def forget(self) -> None:
         """Drops the catalog and kept covers (the server changed or was removed)."""
         with self.lock:
-            self.by_uuid, self.by_id, self.books = {}, {}, 0
-            self.info, self.info_ids, self.version = {}, {}, 0
+            self.by_uuid, self.books = {}, 0
+            self.info, self.version = {}, 0
             self.catalog_url, self.read_at, self.last_error = "", None, ""
         self.catalog_path.unlink(missing_ok=True)
         if self.dir.exists():
@@ -439,7 +424,7 @@ class CWA:
 
     # Covers --------------------------------------------------------------------------
 
-    def cover_href(self, uuids, calibre_ids) -> str | None:
+    def cover_href(self, uuids) -> str | None:
         if not self.configured or self.catalog_url != self.url:
             return None
         with self.lock:
@@ -447,13 +432,9 @@ class CWA:
                 href = self.by_uuid.get(u)
                 if href:
                     return href
-            for i in calibre_ids:
-                href = self.by_id.get(i)
-                if href:
-                    return href
         return None
 
-    def metadata(self, uuids, calibre_ids) -> dict:
+    def metadata(self, uuids) -> dict:
         """What the catalog says about a book: desc, tags, series, series_index,
         series_pos (each only if known). Empty when it isn't in the catalog."""
         if not self.configured or self.catalog_url != self.url:
@@ -462,17 +443,13 @@ class CWA:
             for u in uuids:
                 if u in self.info:
                     return self.info[u]
-            for i in calibre_ids:
-                key = self.info_ids.get(i)
-                if key in self.info:
-                    return self.info[key]
         return {}
 
-    def description(self, uuids, calibre_ids) -> str:
-        return self.metadata(uuids, calibre_ids).get("desc", "")
+    def description(self, uuids) -> str:
+        return self.metadata(uuids).get("desc", "")
 
     def matched(self, books) -> int:
-        return sum(1 for b in books if self.cover_href(b.uuids, b.calibre_ids))
+        return sum(1 for b in books if self.cover_href(b.uuids))
 
     def cover(self, href: str) -> tuple[bytes, str] | None:
         """The image at href (from the cache, fetched or checked as needed), or None."""

@@ -8,7 +8,7 @@ import os
 import re
 from pathlib import Path
 
-VERSION = "0.2.6"
+VERSION = "0.2.7"
 
 
 def _concordance_version() -> str | None:

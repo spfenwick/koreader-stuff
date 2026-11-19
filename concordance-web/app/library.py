@@ -247,7 +247,6 @@ class Book:
     superseded: list[Annotation] = field(default_factory=list)
     collections: list[str] = field(default_factory=list)  # collection ids
     uuids: list[str] = field(default_factory=list)  # from book identity, for matching a catalog
-    calibre_ids: list[int] = field(default_factory=list)
     # What the library's catalog (Calibre-Web) says: desc, tags, series,
     # series_index, series_pos. Set by the app; KOReader's own metadata wins.
     catalog: dict = field(default_factory=dict, repr=False)
@@ -559,11 +558,11 @@ class Library:
                 annotations.append(Annotation(md5, kind, key, updated, device, f))
                 edition(md5).kinds.add(kind)
 
-        # Identifiers the files carry (book identity), for finding covers.
+        # The UUIDs of each file (book identity: the file's own, and links from
+        # Athenaeum naming its catalog book), for finding covers.
         file_uuids: dict[str, set] = {}
         for uuid, md5 in state.execute("SELECT uuid, md5 FROM id_uuids"):
             file_uuids.setdefault(md5, set()).add(uuid.lower())
-        file_ids: dict[str, set] = {}
         for md5, src, sig, device in state.execute("SELECT md5, src, sig, device FROM id_facts"):
             e = editions.get(md5)
             if e is not None:
@@ -571,11 +570,6 @@ class Library:
                 e.reported_by.add(device)
                 if sig and not e.sig:
                     e.sig = sig
-        for md5, ids in state.execute("SELECT md5, ids FROM id_facts WHERE ids IS NOT NULL"):
-            for ident in ids.split("\n"):
-                scheme, _, value = ident.partition(":")
-                if scheme.lower() == "calibre" and value.strip().isdigit():
-                    file_ids.setdefault(md5, set()).add(int(value))
 
         # Groups: files the plugin joined as one book, then files without an
         # identity record by title.
@@ -629,7 +623,6 @@ class Library:
                     e.text = letters.setdefault(e.sig, chr(ord("A") + len(letters)))
             for e in eds:  # the most-read file's identifiers first
                 book.uuids += sorted(file_uuids.get(e.md5, set()) - set(book.uuids))
-                book.calibre_ids += sorted(file_ids.get(e.md5, set()) - set(book.calibre_ids))
             book.collections = sorted(p[5:] for p, r in merged.items() if p.startswith("coll.") and not r.deleted and r.value)
             books[book.id] = book
             for m in md5s:

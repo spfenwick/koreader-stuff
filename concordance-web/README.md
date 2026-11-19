@@ -91,9 +91,12 @@ Under Settings, enter your CWA server's OPDS address (the one KOReader's
 OPDS catalog uses, e.g. `https://books.example.com/opds`) and its login, then
 "Save and test". The app reads the catalog (all books, page by page) and
 matches books by their Calibre UUID: OPDS entries are identified by it, and
-Concordance's book identity records it from each EPUB. Files carrying a
-`calibre:<id>` identifier match by ID too. Books without a match keep the
-coloured spine.
+Concordance's book identity records it from each EPUB. Books Athenæum matched
+on a device by title (or PDFs and other files without a UUID) match too: it
+records those matches as identity links naming the UUID. That's the same
+rule a device uses, so a book matches here exactly when it does there. A
+Calibre book ID (`calibre:<id>` in a file) isn't used: it's only unique
+within one Calibre library. Books without a match keep the coloured spine.
 
 Book descriptions and tags come from the catalog too. Series come from the
 catalog's series feeds (`/opds/series`), which list each series' books in
@@ -107,7 +110,8 @@ KOReader (custom metadata) come first.
   after a week; the catalog is read again daily, or on "Read the catalog
   again".
 - Only books a device has sent book identity for can match (Concordance 0.6 or
-  later, "Highlights and books" on), and PDFs carry no UUID.
+  later, "Highlights and books" on). PDFs carry no UUID, so they match only
+  through Athenæum's links.
 - The login is kept in `/cache/settings.json`, readable only by the app's
   user. Anyone who can use the web interface can change the server it
   fetches from, so protect the interface (password or proxy).

@@ -62,7 +62,7 @@ env.filters.update(duration=formatting.duration, when=formatting.when, day=forma
 
 
 def cover_url(book) -> str | None:
-    return f"/cover/{book.id}" if cwa.cover_href(book.uuids, book.calibre_ids) else None
+    return f"/cover/{book.id}" if cwa.cover_href(book.uuids) else None
 
 
 def books_url(request: Request, drop: str) -> str:
@@ -79,7 +79,7 @@ def snapshot():
     """library.snapshot(), with what the catalog says attached to each book."""
     snap = library.snapshot()
     for b in snap[0].values():
-        b.catalog = cwa.metadata(b.uuids, b.calibre_ids)
+        b.catalog = cwa.metadata(b.uuids)
     return snap
 
 
@@ -316,7 +316,7 @@ async def book_page(request: Request):
             chapters.append((a.md5, a.chapter, []))
         chapters[-1][2].append(a)
     # A description set in KOReader comes first, then the library's (Calibre-Web).
-    description = plain_text(book.description) or cwa.description(book.uuids, book.calibre_ids)
+    description = plain_text(book.description) or cwa.description(book.uuids)
     return render(request, "book.html", book=book, sessions=sessions, chart=chart, chart_scope=scope,
                   chapters=chapters, collections=collections, description=description,
                   multi=len({a.md5 for a in book.annotations}) > 1)
@@ -571,7 +571,7 @@ async def sync_now(request: Request):
 async def cover(request: Request):
     _, by_md5, _, _, _, _ = snapshot()
     book = by_md5.get(request.path_params["id"])
-    href = book and cwa.cover_href(book.uuids, book.calibre_ids)
+    href = book and cwa.cover_href(book.uuids)
     if not href:
         raise HTTPException(404, "No cover")
     got = await asyncio.to_thread(cwa.cover, href)

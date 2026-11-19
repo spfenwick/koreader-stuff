@@ -88,7 +88,7 @@ else
 fi
 # Plugin versions on the status page, the Pixel's Concordance marked as behind.
 status=$(curl -sf "$base/status")
-if echo "$status" | grep -q 'Athenæum 0.7.1' && echo "$status" | grep -q 'class="behind"[^>]*>Concordance 0.2.2<' \
+if echo "$status" | grep -q 'Athenæum 0.9.6' && echo "$status" | grep -q 'class="behind"[^>]*>Concordance 0.2.2<' \
     && echo "$status" | grep -q 'ZenOS 4.3.1' && echo "$status" | grep -q '>KOReader 2025.10-58<' \
     && echo "$status" | grep -q 'class="behind"[^>]*>KOReader 2025.10<'; then
     echo "200 plugin versions shown"

@@ -138,6 +138,17 @@ match the catalog themselves. concordance-web already runs Concordance's Lua
 modules, but it doesn't run Athenæum's matcher, so their rules can drift
 apart.
 
+**Resolved 2026-11-19 (concordance-web 0.2.7):** the premise was mostly out
+of date. The server has no book files, so it can't run a file matcher; it
+already gets Athenæum's matches: title matches and PDFs arrive as
+Concordance `link` facts in `id_uuids`, beside each EPUB's own UUID. The one
+rule only the server had, matching a file by its `calibre:<id>`, is removed:
+a Calibre book ID is only unique within one library, so it mostly matched
+files from another library to the wrong book. Both sides now match a file to
+a catalog book the same way: its UUID, or Athenæum's link. Each still reads
+the catalog's metadata itself, which is fine: they both key it by the entry's
+UUID.
+
 ### 7. Smaller points
 
 - The review (`summary.note`) is synced but isn't available to cloud books.
