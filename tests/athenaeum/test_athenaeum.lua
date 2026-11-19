@@ -2159,6 +2159,101 @@ do
     Library.catalog, Library.matched, Library.by_title, Library.file_info, Library.on_device = unpack(saved)
 end
 
+-- Catalog metadata for downloaded books: over the file's own, under custom
+-- metadata; CoverBrowser's cached rows brought up to date.
+
+do
+    local Library = require("athenaeum/library")
+    local BookInfo = require("apps/filemanager/filemanagerbookinfo")
+    local real_extend = BookInfo.extendProps
+    local folder = TMP .. "/catalogmeta"
+    lfs.mkdir(folder)
+    Library.save("folder", folder)
+    local book, mine, other = folder .. "/Ann - Old.epub", folder .. "/Mine.epub", TMP .. "/elsewhere/Old.epub"
+    local saved = { Library.catalog, Library.matched, Library.copies, Library.on_device }
+    Library.catalog = {
+        { id = "m1", title = "New Title", authors = { "Ann", "Bo" }, series = "Saga", tags = { "gothic", "classic" } },
+        { id = "m2", title = "Catalog Mine", authors = { "Cy" }, series = "Other", series_index = 2 },
+    }
+    Library.matched = { m1 = book, m2 = mine }
+    Library.copies = {}
+    Library.on_device = { [book] = true, [mine] = true }
+    os.execute("mkdir -p '" .. folder .. "/Mine.sdr'")
+    local f = io.open(folder .. "/Mine.sdr/custom_metadata.lua", "w")
+    f:write('return { custom_props = { title = "My Title" } }\n')
+    f:close()
+
+    Library.installCatalogMetadataHook()
+    check(BookInfo.extendProps ~= real_extend, "extendProps hooked")
+    local own = { title = "Old", authors = "Ann", series = "Saga", series_index = 3, language = "en",
+                  keywords = "fiction", pages = 10 }
+    local p = BookInfo.extendProps(own, book)
+    eq(p.title, "New Title", "catalog title over the file's")
+    eq(p.authors, "Ann\nBo", "catalog authors")
+    eq(p.keywords, "gothic\nclassic", "catalog tags as keywords")
+    eq(p.series_index, 3, "no series number in the catalog: the file's")
+    eq(p.language, "en", "the file's language kept")
+    eq(p.pages, 10, "pages kept")
+    eq(own.title, "Old", "the file's props not changed")
+    p = BookInfo.extendProps({ title = "Mine (file)", series_index = 7 }, mine)
+    eq(p.title, "My Title", "custom metadata over the catalog")
+    eq(p.authors, "Cy", "catalog authors under no override")
+    eq(p.series_index, 2, "the catalog's series number")
+    eq(BookInfo.extendProps({ title = "Old" }, other).title, "Old", "books outside the library: their own")
+    eq(BookInfo.extendProps({ title = "Old" }).title, "Old", "no path: their own")
+
+    -- CoverBrowser's cached rows (a stand-in: path -> row).
+    local rows = {
+        [book] = { title = "Old", authors = "Ann", series = "Saga", series_index = 3, keywords = "fiction" },
+        [mine] = { title = "My Title", authors = "Cy", series = "Other", series_index = 2 },
+        [folder .. "/Unmatched.epub"] = { title = "U", authors = "U" },
+    }
+    local set_calls = {}
+    local bim = {
+        openDbConnection = function() end,
+        setBookInfoProperties = function(_self, path, props)
+            set_calls[#set_calls + 1] = path
+            for k, v in pairs(props) do rows[path][k] = v end
+        end,
+        db_conn = { prepare = function()
+            local list, i, stmt = {}, 0, {}
+            function stmt:bind(n, prefix)
+                for path, r in pairs(rows) do
+                    if path:sub(1, n) == prefix then
+                        local dir, name = path:match("^(.*/)([^/]+)$")
+                        list[#list + 1] = { dir, name, r.title, r.authors, r.series, r.series_index, r.keywords }
+                    end
+                end
+                return self
+            end
+            function stmt:step(out)
+                i = i + 1
+                if not list[i] then return nil end
+                for k = 1, 7 do out[k] = list[i][k] end
+                return out
+            end
+            function stmt:close() end
+            return stmt
+        end },
+    }
+    ZenOS.changes = {}
+    local updated = Library.refreshCatalogMetadata(bim)
+    eq(table.concat(updated, " "), book, "only the out-of-date row updated")
+    eq(rows[book].title .. "|" .. rows[book].authors .. "|" .. rows[book].keywords,
+        "New Title|Ann\nBo|gothic\nclassic", "row brought up to the catalog")
+    eq(rows[book].series_index, 3, "the file's series number left")
+    eq(rows[mine].title, "My Title", "custom title left in the row")
+    eq(rows[folder .. "/Unmatched.epub"].title, "U", "files not in the catalog left")
+    check(ZenOS.changes[1] and ZenOS.changes[1][1] == book, "ZenOS told of the changed book")
+    set_calls = {}
+    eq(#Library.refreshCatalogMetadata(bim), 0, "up to date: nothing written")
+    eq(#set_calls, 0, "no writes the second time")
+    eq(#Library.refreshCatalogMetadata({}), 0, "no CoverBrowser: nothing done")
+
+    BookInfo.extendProps = real_extend
+    Library.catalog, Library.matched, Library.copies, Library.on_device = unpack(saved)
+end
+
 -- The menu: groups in order, every entry explained.
 
 do

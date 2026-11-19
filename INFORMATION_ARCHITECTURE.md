@@ -68,7 +68,8 @@ Still open:
 - Books edited before the fix still have the edit embedded and a changed
   MD5.
 - Cloud books can't be edited (above).
-- Whether CWA or the device should be the canonical place for edits.
+- ~~Whether CWA or the device should be the canonical place for edits.~~
+  Settled with #2: CWA is the base, device edits are overrides on top.
 
 ### 2. Catalog changes don't reach books already downloaded
 
@@ -76,6 +77,31 @@ When a book is edited in CWA, the catalog and concordance-web show the new
 metadata. A copy already on a device keeps its old embedded OPF, and ZenOS
 shows that. Identity copes with the new MD5, but nothing refreshes what the
 device displays.
+
+**Fixed 2026-11-19 (Athenæum 0.9.10, no ZenOS change):** library books are
+shown with the catalog's title, authors, series and tags, without touching
+the file. Athenæum hooks KOReader's `FileManagerBookInfo.extendProps`, the
+one place custom metadata is merged over a book's own: the catalog goes in
+under the custom metadata, so the order is device override, then catalog,
+then the file's OPF. The reader, CoverBrowser's cache (and so ZenOS's
+groupings), history and search all go through it. After each catalog load,
+`Library.refreshCatalogMetadata` updates CoverBrowser rows cached earlier
+and tells ZenOS which books changed. Not overlaid: language (the reader
+picks hyphenation by it) and description (not in the catalog listing). A
+series number is used only when the catalog has one (CWA's feed doesn't).
+This settles #1's open question: CWA is the canonical base, and device edits
+are overrides on top that sync between devices but never go back to CWA.
+Limitation: a field removed in the catalog stays in a cached row until
+CoverBrowser re-extracts the book.
+
+ZenOS's book-source rule (in its unmerged book-sources PR) now matches:
+it used to put only edits made in ZenOS's editor on this device over a
+source's metadata, so overrides from KOReader's Book information or synced
+by Concordance were hidden. It now indexes any custom metadata announced
+with KOReader's `InvalidateMetadataCache` event, which KOReader's dialog,
+Concordance (`BookSync:_writeMeta`) and ZenOS's editor all send. So
+everywhere the order is: custom metadata, then the source or catalog,
+then the file.
 
 ### 3. Five different rules for deciding two things are the same book
 

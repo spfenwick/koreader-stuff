@@ -335,6 +335,14 @@ do
     local changed_event = false
     for _, ev in ipairs(b.events) do changed_event = changed_event or ev.name == "BookMetadataChanged" end
     check(changed_event, "BookMetadataChanged sent")
+    local function invalidated()
+        local out = {}
+        for _, ev in ipairs(b.events) do
+            if ev.name == "InvalidateMetadataCache" then out[#out + 1] = ev.args end
+        end
+        return out
+    end
+    check(#invalidated() == 1 and invalidated()[1] == pb, "InvalidateMetadataCache sent for the book's new metadata")
     check(b.store:counts().write == 0 and b.store:counts().outbox == 0, "nothing left to write, nothing echoed back")
     -- Next refresh on B: our own write isn't a change.
     b.sync:refresh(); b:run()
@@ -371,6 +379,7 @@ do
     b.sync:afterSync(nil); b:run()
     s = readSidecar(pb).summary
     check(s and s.status == "complete" and s.rating == 5, "reset sidecar: status and rating put back")
+    check(#invalidated() == 2, "status and rating only: no InvalidateMetadataCache")
 
     -- A book deleted from B is forgotten.
     os.remove(pb)

@@ -270,6 +270,9 @@ function Library.load()
     Timing.record("catalog: load", Timing.since(t_load),
         string.format("%d cloud books, %d on this device", #cloud, #books - #cloud))
     Library.loaded_key = loadKey(server, folder, s)
+    -- Downloaded books shown with the catalog's metadata (cached rows made
+    -- before it was loaded, or before it changed).
+    if not Library.fixture then Guard.call("metadata", Library.refreshCatalogMetadata) end
 end
 
 -- Deleting a downloaded book makes it a cloud book again. KOReader sends no
@@ -628,6 +631,139 @@ function Library.installDeleteHooks()
         end
         return r
     end, "FileManager:deleteSelectedFiles")
+end
+
+-- Catalog metadata for downloaded books ------------------------------------------
+--
+-- A book edited in the catalog (CWA) keeps its old metadata in the copy
+-- already downloaded. Rather than rewrite the file (its MD5 would change,
+-- unjoining it from its sidecar and other versions), the library's books
+-- are shown with the catalog's title, authors, series and tags under any
+-- override made on a device (custom metadata, which Concordance syncs):
+-- override, then catalog, then the file's own. Not the language (the
+-- reader picks hyphenation by it, and the catalog may spell it otherwise),
+-- nor the description (the listing has none). A series number only when
+-- the catalog has one (Calibre-Web's feed has none): else the file's.
+--
+-- KOReader merges a book's custom metadata over its own in one place,
+-- FileManagerBookInfo.extendProps(): the reader, CoverBrowser's cache (and
+-- so ZenOS's groupings), history and search all go through it. The catalog
+-- goes in there, under the custom metadata. CoverBrowser's cached rows,
+-- extracted before the catalog was loaded or before it changed, are
+-- brought up to date after each load (Library.refreshCatalogMetadata).
+
+local CATALOG_FIELDS = { "title", "authors", "series", "series_index", "keywords" }
+
+local catalog_by_id, catalog_by_id_of
+local function catalogBook(id)
+    if catalog_by_id_of ~= Library.catalog then
+        catalog_by_id, catalog_by_id_of = {}, Library.catalog
+        for _i, b in ipairs(Library.catalog or {}) do catalog_by_id[b.id] = b end
+    end
+    return catalog_by_id[id]
+end
+
+local function joined(list)
+    return type(list) == "table" and #list > 0 and table.concat(list, "\n") or nil
+end
+
+--- The catalog's metadata for a book file in the library folder, as
+-- KOReader's book props: { title, authors, series, series_index, keywords },
+-- only those the catalog has; nil for other files.
+function Library.catalogProps(path)
+    local id = type(path) == "string" and catalogIdForFile(path)
+    local book = id and catalogBook(id)
+    if not book then return nil end
+    local props = {}
+    local function set(key, value)
+        if value ~= nil and value ~= "" then props[key] = value end
+    end
+    set("title", book.title)
+    set("authors", joined(book.authors))
+    set("series", book.series)
+    if book.series then set("series_index", tonumber(book.series_index)) end
+    set("keywords", joined(book.tags))
+    return next(props) and props or nil
+end
+
+function Library.installCatalogMetadataHook()
+    if not Guard.ok("metadata") then return end
+    local ok, BookInfo = pcall(require, "apps/filemanager/filemanagerbookinfo")
+    if not ok or type(BookInfo) ~= "table" then return end
+    Guard.hook("metadata", BookInfo, "extendProps", function(orig, original_props, filepath, ...)
+        local catalog = Library.catalogProps(filepath)
+        if not catalog then return orig(original_props, filepath, ...) end
+        local props = {}
+        for k, v in pairs(original_props or {}) do props[k] = v end
+        for k, v in pairs(catalog) do props[k] = v end
+        return orig(props, filepath, ...)
+    end, "FileManagerBookInfo.extendProps")
+end
+
+-- A book's custom props (its overrides), or {}.
+local function customProps(path)
+    local DocSettings = require("docsettings")
+    local file = DocSettings.findCustomMetadataFile and DocSettings:findCustomMetadataFile(path)
+    if not file then return {} end
+    local custom = DocSettings.openSettingsFile(file):readSetting("custom_props")
+    return type(custom) == "table" and custom or {}
+end
+
+local function same(a, b)
+    if type(a) == "number" or type(b) == "number" then return tonumber(a) == tonumber(b) end
+    return a == b
+end
+
+--- Brings CoverBrowser's cached metadata of the library's books up to date
+-- with the catalog (rows made before it was loaded, or before it changed),
+-- and tells ZenOS of the books that changed. bim: BookInfoManager (tests).
+-- Returns the paths updated.
+function Library.refreshCatalogMetadata(bim)
+    if not Guard.ok("metadata") then return {} end
+    local folder = Library.folder()
+    if not folder or not next(Library.on_device or {}) then return {} end
+    -- CoverBrowser's, once it's loaded (it isn't loaded for us).
+    bim = bim or package.loaded["bookinfomanager"]
+    if type(bim) ~= "table" or type(bim.setBookInfoProperties) ~= "function" then return {} end
+    bim:openDbConnection()
+    -- One query for the folder, rather than one per book.
+    local rows = {}
+    local stmt = bim.db_conn:prepare([[SELECT directory, filename, title, authors, series,
+        series_index, keywords FROM bookinfo WHERE in_progress = 0 AND substr(directory, 1, ?) = ?;]])
+    local prefix = folder:gsub("/*$", "/")
+    stmt:bind(#prefix, prefix)
+    local row = {}
+    while stmt:step(row) do
+        rows[row[1] .. row[2]] = { title = row[3], authors = row[4], series = row[5],
+            series_index = row[6], keywords = row[7] }
+    end
+    stmt:close()
+    local updated = {}
+    for path in pairs(Library.on_device) do
+        local have = rows[path]
+        local catalog = have and Library.catalogProps(path)
+        if catalog then
+            local custom = customProps(path)
+            local set
+            for _i, key in ipairs(CATALOG_FIELDS) do
+                local want = custom[key] or catalog[key]
+                if want ~= nil and not same(have[key], want) then
+                    set = set or {}
+                    set[key] = want
+                end
+            end
+            if set then
+                bim:setBookInfoProperties(path, set)
+                updated[#updated + 1] = path
+            end
+        end
+    end
+    if #updated > 0 then
+        table.sort(updated)
+        logger.info("Athenaeum: catalog metadata applied to", #updated, "downloaded books")
+        ZenSource.changed(updated)
+    end
+    return updated
 end
 
 --- Full details for the details sheet (summary, formats...).

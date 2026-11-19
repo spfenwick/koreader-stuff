@@ -21,6 +21,8 @@ Concordance also has an optional web app, Concordance web, for browsing your boo
 
 Every book in your catalog appears in your library folder, whether it's on the device or not. Books not yet downloaded are "cloud books": they look and sort like real books, with covers, and download when you want them.
 
+Downloaded books show the catalog's current title, authors, series and tags, so an edit made in Calibre-Web Automated reaches books already on the device at the next sync, without changing their files. Metadata you edit on the device (KOReader's Book information, or ZenOS's editor) still comes first. Language and description stay the file's own.
+
 ### Setting up
 
 1. Add your library's catalog in KOReader's OPDS catalog plugin (with its username and password).
@@ -199,7 +201,7 @@ With both installed, Athenæum knows what you've read on every device, and a boo
 - **Details show your history.** A cloud book's details sheet adds a line such as "Finished · ★★★★☆ · Last read 12 Oct 2026 on Kobo Forma".
 - **Mark cloud books from their details.** A cloud book's details sheet has a **Read status** menu, as in ZenOS's book menu (Unread, Reading, On hold or Finished), so you can mark a book you've read elsewhere (on paper, say) without downloading it. It syncs like any other status. Unread removes the book's status on every device, so it shows as new; opening it again marks it as reading.
 - **History includes cloud books.** A book you read on another device appears in History under its title even if it isn't downloaded here; tap it to see its details and download it, or long-press it to remove it from History (in ZenOS, also from Home's Recently read). Once downloaded, the entry becomes the file.
-- **Metadata edits sync.** In ZenOS, editing the metadata of an EPUB in the library folder keeps your changes in KOReader's custom metadata rather than writing them into the file, so Concordance carries them to your other devices.
+- **Metadata edits sync.** With Concordance syncing (a WebDAV server set up), ZenOS's metadata editor keeps an EPUB's edits in KOReader's custom metadata rather than writing them into the file, so they reach your other devices. On library books they show over the catalog's metadata.
 - **Downloads open where you left off.** A book Athenæum has just downloaded is matched at once, so it opens with its status and highlights from other devices.
 - **One update check.** Concordance checks both plugins in one go and offers to install both; there's one restart prompt afterwards.
 

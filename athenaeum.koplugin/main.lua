@@ -72,6 +72,7 @@ function Athenaeum:init()
         end
         require("athenaeum/search").install(Virtual)
         Library.installDeleteHooks()
+        Library.installCatalogMetadataHook()
         if Virtual.installed and require("athenaeum/guard").ok("library") then Library.installHistory() end
     end
     -- Not in tests: an update prompt would get in their way.

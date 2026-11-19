@@ -21,6 +21,8 @@ Features:
   zenos    cloud books in ZenOS's Authors, Series and Tags tabs, and the
            open and tag hooks in zenos_source.lua
   history  cloud books in the reading history (history.lua)
+  metadata downloaded books shown with the catalog's metadata, under
+           their custom metadata (Library.installCatalogMetadataHook)
   jobs     background tasks, menu actions: an error is logged and reported,
            nothing is turned off
 ]]
@@ -52,7 +54,7 @@ function Guard.fail(feature, where, err)
     end
     if feature == "library" then
         -- Everything else depends on the library.
-        for other in pairs({ search = true, badge = true, zenos = true, history = true }) do
+        for other in pairs({ search = true, badge = true, zenos = true, history = true, metadata = true }) do
             if not Guard.failed[other] then Guard.failed[other] = "library turned off" end
         end
     end
@@ -242,6 +244,7 @@ function Guard.check()
         _read = 1, clearMissing = 1, _flush = 1, getIndexByFile = 2, getIndexByTime = 2, removeItem = 2,
     })
     requires("history", "apps/filemanager/filemanagerhistory", { onShowHist = 1 })
+    requires("metadata", "apps/filemanager/filemanagerbookinfo", { extendProps = 2 })
 
     for feature, problems in pairs(Guard.unavailable) do
         logger.warn("Athenaeum: not starting", feature, "-", table.concat(problems, "; "))
@@ -252,7 +255,7 @@ end
 --- Lines for the Status screen ("" when all is well).
 function Guard.statusText()
     local lines = {}
-    for _i, feature in ipairs({ "library", "search", "badge", "zenos", "history", "jobs" }) do
+    for _i, feature in ipairs({ "library", "search", "badge", "zenos", "history", "metadata", "jobs" }) do
         if Guard.unavailable[feature] then
             table.insert(lines, string.format("%s not started: %s", feature,
                 table.concat(Guard.unavailable[feature], "; ")))
