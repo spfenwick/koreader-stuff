@@ -162,6 +162,18 @@ fills in "reading" and removes the reset marker.
   none); a different value is a change, a value gone is a clear (except
   the status, and except after a reset, above).
 
+### Edits in ZenOS's metadata editor
+
+ZenOS writes an edit to an EPUB into the file itself, then removes every
+metadata override (title, authors, series...) from the book's custom
+metadata file. Read as above, that would be a clear of each of them, sent to
+every device, while the edit itself (in the file's text) never syncs.
+So while book data can sync (a WebDAV server is set up), Concordance wraps
+ZenOS's `editsEmbedded` (`concordance/metadatahook.lua`) to answer false:
+ZenOS then keeps the edit in custom metadata, as KOReader's book
+information dialog does, and it syncs like any other override. Without a
+server ZenOS decides as before.
+
 ## Applying merged changes
 
 - **The open book**, on open and after a sync (unless a menu or dialog is
@@ -330,7 +342,8 @@ idempotence, first-look and "reading" rules, clears, reset sidecars,
 closed-book writes (summary and custom metadata files, real files with
 `DocSettings` stood in for), refresh by signature, and applying to an open
 book (status over KOReader's "reading", TOC with page numbers recomputed,
-title). `tests/test_concordance_integration.lua` syncs book data between
+title), and an edit in ZenOS's metadata editor (the hook, and that the edit
+is sent, not clears). `tests/test_concordance_integration.lua` syncs book data between
 devices through the engine, subprocess and rclone, including a corrupt
 segment and a rebuild. `tests/test_concordance_plugin.lua` checks the status
 from the reading history is sent. Nothing ran on a device.

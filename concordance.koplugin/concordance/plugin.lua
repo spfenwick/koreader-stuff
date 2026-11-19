@@ -583,6 +583,19 @@ function Plugin.installProgressHook()
     }))
 end
 
+--- Keeps edits made in ZenOS's metadata editor in custom metadata, where
+-- book data sync carries them, instead of in the EPUB (see
+-- concordance/metadatahook.lua). Only while book data can sync (a WebDAV
+-- server); does nothing without ZenOS. Returns true if the hook is in place.
+function Plugin.installMetadataHook()
+    local ok, Service = pcall(require, "modules/filebrowser/metadata/service")
+    if not ok or type(Service) ~= "table" then return false end -- no ZenOS
+    return (require("concordance/metadatahook").install(Service, {
+        active = function() return Plugin.statsServer() ~= nil end,
+        logger = logger,
+    }))
+end
+
 --- Checks, once per KOReader process, what Concordance relies on in KOReader
 -- outside a book (concordance/problems.lua reports what's missing).
 -- Parameter counts include self.

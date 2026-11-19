@@ -36,9 +36,14 @@ What works well:
   (`service.lua:615–631`) and then clears the matching `custom_props`. That
   causes three problems:
   - The edit never reaches other devices or CWA.
-  - Concordance's check of closed books will probably read the cleared
-    overrides as clears, and send those clears to other devices (inferred
-    from BOOKDATA's "a value gone is a clear"; not tested).
+  - Concordance's check of closed books reads the cleared overrides as
+    clears and sends them to other devices. Confirmed 2026-11-19 with a
+    probe on Concordance's book-sync test harness: a book with a synced
+    custom title and series, edited in ZenOS (authors only), sent two clears;
+    the other device's `custom_metadata.lua` was removed and it showed its
+    own file's title again. The edit itself (authors) was never sent. ZenOS
+    clears every metadata key, not just the edited ones. A book with no
+    overrides sends nothing.
   - The file's partial MD5 no longer matches its sidecar's MD5, which is the
     "file replaced in place" case. That book then loses position-level
     (level 2) joining.
@@ -48,14 +53,22 @@ What works well:
   editor refuses paths that aren't files (`service.lua`, `M.load`), so cloud
   books can't be edited at all.
 
-**Fixed 2026-11-18, in Athenæum only (no ZenOS change):**
-`Library.installMetadataHook()` wraps ZenOS's `editsEmbedded` (Guard feature
-`metadata`). While Concordance is installed, EPUBs in the library folder keep
-their edits in `custom_metadata.lua`, which Concordance syncs. Books outside
-the library are left to ZenOS, so they still embed edits and still have the
-problems above. This depends on a ZenOS internal; if ZenOS changes it, the
-startup check turns the feature off and shows it on the Status screen. Still
-open: whether CWA or the device should be the canonical place for edits.
+**Fixed 2026-11-18 in Athenæum for the library folder; moved to Concordance
+for every EPUB 2026-11-19 (Concordance 0.3.7, Athenæum 0.9.9; no ZenOS
+change):** `concordance/metadatahook.lua` wraps ZenOS's `editsEmbedded`.
+While book data can sync (a WebDAV server is set up), every EPUB keeps its
+edits in `custom_metadata.lua`, so the edit syncs and no clears go out.
+Athenæum's library-only hook (`Library.installMetadataHook`, Guard feature
+`metadata`) is removed. If ZenOS drops `editsEmbedded`, the hook isn't
+installed and Concordance reports it on its Status screen.
+`tests/test_concordance_book.lua` covers the hook and checks that an edit
+sends the change, not clears.
+
+Still open:
+- Books edited before the fix still have the edit embedded and a changed
+  MD5.
+- Cloud books can't be edited (above).
+- Whether CWA or the device should be the canonical place for edits.
 
 ### 2. Catalog changes don't reach books already downloaded
 
@@ -134,6 +147,6 @@ apart.
 
 ## Suggested order
 
-1. #1: it can lose data and send clears to other devices.
+1. ~~#1~~ (clears fixed; canonical place for edits still open).
 2. ~~#5~~ (done).
 3. ~~#4~~ (decided: keep the patches).

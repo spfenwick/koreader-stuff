@@ -630,22 +630,6 @@ function Library.installDeleteHooks()
     end, "FileManager:deleteSelectedFiles")
 end
 
--- ZenOS's metadata editor writes an EPUB's edits into the file. With
--- Concordance installed, the library's books keep them in their custom
--- metadata instead (as the editor does for other formats), which
--- Concordance syncs: edits written into the file reach no other device and
--- not the catalog, and the custom metadata the editor clears after writing
--- them would be synced as cleared. Other books are left to ZenOS.
-function Library.installMetadataHook()
-    if not Guard.ok("metadata") then return end
-    local ok, Service = pcall(require, "modules/filebrowser/metadata/service")
-    if not ok or type(Service) ~= "table" then return end
-    Guard.hook("metadata", Service, "editsEmbedded", function(orig, file, ...)
-        if libraryPath(file) and Library.identity() then return false end
-        return orig(file, ...)
-    end, "ZenOS metadata service editsEmbedded")
-end
-
 --- Full details for the details sheet (summary, formats...).
 function Library.bookDetails(id)
     local server = Library.server()

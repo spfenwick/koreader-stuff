@@ -26,10 +26,6 @@ package.loaded["common/book_sources"] = {
     listingKey = function() end,
     installMetadataIntegration = function() ZenOS.integrated = ZenOS.integrated + 1 return true end,
 }
--- ZenOS's metadata editor's service: EPUBs' edits are written into the file.
-package.loaded["modules/filebrowser/metadata/service"] = {
-    editsEmbedded = function(file) return type(file) == "string" and file:lower():sub(-5) == ".epub" end,
-}
 
 local lfs = require("libs/libkoreader-lfs")
 local Feed = require("athenaeum/feed")
@@ -2161,39 +2157,6 @@ do
     Library.catalog = {}
     check(not Library.inCatalog(A_ID), "another catalog: looked up afresh")
     Library.catalog, Library.matched, Library.by_title, Library.file_info, Library.on_device = unpack(saved)
-end
-
--- ZenOS's metadata editor: with Concordance, the library's EPUBs keep their
--- edits in custom metadata (which Concordance syncs); other books don't change.
-
-do
-    local Library = require("athenaeum/library")
-    local Service = package.loaded["modules/filebrowser/metadata/service"]
-    local real_edits = Service.editsEmbedded
-    local folder = TMP .. "/metadata"
-    lfs.mkdir(folder)
-    Library.save("folder", folder)
-    package.loaded["concordance/identity"] = nil
-    Library.installMetadataHook()
-    local book, other = folder .. "/Ann - Book.epub", TMP .. "/elsewhere/Book.epub"
-    check(Service.editsEmbedded(book), "no Concordance: the library's EPUBs are edited in the file")
-    package.loaded["concordance/identity"] = {
-        available = function() return true end,
-        onChanged = function() end,
-    }
-    check(not Service.editsEmbedded(book), "with Concordance: the library's EPUBs keep edits in custom metadata")
-    check(not Service.editsEmbedded(folder .. "/sub/Book.epub"), "in a subfolder too")
-    check(Service.editsEmbedded(other), "books outside the library: edited in the file")
-    check(not Service.editsEmbedded(folder .. "/Book.pdf"), "other formats: as ZenOS decides")
-    local real_link = folder .. "-real"
-    os.execute("rm -rf '" .. real_link .. "'; ln -s '" .. folder .. "' '" .. real_link .. "'")
-    Library.save("folder", real_link)
-    check(not Service.editsEmbedded(folder .. "/Book.epub"), "the folder's real path counts as the library")
-    Library.save("folder", folder)
-    package.loaded["concordance/identity"].available = function() return false end
-    check(Service.editsEmbedded(book), "Concordance not set up: edited in the file")
-    package.loaded["concordance/identity"] = nil
-    Service.editsEmbedded = real_edits
 end
 
 -- The menu: groups in order, every entry explained.

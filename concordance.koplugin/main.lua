@@ -113,6 +113,7 @@ function Concordance:init()
     require("concordance/problems").enable()
     Plugin.checkKOReader()
     Plugin.installProgressHook()
+    Plugin.installMetadataHook()
     Plugin.setupIdentity()
     if not started then
         started = true

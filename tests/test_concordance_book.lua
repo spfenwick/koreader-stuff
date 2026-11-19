@@ -717,4 +717,54 @@ do
     check(a.store:files()[other] == nil and a.store:counts().outbox == 0, "no MD5 to be had: skipped")
 end
 
+-- ZenOS's metadata editor (concordance/metadatahook.lua) -----------------------------------
+do
+    local MetadataHook = require("concordance/metadatahook")
+    local isEpub = function(file) return file:sub(-5) == ".epub" end
+    local Service = { editsEmbedded = isEpub }
+    local active = true
+    check(MetadataHook.install(Service, { active = function() return active end, logger = quiet }),
+        "hook installed")
+    check(not MetadataHook.install(Service, { active = function() return true end }), "installed once")
+    check(not Service.editsEmbedded("/b/x.epub"), "book data syncs: an EPUB's edits kept in custom metadata")
+    active = false
+    check(Service.editsEmbedded("/b/x.epub"), "no server: ZenOS decides (in the file)")
+    check(not Service.editsEmbedded("/b/x.pdf"), "no server: ZenOS decides (not a PDF)")
+    MetadataHook.uninstall(Service)
+    MetadataHook.install(Service, { active = function() error("boom") end, logger = quiet })
+    check(Service.editsEmbedded("/b/x.epub"), "failing to decide: ZenOS decides")
+    MetadataHook.uninstall(Service)
+    check(Service.editsEmbedded == isEpub and Service._concordance_edits_embedded == nil, "uninstalled")
+    check(not MetadataHook.install({}, { active = function() return true end, logger = quiet }),
+        "ZenOS without editsEmbedded: not installed")
+
+    -- An edit with the hook in place: ZenOS keeps it in custom metadata
+    -- with the overrides already there (service.lua, prepare_custom), so
+    -- the edit is sent and nothing is cleared. (Without the hook, ZenOS
+    -- rewrote the EPUB and removed custom_metadata.lua: the title and series
+    -- were sent as clears, the authors never.)
+    local a, b = newDev("zen-a"), newDev("zen-b")
+    local MD = string.rep("d", 32)
+    local props = { title = "Original", authors = "Writer" }
+    local pa = a:book("novel", { partial_md5_checksum = MD, doc_props = props,
+                                 summary = { status = "reading", modified = "2026-01-01" } })
+    local pb = b:book("novel", { partial_md5_checksum = MD, doc_props = props,
+                                 summary = { status = "reading", modified = "2026-01-01" } })
+    a.sync:refresh(); a:run(); b.sync:refresh(); b:run()
+    tick(100)
+    S.writeFile(sdrDir(pa) .. "/custom_metadata.lua", "return " .. serialize{
+        doc_props = props, custom_props = { title = "Better title", series = "Saga" } } .. "\n")
+    a.sync:refresh(); a:run()
+    a:send(b); b.sync:afterSync(nil); b:run(); b.sync:refresh(); b:run()
+    tick(100)
+    S.writeFile(sdrDir(pa) .. "/custom_metadata.lua", "return " .. serialize{
+        doc_props = props, custom_props = { title = "Better title", series = "Saga", authors = "Writer Two" } } .. "\n")
+    a.sync:refresh(); a:run()
+    check(a:send(b) == 1 and a:merged(MD, "meta.authors") == "Writer Two", "ZenOS edit: only the new authors sent")
+    b.sync:afterSync(nil); b:run()
+    local cm = readCustom(pb)
+    check(cm and cm.custom_props.authors == "Writer Two" and cm.custom_props.title == "Better title"
+        and cm.custom_props.series == "Saga", "ZenOS edit: B gets the authors and keeps the title and series")
+end
+
 S.finish("concordance book data tests")
