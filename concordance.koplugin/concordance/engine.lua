@@ -32,6 +32,8 @@ Everything KOReader-specific is passed in (`deps`), so tests can drive it:
     saveStatus(status)    persist the status table
     onDone(status, run)   optional, after every cycle (e.g. tell the user)
     logger, time_limit, poll_interval, max_events, max_download_bytes
+    clock()               optional, -> milliseconds, for the timings (a
+                          monotonic wall clock on a device; os.clock by default)
     zstd                  optional, concordance/zstd by default
     ann                   optional, annotation sync: { store (concordance/annstore),
                           enabled() -> bool (optional), collect() (record the open book's
@@ -78,6 +80,7 @@ local DEFAULTS = {
     max_id_records = 5000,     -- identity records per uploaded segment
     id_scan_seconds = 60,      -- reading book files after the network step
     id_scan_seconds_interactive = 5,
+    clock = function() return os.clock() * 1000 end,
 }
 
 function Engine.new(deps)
@@ -164,7 +167,8 @@ function Engine:request(reason, opts)
                   book_uploaded_records = 0, book_imported_records = 0, book_applied = 0,
                   book_segments_imported = 0, book_affected = {},
                   id_uploaded_records = 0, id_imported_records = 0, id_applied = 0,
-                  id_segments_imported = 0, id_scanned = 0, id_new_facts = 0 }
+                  id_segments_imported = 0, id_scanned = 0, id_new_facts = 0,
+                  timing = {} }
     self.current = run
     self.deps.schedule(0, function() self:_step(run, "export") end)
     return "started"
@@ -223,8 +227,70 @@ function Engine:_fail(run, msg)
     self:_finish(run)
 end
 
+-- Timings: how long each stage holds the UI loop (the network step runs in
+-- a subprocess and doesn't), split into parts. Logged when a sync ends
+-- ("StatSync timing: …" in crash.log), to find what keeps the screen from
+-- answering. run.timing[stage] = { ms, blocks, max, parts, order }.
+local function stageTiming(run, stage)
+    local s = run.timing[stage]
+    if not s then
+        s = { ms = 0, blocks = 0, max = 0, parts = {}, order = {} }
+        run.timing[stage] = s
+    end
+    return s
+end
+
+--- Adds the time since t0 to a part of a stage; returns the time now, for the next part.
+function Engine:_lap(run, stage, part, t0)
+    local now = self.deps.clock()
+    local s = stageTiming(run, stage)
+    if not s.parts[part] then
+        s.parts[part] = 0
+        s.order[#s.order + 1] = part
+    end
+    s.parts[part] = s.parts[part] + (now - t0)
+    return now
+end
+
+--- One stretch of a stage on the UI loop, ms long.
+function Engine:_block(run, stage, ms)
+    local s = stageTiming(run, stage)
+    s.ms, s.blocks = s.ms + ms, s.blocks + 1
+    if ms > s.max then s.max = ms end
+end
+
+local TIMED_STAGES = { "export", "collect", "import", "finish" }
+
+function Engine:_logTiming(run)
+    for _, stage in ipairs(TIMED_STAGES) do
+        local s = run.timing[stage]
+        if s then
+            local parts = {}
+            for _, part in ipairs(s.order) do
+                parts[#parts + 1] = string.format("%s %.0f", part, s.parts[part])
+            end
+            local steps = s.blocks > 1
+                and string.format(" in %d steps, longest %.0f ms", s.blocks, s.max) or ""
+            self.log.info(string.format("StatSync timing: %s %.0f ms%s%s", stage, s.ms, steps,
+                #parts > 0 and (" (" .. table.concat(parts, ", ") .. ")") or ""))
+        end
+    end
+    if run.net_time then
+        self.log.info(string.format("StatSync timing: network %d s (in the background)", run.net_time))
+    end
+end
+
 function Engine:_step(run, stage)
+    local d = self.deps
+    local t0 = d.clock()
+    -- A stage run from inside another (poll -> collect) counts as its own.
+    local outer = run.nested_ms
+    run.nested_ms = 0
     local ok, err = pcall(self["_" .. stage], self, run)
+    local ms = d.clock() - t0
+    local own = ms - run.nested_ms
+    run.nested_ms = outer and (outer + ms) or nil
+    self:_block(run, stage, own)
     if not ok then
         self:_fail(run, stage .. ": " .. tostring(err))
     end
@@ -237,9 +303,11 @@ end
 
 function Engine:_export(run)
     local d = self.deps
+    local tl = d.clock()
     if run.stats then
         local fok, ferr = pcall(d.flush)
         if not fok then self:_problem("engine:stats-flush", "Saving reading statistics before a sync failed", "StatSync: flushing statistics failed:", ferr) end
+        tl = self:_lap(run, "export", "flush", tl)
     end
 
     ensureDir(d.work_dir)
@@ -284,6 +352,7 @@ function Engine:_export(run)
         if needed(key) then run.full_list = true end
     end
     run.full_list_skipped = not run.full_list and #run.due_keys > 0 or nil
+    tl = self:_lap(run, "export", "prepare", tl)
     local t0 = os.clock()
     local exp
     if run.stats then
@@ -298,11 +367,13 @@ function Engine:_export(run)
         end
         run.export_skipped = why
         run.export = exp
+        tl = self:_lap(run, "export", "statistics", tl)
     end
     if exp then
         local packed, perr = self:_zstd().compressFile(run.pending_path, run.packed_path)
         if not packed then return self:_fail(run, "compressing: " .. tostring(perr)) end
         exp.plain_size, exp.size = exp.size, packed
+        tl = self:_lap(run, "export", "statistics compress", tl)
     end
     run.export_cpu = os.clock() - t0
 
@@ -310,6 +381,7 @@ function Engine:_export(run)
     if run.ann then
         local cok, cerr = pcall(d.ann.collect)
         if not cok then self:_problem("engine:ann-collect", "Recording highlight changes failed", "StatSync: recording annotation changes failed:", cerr) end
+        tl = self:_lap(run, "export", "annotations record", tl)
         run.ann_pending_path = d.work_dir .. "/ann-pending.jsonl"
         run.ann_packed_path = run.ann_pending_path .. ".zst"
         os.remove(run.ann_pending_path)
@@ -326,6 +398,7 @@ function Engine:_export(run)
             pending = aexp and { path = run.ann_packed_path, size = aexp.size } or nil,
             bad = d.store:badSegments(AnnFormat.BAD_VERSION),
         }
+        tl = self:_lap(run, "export", "annotations", tl)
     end
 
     -- Book data goes with annotations.
@@ -334,6 +407,7 @@ function Engine:_export(run)
         run.book = true
         local cok, cerr = pcall(d.book.collect)
         if not cok then self:_problem("engine:book-collect", "Recording book status and details failed", "StatSync: recording book data changes failed:", cerr) end
+        tl = self:_lap(run, "export", "book data record", tl)
         run.book_pending_path = d.work_dir .. "/book-pending.jsonl"
         run.book_packed_path = run.book_pending_path .. ".zst"
         os.remove(run.book_pending_path)
@@ -350,6 +424,7 @@ function Engine:_export(run)
             pending = bexp and { path = run.book_packed_path, size = bexp.size } or nil,
             bad = d.store:badSegments(BookFormat.BAD_VERSION),
         }
+        tl = self:_lap(run, "export", "book data", tl)
     end
 
     -- Book identity goes with annotations too.
@@ -360,6 +435,7 @@ function Engine:_export(run)
             -- Facts other plugins have for us (Athenaeum's matches).
             local cok, cerr = pcall(d.id.collect)
             if not cok then self:_problem("engine:id-matches", "Book identity: collecting matches failed", "StatSync: book identity: collecting matches failed:", cerr) end
+            tl = self:_lap(run, "export", "identity matches", tl)
         end
         run.id_pending_path = d.work_dir .. "/id-pending.jsonl"
         run.id_packed_path = run.id_pending_path .. ".zst"
@@ -377,6 +453,7 @@ function Engine:_export(run)
             pending = iexp and { path = run.id_packed_path, size = iexp.size } or nil,
             bad = d.store:badSegments(IdFormat.BAD_VERSION),
         }
+        tl = self:_lap(run, "export", "identity", tl)
         -- Book files to read in the subprocess, after the network step.
         local fok, files, complete = pcall(d.id.files)
         if fok and files then
@@ -399,6 +476,7 @@ function Engine:_export(run)
             self:_problem("engine:id-list", "Book identity: listing book files failed", "StatSync: book identity: listing book files failed:", files)
         end
         run.scan_items = scan_items
+        tl = self:_lap(run, "export", "identity files to read", tl)
     end
 
     local meta_path = d.work_dir .. "/meta.json"
@@ -429,6 +507,7 @@ function Engine:_export(run)
         createdAt = d.now(), packed = next(packed) and packed or nil, versions = versions,
     })
     run.meta_key = Codec.encode{ name = name, packed = packed, versions = versions or {} }
+    tl = self:_lap(run, "export", "metadata", tl)
     -- Packing, on full listings (see netjob.lua and pack.lua).
     local pack_params
     if run.full_list and d.pack then
@@ -507,6 +586,7 @@ function Engine:_export(run)
             end
         end
     end)
+    self:_lap(run, "export", "network parameters and start", tl)
     if not handle then return self:_fail(run, "starting subprocess: " .. tostring(serr)) end
     run.handle = handle
     run.net_started = d.now()
@@ -528,6 +608,7 @@ end
 
 function Engine:_collect(run)
     local d = self.deps
+    local tl = d.clock()
     local result = Codec.decode(readFile(run.result_path) or "")
     if type(result) ~= "table" then
         result = { ok = false, error = run.killed and "timed out before any result" or "no result from network step", downloads = {} }
@@ -580,6 +661,7 @@ function Engine:_collect(run)
     end
     os.remove(run.pending_path)
     os.remove(run.packed_path)
+    tl = self:_lap(run, "collect", "statistics", tl)
 
     if run.ann then
         local aup = result.ann_uploaded
@@ -598,6 +680,7 @@ function Engine:_collect(run)
         end
         os.remove(run.ann_pending_path)
         os.remove(run.ann_packed_path)
+        tl = self:_lap(run, "collect", "annotations", tl)
     end
 
     if run.book then
@@ -617,6 +700,7 @@ function Engine:_collect(run)
         end
         os.remove(run.book_pending_path)
         os.remove(run.book_packed_path)
+        tl = self:_lap(run, "collect", "book data", tl)
     end
 
     if run.id then
@@ -651,9 +735,11 @@ function Engine:_collect(run)
             end
         end
         run.id_scan_left = run.scan_items and (#run.scan_items - run.id_scanned) or 0
+        tl = self:_lap(run, "collect", "identity", tl)
     end
 
     self:_packs(run, result)
+    self:_lap(run, "collect", "packs", tl)
 
     run.queue = result.downloads or {}
     run.qi = 1
@@ -753,7 +839,9 @@ function Engine:_import(run)
     local is_ann = item.stream == "ann"
     local is_book = item.stream == "book"
     local is_id = item.stream == "id"
+    local tl = d.clock()
     local uok, uerr = self:_zstd().decompressFile(item.path, plain)
+    tl = self:_lap(run, "import", "decompress", tl)
     if uok and is_id then
         if run.id then
             summary, err, kind = d.id.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
@@ -778,6 +866,8 @@ function Engine:_import(run)
         err, kind = "can't decompress: " .. tostring(uerr), "format"
     end
     run.import_cpu = (run.import_cpu or 0) + (os.clock() - t0)
+    self:_lap(run, "import", is_id and "identity" or is_book and "book data"
+        or is_ann and "annotations" or "statistics", tl)
     os.remove(item.path)
     os.remove(plain)
 
@@ -822,6 +912,8 @@ function Engine:_finish(run)
     if run.finished then return end
     run.finished = true
     local d = self.deps
+    local finish_t0 = d.clock()
+    local tl = finish_t0
     if run.handle and not d.isDone(run.handle) then
         -- Only after an unexpected error: don't leave the subprocess behind.
         d.kill(run.handle)
@@ -833,6 +925,7 @@ function Engine:_finish(run)
     if next(run.affected) and d.afterImport then
         local ok, err = pcall(d.afterImport, run.affected)
         if not ok then self:_problem("engine:stats-refresh", "Refreshing the open book's statistics failed", "StatSync: refreshing statistics failed:", err) end
+        tl = self:_lap(run, "finish", "statistics refresh", tl)
     end
     if run.id and d.id.store.refreshGroups then
         local changed, book_affected, ann_pending = self:refreshIdentity{
@@ -843,6 +936,7 @@ function Engine:_finish(run)
             for md5 in pairs(book_affected) do run.book_affected[md5] = true end
             for id, a in pairs(ann_pending) do run.ann_affected[id] = a end
         end
+        tl = self:_lap(run, "finish", "identity groups", tl)
     end
     local join_rules = d.store.JOIN_RULES or 1
     if run.id and d.store.joinVersions and (run.id_regrouped or self.status.versions_joined ~= join_rules) then
@@ -860,14 +954,17 @@ function Engine:_finish(run)
         else
             self:_problem("engine:stats-join", "Joining the statistics of book versions failed", "StatSync: joining the statistics of book versions failed:", ok and err or res)
         end
+        tl = self:_lap(run, "finish", "join versions", tl)
     end
     if run.ann and d.ann.afterSync then
         local ok, err = pcall(d.ann.afterSync, run)
         if not ok then self:_problem("engine:ann-apply", "Applying highlights and bookmarks failed", "StatSync: applying annotations failed:", err) end
+        tl = self:_lap(run, "finish", "apply annotations", tl)
     end
     if run.book and d.book.afterSync then
         local ok, err = pcall(d.book.afterSync, run)
         if not ok then self:_problem("engine:book-apply", "Applying book status and details failed", "StatSync: applying book data failed:", err) end
+        tl = self:_lap(run, "finish", "apply book data", tl)
     end
     if run.missing_own then
         -- Not this device's folder after all (see netjob.lua): don't take it
@@ -935,7 +1032,9 @@ function Engine:_finish(run)
     end
     st.bytes_up = run.result and run.result.bytes_up
     st.bytes_down = run.result and run.result.bytes_down
+    tl = self:_lap(run, "finish", "status", tl)
     pcall(d.saveStatus, st)
+    tl = self:_lap(run, "finish", "save status", tl)
     self.log.info(string.format("StatSync: sync (%s%s) %s: uploaded %d events, imported %d segments (%d events: %d new, %d longer), %d bad",
         run.reason, run.stats and "" or ", annotations only", run.error and ("failed: " .. run.error) or "done",
         run.uploaded_events, run.segments_imported, run.imported_events, run.inserted, run.updated, run.segments_bad))
@@ -954,7 +1053,15 @@ function Engine:_finish(run)
     end
     self.running = false
     self.current = nil
-    if d.onDone then pcall(d.onDone, st, run) end
+    if d.onDone then
+        pcall(d.onDone, st, run)
+        self:_lap(run, "finish", "after sync", tl)
+    end
+    local finish_ms = d.clock() - finish_t0
+    self:_block(run, "finish", finish_ms)
+    -- Not counted again in the stage that ran _finish.
+    if run.nested_ms then run.nested_ms = run.nested_ms + finish_ms end
+    self:_logTiming(run)
 
     -- Exactly one more run if anything asked meanwhile, or if this run
     -- stopped early (segment cap, download budget, time limit) having made

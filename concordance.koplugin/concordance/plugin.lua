@@ -718,6 +718,14 @@ end
 
 local controller
 
+-- Milliseconds on a monotonic wall clock, for the sync's timings: os.clock
+-- counts CPU time only, and misses waiting on the disk.
+local function wallClockMs()
+    local ok, time = pcall(require, "ui/time")
+    if ok and time.monotonic then return time.to_us(time.monotonic()) / 1000 end
+    return os.clock() * 1000
+end
+
 --- The process-wide engine.
 function Plugin.engine()
     if controller then return controller end
@@ -735,6 +743,7 @@ function Plugin.engine()
         time_limit = s.time_limit,
         getDeviceId = Plugin.deviceId,
         now = os.time,
+        clock = wallClockMs,
         schedule = function(delay, fn)
             if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
         end,

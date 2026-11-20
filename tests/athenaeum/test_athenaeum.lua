@@ -1768,6 +1768,40 @@ do
     eq(Virtual.listItem(fc, Virtual.books[1]).doc_props.title, "Own", "metadata set by a sort is kept")
 end
 
+-- The library listing's time, split between what getListItem does for each book ------------
+
+do
+    local Timing = require("athenaeum/timing")
+    local BookList = require("ui/widget/booklist")
+    local FileChooser = require("ui/widget/filechooser")
+    local real_clock, real_opened = Timing.clock, BookList.hasBookBeenOpened
+    local now = 0
+    Timing.clock = function() return now end
+    -- The sort's lookup takes 10 ms, and checks the book was opened (3 ms) inside it.
+    BookList.hasBookBeenOpened = function() now = now + 3; return false end
+    local collate = {
+        item_func = function(item) now = now + 10; item.opened = BookList.hasBookBeenOpened(item.path) end,
+        mandatory_func = function() now = now + 2; return "" end,
+    }
+    local fc = setmetatable({}, { __index = FileChooser })
+    local items = {}
+    local spent = Virtual.timeListing(fc, collate, function()
+        for i = 1, 2 do
+            items[i] = fc:getListItem("/lib", "b" .. i .. ".epub", "/lib/b" .. i .. ".epub",
+                { mode = "file", size = 1 }, collate)
+        end
+    end)
+    eq(#items, 2, "books listed")
+    eq(spent.sort, 20, "sort lookups, leaving out the opened checks inside them")
+    eq(spent.opened, 6, "opened checks, wherever they're made")
+    eq(spent.mandatory, 4, "size and collection text")
+    check(BookList.hasBookBeenOpened ~= real_opened and rawget(fc, "getMenuItemMandatory") == nil
+        and type(collate.item_func) == "function", "functions put back after the listing")
+    local ok = pcall(Virtual.timeListing, fc, collate, function() error("boom") end)
+    check(not ok and rawget(fc, "getMenuItemMandatory") == nil, "put back after a failed listing too")
+    Timing.clock, BookList.hasBookBeenOpened = real_clock, real_opened
+end
+
 -- "Rebuilding library…" while the listing is rebuilt after a catalog change ---------------
 
 do

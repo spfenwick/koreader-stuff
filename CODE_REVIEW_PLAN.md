@@ -150,7 +150,8 @@ history or identity.
 
 ### Skipped
 
-- **ZenOS-side interface** (design item 6): needs ZenOS PRs.
+- **ZenOS-side interface** (design item 6): needs ZenOS PRs; candidates
+  are in [ZENOS_PRS.md](ZENOS_PRS.md).
 - **Folding the four streams into one** (design item 3): a large refactor
   with no bug behind it.
 

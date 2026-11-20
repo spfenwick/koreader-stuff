@@ -388,6 +388,44 @@ function Virtual.listItem(fc, book, collate)
     return decorate(withProps(fc:getListItem(dir, book.filename, book.path, attributes(book), collate), book))
 end
 
+-- Runs fn (listing the cloud books) with what FileChooser:getListItem does
+-- for each book timed: the sort's lookup (collate.item_func: the book's
+-- metadata, for the title, author and series sorts), whether the book was
+-- opened (a sidecar check), and the size and collection text. Each part's
+-- time leaves out the parts called inside it. Returns the times (ms).
+function Virtual.timeListing(fc, collate, fn)
+    local BookList = require("ui/widget/booklist")
+    local unpack = table.unpack or unpack
+    local spent = { sort = 0, opened = 0, mandatory = 0 }
+    local active
+    local function timed(key, func)
+        return function(...)
+            local outer, t = active, Timing.clock()
+            active = key
+            local r = Timing.pack(pcall(func, ...))
+            local ms = Timing.clock() - t
+            active = outer
+            spent[key] = spent[key] + ms
+            if outer then spent[outer] = spent[outer] - ms end
+            if not r[1] then error(r[2], 0) end
+            return unpack(r, 2, r.n)
+        end
+    end
+    -- Swapped in for the listing only, and put back even if it fails.
+    local item_func = collate.item_func
+    local opened = BookList.hasBookBeenOpened
+    local own_mandatory = rawget(fc, "getMenuItemMandatory")
+    if type(item_func) == "function" then collate.item_func = timed("sort", item_func) end
+    BookList.hasBookBeenOpened = timed("opened", opened)
+    fc.getMenuItemMandatory = timed("mandatory", fc.getMenuItemMandatory)
+    local ok, err = pcall(fn)
+    collate.item_func = item_func
+    BookList.hasBookBeenOpened = opened
+    rawset(fc, "getMenuItemMandatory", own_mandatory)
+    if not ok then error(err, 0) end
+    return spent
+end
+
 local function installListing()
     local FileChooser = require("ui/widget/filechooser")
     Guard.hook("library", FileChooser, "getList", function(orig, self, path, collate)
@@ -399,20 +437,30 @@ local function installListing()
             if not ok then logger.warn("Athenaeum: rebuilding message:", err) end
         end
         local dirs, files, readable = orig(self, path, collate)
-        if library then
+        if library and not collate then
+            for _i = 1, #Virtual.books do
+                table.insert(files, true) -- counting only, like FileChooser:getPathList()
+            end
+        elseif library then
             local t0 = Timing.start()
-            for _i, book in ipairs(Virtual.books) do
-                if collate then
+            local spent = Virtual.timeListing(self, collate, function()
+                for _i, book in ipairs(Virtual.books) do
                     table.insert(files, withProps(self:getListItem(path, book.filename,
                         book.path, attributes(book), collate), book))
-                else -- counting only, like FileChooser:getPathList()
-                    table.insert(files, true)
                 end
-            end
-            if collate then
-                for _i, item in ipairs(files) do decorate(item) end
-                Timing.record("listing: add cloud books", Timing.since(t0), #Virtual.books .. " books")
-            end
+            end)
+            local t_decorate = Timing.start()
+            for _i, item in ipairs(files) do decorate(item) end
+            local decorate_ms = Timing.since(t_decorate)
+            local total = Timing.since(t0)
+            local n = #Virtual.books .. " books"
+            Timing.record("listing: add cloud books", total, n)
+            -- Where it went (see Virtual.timeListing); "other" is the rest of getListItem.
+            Timing.record("listing: sort lookups", spent.sort, n)
+            Timing.record("listing: opened checks", spent.opened, n)
+            Timing.record("listing: size and collection text", spent.mandatory, n)
+            Timing.record("listing: badges", decorate_ms, #files .. " items")
+            Timing.record("listing: other", total - decorate_ms - spent.sort - spent.opened - spent.mandatory, n)
         end
         return dirs, files, readable
     end, "FileChooser:getList")

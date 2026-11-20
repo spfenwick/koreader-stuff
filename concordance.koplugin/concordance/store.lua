@@ -270,7 +270,9 @@ function Store:export(opts)
         f:write(Codec.trailerLine(#book_lines, #events), "\n")
         f:close()
         assert(os.rename(tmp, opts.out_path))
-        local size = io.open(opts.out_path, "rb"):seek("end")
+        local sf = assert(io.open(opts.out_path, "rb"))
+        local size = sf:seek("end")
+        sf:close() -- left open, it'd hold the file until garbage collected
         return { events = #events, books = #book_lines, more = #events >= opts.max_events, size = size, fp = fp }
     end))
     if res[3] == "nothing new" then self:markClean(fp) end

@@ -815,7 +815,9 @@ function BookStore:export(opts)
         f:write(BookFormat.trailerLine(nbooks, #recs), "\n")
         f:close()
         assert(os.rename(tmp, opts.out_path))
-        local size = io.open(opts.out_path, "rb"):seek("end")
+        local sf = assert(io.open(opts.out_path, "rb"))
+        local size = sf:seek("end")
+        sf:close() -- left open, it'd hold the file until garbage collected
         return { records = #recs, books = nbooks, more = #recs >= opts.max_records, size = size }
     end)
 end

@@ -646,6 +646,48 @@ do
     check(runs == 3, "and runs once")
 end
 
+-- Engine: how long each stage holds the UI loop is logged when a sync ends -----------------
+
+do
+    local tasks, lines = {}, {}
+    local now_ms = 0
+    local e = Engine.new{
+        store = {
+            -- Reading the database takes 40 ms of the export.
+            export = function() now_ms = now_ms + 40; return nil end,
+            seenSegments = function() return {} end,
+            badSegments = function() return {} end,
+        },
+        work_dir = TMP .. "/engine-timing", tmp_dir = TMP .. "/engine-timing/in",
+        logger = { info = function(...) lines[#lines + 1] = table.concat({ ... }, " ") end,
+                   warn = function() end, dbg = function() end },
+        schedule = function(_, fn) table.insert(tasks, fn) end,
+        now = function() return 0 end,
+        clock = function() return now_ms end,
+        canRun = function() return true end,
+        flush = function() now_ms = now_ms + 5 end,
+        getDeviceId = function() return "dev1" end,
+        spawn = function(fn) return { fn = fn } end,
+        isDone = function(h)
+            if not h.ran then h.ran = true; h.fn(); collectgarbage("restart") end
+            return true
+        end,
+        kill = function() end,
+        makeTransport = function() return memTransport() end,
+        -- Saving the status takes 7 ms of the finish.
+        saveStatus = function() now_ms = now_ms + 7 end,
+    }
+    e:request("timing")
+    while #tasks > 0 do table.remove(tasks, 1)() end
+    local log = table.concat(lines, "\n")
+    check(log:find("StatSync timing: export 45 ms (flush 5, prepare 0, statistics 40,", 1, true),
+        "the export's time is logged, split into parts")
+    check(log:find("StatSync timing: collect 0 ms", 1, true), "the collect step's time is logged")
+    check(log:find("StatSync timing: finish 7 ms (", 1, true) and log:find("save status 7", 1, true),
+        "the finish's time is logged, split into parts")
+    check(log:find("StatSync timing: network 0 s (in the background)", 1, true), "the network step's time is logged")
+end
+
 -- Packs ------------------------------------------------------------------------------------
 local Pack = require("concordance/pack")
 local AnnFormat = require("concordance/annformat")
