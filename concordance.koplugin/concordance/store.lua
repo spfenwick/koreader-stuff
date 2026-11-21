@@ -146,6 +146,18 @@ function Store:openStats()
     return conn
 end
 
+--- Whether the statistics database is in WAL mode, where reading it from
+-- another process never stands in the way of KOReader's writes (which
+-- have no busy timeout). KOReader leaves WAL off on some devices (old
+-- Kindles); then readers hold a lock writers must wait for.
+function Store:statsWal()
+    local ok, conn = pcall(self._open, self, self.stats_path)
+    if not ok then return false end
+    local mok, mode = pcall(conn.rowexec, conn, "PRAGMA journal_mode;")
+    conn:close()
+    return mok and type(mode) == "string" and mode:lower() == "wal"
+end
+
 --- Why the statistics database can't be synced although it's there (its
 -- schema isn't one this module knows), or nil.
 function Store:statsSchemaProblem()

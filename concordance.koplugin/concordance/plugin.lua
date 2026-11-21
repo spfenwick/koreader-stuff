@@ -858,11 +858,12 @@ function Plugin.engine()
                 ok, err = pcall(function() Plugin.histSync():observe() end)
                 if not ok then logger.warn("Concordance: recording history changes failed:", err) end
             end,
-            afterSync = function(run)
-                Plugin.bookSync():afterSync(run)
-                Plugin.collSync():afterSync()
-                Plugin.histSync():afterSync()
-            end,
+            -- Each its own tick at the end of a sync (see Engine:_finish).
+            afterSyncParts = {
+                { name = "apply book data", fn = function(run) Plugin.bookSync():afterSync(run) end },
+                { name = "apply collections", fn = function() Plugin.collSync():afterSync() end },
+                { name = "apply history", fn = function() Plugin.histSync():afterSync() end },
+            },
         },
         id = {
             store = Plugin.idStore(),

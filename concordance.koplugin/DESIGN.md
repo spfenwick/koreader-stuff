@@ -11,7 +11,7 @@ description, and what couldn't be verified. Written against KOReader
 | `main.lua` | main | Menu, event triggers, user messages |
 | `concordance/plugin.lua` | main | Wires the engine to KOReader: settings, server, subprocess, network state, the statistics plugin |
 | `concordance/engine.lua` | main | The sync cycle; one at a time plus one re-run |
-| `concordance/store.lua` | main | Export diff, merge/import, totals, local state DB |
+| `concordance/store.lua` | main (export diff: subprocess) | Export diff, merge/import, totals, local state DB |
 | `concordance/netjob.lua` | subprocess | Upload, discovery (with folder dates), downloads, packing |
 | `concordance/pack.lua` | subprocess | Packs: merging a run of segments into one |
 | `concordance/webdav.lua` | subprocess | WebDAV transport (`list`, `stat`, `get`, `put`, `put_new`, `mkdir`, `delete`) |
@@ -73,7 +73,12 @@ identity in IDENTITY.md.
 7. **`insertDB` opens the database without a busy timeout.** It would throw
    if another process held a write lock. Concordance only writes from the main
    process, synchronously, in transactions that begin and end within one
-   call, so the two can't overlap. The subprocess never opens a database.
+   call, so the two can't overlap. The subprocess only reads: it finds the
+   statistics to send (the export diff, half a second or more on an
+   e-reader) before the network step, and in WAL mode a reader never stands
+   in a writer's way. Where KOReader leaves WAL off (old Kindles), a reader
+   holds a lock writers wait for, so there the export stays in the main
+   process (`Store:statsWal`).
 8. **`page_stat` rescales by `book.pages`**, the book's page count on this
    device. So the totals (`total_read_pages` especially) depend on local
    layout, and can differ between devices with identical `page_stat_data`.
@@ -211,7 +216,10 @@ identity in IDENTITY.md.
   it's once per batch. Steps are scheduled 50 ms apart, not with
   `nextTick`: UIManager runs every task due, including ones scheduled with
   no delay from inside them, before it reads input, so a chain of
-  `nextTick` steps holds the screen till the end. **Deviation:**
+  `nextTick` steps holds the screen till the end. The finish is in steps
+  too: the open book's statistics, identity groups, joining versions,
+  highlights, book data, collections and the history each have their own
+  (and their own timing). **Deviation:**
   the task said one transaction for the whole import, but also short
   transactions; a first sync can be 300k events, so in steps. And the
   two databases can't share one atomic transaction: `statistics.sqlite3` is

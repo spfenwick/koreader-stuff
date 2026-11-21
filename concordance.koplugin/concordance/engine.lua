@@ -275,6 +275,9 @@ function Engine:_logTiming(run)
                 #parts > 0 and (" (" .. table.concat(parts, ", ") .. ")") or ""))
         end
     end
+    if run.export_ms then
+        self.log.info(string.format("StatSync timing: statistics export %.0f ms (in the background)", run.export_ms))
+    end
     if run.net_time then
         self.log.info(string.format("StatSync timing: network %d s (in the background)", run.net_time))
     end
@@ -353,29 +356,15 @@ function Engine:_export(run)
     end
     run.full_list_skipped = not run.full_list and #run.due_keys > 0 or nil
     tl = self:_lap(run, "export", "prepare", tl)
-    local t0 = os.clock()
-    local exp
-    if run.stats then
-        local eerr, why
-        exp, eerr, why = d.store:export{
-            device_id = run.device_id, out_path = run.pending_path, now = d.now(), max_events = d.max_events,
-            force_diff = run.full_list or run.full_list_skipped, -- still once a day
-        }
-        if eerr then
-            Problems.report("engine:export", "Reading the statistics database failed", eerr)
-            return self:_fail(run, "export: " .. tostring(eerr))
-        end
-        run.export_skipped = why
-        run.export = exp
-        tl = self:_lap(run, "export", "statistics", tl)
-    end
-    if exp then
-        local packed, perr = self:_zstd().compressFile(run.pending_path, run.packed_path)
-        if not packed then return self:_fail(run, "compressing: " .. tostring(perr)) end
-        exp.plain_size, exp.size = exp.size, packed
-        tl = self:_lap(run, "export", "statistics compress", tl)
-    end
-    run.export_cpu = os.clock() - t0
+    -- The statistics to send are found in the subprocess, before the
+    -- network step (see _statsExport): it reads all of page_stat_data,
+    -- which on an e-reader holds the screen for half a second or more.
+    -- Only reading: KOReader can write meanwhile (WAL).
+    local stats_export = run.stats and {
+        device_id = run.device_id, out_path = run.pending_path, packed_path = run.packed_path,
+        now = d.now(), max_events = d.max_events,
+        force_diff = run.full_list or run.full_list_skipped, -- still once a day
+    } or nil
 
     local ann_params
     if run.ann then
@@ -526,15 +515,19 @@ function Engine:_export(run)
     -- About to upload with no record of its own segments (a new device, or
     -- its state database deleted): list everything first, so it doesn't
     -- reuse a number.
-    if not next(seen[run.device_id] or {}) and (exp or (ann_params and ann_params.pending)
-            or (book_params and book_params.pending) or (id_params and id_params.pending)) then
-        run.full_list = true
+    if not next(seen[run.device_id] or {}) then
+        if (ann_params and ann_params.pending) or (book_params and book_params.pending)
+                or (id_params and id_params.pending) then
+            run.full_list = true
+        elseif stats_export then
+            stats_export.full_list_if_any = true -- known once the subprocess has looked
+        end
     end
     local params = {
         stats = run.stats,
         expect_own = next(seen[run.device_id] or {}) ~= nil,
         device_id = run.device_id,
-        pending = exp and { path = run.packed_path, size = exp.size } or nil,
+        pending = nil, -- the statistics export's, set in the subprocess
         meta_path = meta_path,
         seen = seen,
         bad = d.store:badSegments(),
@@ -551,6 +544,19 @@ function Engine:_export(run)
         named = self.status.device_names or {},
         meta_tags = self.status.device_meta_tags or {},
     }
+    if stats_export and d.store.statsWal and not d.store:statsWal() then
+        -- Not in WAL mode: reading in the subprocess could make KOReader's
+        -- writes meanwhile fail, so it's read here, holding the screen.
+        local se, eerr = self:_statsExport(stats_export, params)
+        tl = self:_lap(run, "export", "statistics", tl)
+        if not se then
+            Problems.report("engine:export", "Reading the statistics database failed", eerr)
+            return self:_fail(run, eerr)
+        end
+        self:_takeStatsExport(run, se)
+        run.export_ms = nil -- on the UI loop, in the export's timing
+        stats_export = nil
+    end
     local result_path = run.result_path
     local makeTransport = d.makeTransport
     local scan = d.id and d.id.scan
@@ -560,8 +566,20 @@ function Engine:_export(run)
         -- In the subprocess. Our database connections are all closed by
         -- now, so nothing of ours is left for the garbage collector to close.
         local started = os.time()
-        local last
-        local function save(r) last = r; writeFileAtomic(result_path, Codec.encode(r)) end
+        local last, exported
+        local function save(r)
+            r.stats_export = exported
+            last = r
+            writeFileAtomic(result_path, Codec.encode(r))
+        end
+        if stats_export then
+            local eerr
+            exported, eerr = self:_statsExport(stats_export, params)
+            if not exported then
+                save({ ok = false, error = eerr, export_failed = true, downloads = {} })
+                return
+            end
+        end
         local tok, transport = pcall(makeTransport)
         if not tok or not transport then
             save({ ok = false, error = "no transport: " .. tostring(transport), downloads = {} })
@@ -593,6 +611,40 @@ function Engine:_export(run)
     d.schedule(d.poll_interval, function() self:_step(run, "poll") end)
 end
 
+--- In the subprocess: finds the statistics to send (Store:export) and
+-- compresses them, and sets the network step's params to send them.
+-- Returns what the main process needs to know (sent back in the result
+-- file, see _collect), or nil and an error.
+function Engine:_statsExport(opts, params)
+    local d = self.deps
+    local t0, c0 = d.clock(), os.clock()
+    local ok, exp, eerr, why = pcall(d.store.export, d.store, {
+        device_id = opts.device_id, out_path = opts.out_path, now = opts.now,
+        max_events = opts.max_events, force_diff = opts.force_diff,
+    })
+    if not ok then exp, eerr = nil, exp end
+    if eerr then return nil, "export: " .. tostring(eerr) end
+    if exp then
+        local packed, perr = self:_zstd().compressFile(opts.out_path, opts.packed_path)
+        if not packed then return nil, "compressing: " .. tostring(perr) end
+        exp.plain_size, exp.size = exp.size, packed
+        params.pending = { path = opts.packed_path, size = exp.size }
+        -- See _export: a device with no segments of its own lists everything first.
+        if opts.full_list_if_any then params.full_list = true end
+    end
+    return { export = exp, skipped = why, full_list = exp and opts.full_list_if_any or nil,
+             ms = d.clock() - t0, cpu = os.clock() - c0 }
+end
+
+--- What _statsExport found, into the run.
+function Engine:_takeStatsExport(run, se)
+    run.export = se.export
+    run.export_skipped = se.skipped
+    run.export_ms = se.ms
+    run.export_cpu = se.cpu
+    if se.full_list then run.full_list = true end
+end
+
 function Engine:_poll(run)
     local d = self.deps
     if d.isDone(run.handle) then
@@ -615,6 +667,11 @@ function Engine:_collect(run)
     end
     run.result = result
     run.net_time = d.now() - run.net_started
+    local se = type(result.stats_export) == "table" and result.stats_export or nil
+    if se then self:_takeStatsExport(run, se) end
+    if result.export_failed then
+        Problems.report("engine:export", "Reading the statistics database failed", result.error)
+    end
     if run.killed then
         run.error = "network step timed out (stage: " .. tostring(result.stage) .. ")"
     elseif not result.ok then
@@ -986,12 +1043,12 @@ function Engine:_importStats(run)
     end
 end
 
+-- The end of a sync, in parts, one per UI tick: applying what came in
+-- to the open book, the history and so on can each take a while.
 function Engine:_finish(run)
     if run.finished then return end
     run.finished = true
     local d = self.deps
-    local finish_t0 = d.clock()
-    local tl = finish_t0
     if run.handle and not d.isDone(run.handle) then
         -- Only after an unexpected error: don't leave the subprocess behind.
         d.kill(run.handle)
@@ -1000,12 +1057,17 @@ function Engine:_finish(run)
         end
         d.schedule(d.poll_interval, reap)
     end
-    if next(run.affected) and d.afterImport then
-        local ok, err = pcall(d.afterImport, run.affected)
-        if not ok then self:_problem("engine:stats-refresh", "Refreshing the open book's statistics failed", "StatSync: refreshing statistics failed:", err) end
-        tl = self:_lap(run, "finish", "statistics refresh", tl)
-    end
-    if run.id and d.id.store.refreshGroups then
+    local parts = {}
+    local function add(name, fn) parts[#parts + 1] = { name = name, fn = fn } end
+    add("statistics refresh", function()
+        if next(run.affected) and d.afterImport then
+            local ok, err = pcall(d.afterImport, run.affected)
+            if not ok then self:_problem("engine:stats-refresh", "Refreshing the open book's statistics failed", "StatSync: refreshing statistics failed:", err) end
+            return true
+        end
+    end)
+    add("identity groups", function()
+        if not (run.id and d.id.store.refreshGroups) then return end
         local changed, book_affected, ann_pending = self:refreshIdentity{
             book = run.book and true or false, ann = run.ann and true or false }
         if changed and next(changed) then
@@ -1014,10 +1076,11 @@ function Engine:_finish(run)
             for md5 in pairs(book_affected) do run.book_affected[md5] = true end
             for id, a in pairs(ann_pending) do run.ann_affected[id] = a end
         end
-        tl = self:_lap(run, "finish", "identity groups", tl)
-    end
-    local join_rules = d.store.JOIN_RULES or 1
-    if run.id and d.store.joinVersions and (run.id_regrouped or self.status.versions_joined ~= join_rules) then
+        return true
+    end)
+    add("join versions", function()
+        local join_rules = d.store.JOIN_RULES or 1
+        if not (run.id and d.store.joinVersions and (run.id_regrouped or self.status.versions_joined ~= join_rules)) then return end
         -- Readings of a book's versions into one row: after the groups
         -- changed, and once when the rules for joining change (versions
         -- before them joined by other rules, or not at all).
@@ -1032,18 +1095,54 @@ function Engine:_finish(run)
         else
             self:_problem("engine:stats-join", "Joining the statistics of book versions failed", "StatSync: joining the statistics of book versions failed:", ok and err or res)
         end
-        tl = self:_lap(run, "finish", "join versions", tl)
-    end
-    if run.ann and d.ann.afterSync then
+        return true
+    end)
+    add("apply annotations", function()
+        if not (run.ann and d.ann.afterSync) then return end
         local ok, err = pcall(d.ann.afterSync, run)
         if not ok then self:_problem("engine:ann-apply", "Applying highlights and bookmarks failed", "StatSync: applying annotations failed:", err) end
-        tl = self:_lap(run, "finish", "apply annotations", tl)
+        return true
+    end)
+    -- Book data, and what goes with it (collections, history): parts of
+    -- their own when the deps give them, so each is a tick and a timing.
+    local book_parts = run.book and (d.book.afterSyncParts
+        or (d.book.afterSync and { { name = "apply book data", fn = d.book.afterSync } })) or {}
+    for _, bp in ipairs(book_parts) do
+        add(bp.name, function()
+            local ok, err = pcall(bp.fn, run)
+            if not ok then self:_problem("engine:book-apply", "Applying book status and details failed", "StatSync: " .. bp.name .. " failed:", err) end
+            return true
+        end)
     end
-    if run.book and d.book.afterSync then
-        local ok, err = pcall(d.book.afterSync, run)
-        if not ok then self:_problem("engine:book-apply", "Applying book status and details failed", "StatSync: applying book data failed:", err) end
-        tl = self:_lap(run, "finish", "apply book data", tl)
+    add(nil, function() self:_finishStatus(run) end)
+    run.finish_parts, run.finish_i = parts, 0
+    d.schedule(0, function() self:_finishPart(run) end)
+end
+
+function Engine:_finishPart(run)
+    local d = self.deps
+    run.finish_i = run.finish_i + 1
+    local part = run.finish_parts[run.finish_i]
+    local t0 = d.clock()
+    local ok, did = pcall(part.fn)
+    if not ok then
+        self:_problem("engine:finish", "Finishing a sync failed", "StatSync: finishing (" .. tostring(part.name) .. ") failed:", did)
     end
+    -- A part with nothing to do isn't a step of its own in the timings.
+    if not part.name or did or not ok then
+        if part.name then self:_lap(run, "finish", part.name, t0) end
+        self:_block(run, "finish", d.clock() - t0)
+    end
+    if run.finish_i < #run.finish_parts then
+        return d.schedule(0, function() self:_finishPart(run) end)
+    end
+    self:_finishEnd(run)
+end
+
+--- The last part of the finish: the status, saved, and the summary logged.
+function Engine:_finishStatus(run)
+    local d = self.deps
+    local tl = d.clock()
     if run.missing_own then
         -- Not this device's folder after all (see netjob.lua): don't take it
         -- as where segments go, so the right one, once set, isn't new.
@@ -1135,10 +1234,11 @@ function Engine:_finish(run)
         pcall(d.onDone, st, run)
         self:_lap(run, "finish", "after sync", tl)
     end
-    local finish_ms = d.clock() - finish_t0
-    self:_block(run, "finish", finish_ms)
-    -- Not counted again in the stage that ran _finish.
-    if run.nested_ms then run.nested_ms = run.nested_ms + finish_ms end
+end
+
+--- After the finish: timings logged, and another run if one is due.
+function Engine:_finishEnd(run)
+    local d = self.deps
     self:_logTiming(run)
 
     -- Exactly one more run if anything asked meanwhile, or if this run

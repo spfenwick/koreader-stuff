@@ -75,10 +75,16 @@ function Sim:makeEngine()
         book = {
             store = self.book_store,
             collect = function() end,
-            afterSync = function(run)
-                sim.book_affected = sim.book_affected or {}
-                for md5 in pairs(run.book_affected) do sim.book_affected[md5] = true end
-            end,
+            -- As in KOReader: book data, collections, history, a tick each.
+            -- One that fails mustn't stop the others or the sync.
+            afterSyncParts = {
+                { name = "apply book data", fn = function(run)
+                    sim.book_affected = sim.book_affected or {}
+                    for md5 in pairs(run.book_affected) do sim.book_affected[md5] = true end
+                end },
+                { name = "apply failing", fn = function() error("part failed") end },
+                { name = "apply last", fn = function() sim.last_part_runs = (sim.last_part_runs or 0) + 1 end },
+            },
         },
         id = {
             store = self.id_store,
@@ -523,6 +529,7 @@ local bm, nb = bookMerged(A)
 check(nb == 4 and bookMerged(B) == bm and bookMerged(C) == bm, "book data: same merged state everywhere (" .. nb .. ")")
 check(#bookRemote(A.id) == 1, "book data segment next to the others")
 check(B.book_affected and B.book_affected[ANN_BOOK], "B told which book's data changed")
+check((B.last_part_runs or 0) > 0, "the finish's parts after a failing one still run")
 local bplan = B.book_store:plan(ANN_BOOK, { status = "reading", rating = false, ["meta.title"] = false })
 check(#bplan == 3 and bplan[3].prop == "status" and bplan[3].value == "complete", "B would set A's status, rating and title")
 for _, d in ipairs({ A, B, C }) do

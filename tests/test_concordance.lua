@@ -697,7 +697,7 @@ do
     local now_ms = 0
     local e = Engine.new{
         store = {
-            -- Reading the database takes 40 ms of the export.
+            -- Reading the database takes 40 ms (in the subprocess).
             export = function() now_ms = now_ms + 40; return nil end,
             seenSegments = function() return {} end,
             badSegments = function() return {} end,
@@ -724,12 +724,89 @@ do
     e:request("timing")
     while #tasks > 0 do table.remove(tasks, 1)() end
     local log = table.concat(lines, "\n")
-    check(log:find("StatSync timing: export 45 ms (flush 5, prepare 0, statistics 40,", 1, true),
+    check(log:find("StatSync timing: export 5 ms (flush 5, prepare 0,", 1, true),
         "the export's time is logged, split into parts")
+    check(not log:find("statistics 40", 1, true) and log:find("StatSync timing: statistics export 40 ms (in the background)", 1, true),
+        "reading the statistics database is in the subprocess, not the UI loop")
     check(log:find("StatSync timing: collect 0 ms", 1, true), "the collect step's time is logged")
     check(log:find("StatSync timing: finish 7 ms (", 1, true) and log:find("save status 7", 1, true),
         "the finish's time is logged, split into parts")
     check(log:find("StatSync timing: network 0 s (in the background)", 1, true), "the network step's time is logged")
+end
+
+do -- without WAL, the statistics are read in the main process
+    local tasks, lines = {}, {}
+    local now_ms = 0
+    local e = Engine.new{
+        store = {
+            statsWal = function() return false end,
+            export = function() now_ms = now_ms + 40; return nil end,
+            seenSegments = function() return {} end,
+            badSegments = function() return {} end,
+        },
+        work_dir = TMP .. "/engine-nowal", tmp_dir = TMP .. "/engine-nowal/in",
+        logger = { info = function(...) lines[#lines + 1] = table.concat({ ... }, " ") end,
+                   warn = function() end, dbg = function() end },
+        schedule = function(_, fn) table.insert(tasks, fn) end,
+        now = function() return 0 end,
+        clock = function() return now_ms end,
+        canRun = function() return true end,
+        flush = function() end,
+        getDeviceId = function() return "dev1" end,
+        spawn = function(fn) return { fn = fn } end,
+        isDone = function(h)
+            if not h.ran then h.ran = true; h.fn(); collectgarbage("restart") end
+            return true
+        end,
+        kill = function() end,
+        makeTransport = function() return memTransport() end,
+        saveStatus = function() end,
+    }
+    e:request("nowal")
+    while #tasks > 0 do table.remove(tasks, 1)() end
+    local log = table.concat(lines, "\n")
+    check(log:find("StatSync timing: export 40 ms", 1, true) and log:find("statistics 40", 1, true),
+        "without WAL the export reads the statistics on the UI loop")
+    check(not log:find("statistics export", 1, true), "and not in the background")
+    check(log:find("sync (nowal) done", 1, true), "the sync still succeeds")
+
+    local D = device("WalCheck")
+    check(D.store:statsWal(), "KOReader's statistics database (WAL where the device allows) is seen as WAL")
+    local c = D:open(); c:exec("PRAGMA journal_mode = DELETE;"); c:close()
+    check(not D.store:statsWal(), "and one in rollback-journal mode isn't")
+end
+
+do -- the statistics export failing in the subprocess fails the sync, before any network
+    local tasks, done_run = {}, nil
+    local transport_made = false
+    local e = Engine.new{
+        store = {
+            export = function() return nil, "database is locked" end,
+            seenSegments = function() return {} end,
+            badSegments = function() return {} end,
+        },
+        work_dir = TMP .. "/engine-export-fail", tmp_dir = TMP .. "/engine-export-fail/in",
+        logger = { info = function() end, warn = function() end, dbg = function() end },
+        schedule = function(_, fn) table.insert(tasks, fn) end,
+        now = function() return 0 end,
+        canRun = function() return true end,
+        flush = function() end,
+        getDeviceId = function() return "dev1" end,
+        spawn = function(fn) return { fn = fn } end,
+        isDone = function(h)
+            if not h.ran then h.ran = true; h.fn(); collectgarbage("restart") end
+            return true
+        end,
+        kill = function() end,
+        makeTransport = function() transport_made = true; return memTransport() end,
+        saveStatus = function() end,
+        onDone = function(_, run) done_run = run end,
+    }
+    e:request("export-fail")
+    while #tasks > 0 do table.remove(tasks, 1)() end
+    check(done_run and done_run.error == "export: database is locked", "the sync fails with the export's error (" .. tostring(done_run and done_run.error) .. ")")
+    check(not transport_made, "and the network step doesn't start")
+    check(not e.running, "the engine is idle afterwards")
 end
 
 -- Packs ------------------------------------------------------------------------------------
