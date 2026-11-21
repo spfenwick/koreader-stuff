@@ -926,16 +926,29 @@ function Store:joinVersions()
     return { removed = removed, affected = affected }
 end
 
---- Imports one downloaded segment. Both databases are written in their own
--- transaction; statistics first, so a crash in between at worst repeats
--- the (idempotent) import next time, and never marks unimported data seen.
--- Returns the summary, or nil, an error, and "format" (the file is bad) or
--- "db" (database trouble). Either way the segment is left unseen.
-function Store:importSegment(path, device_id, name, size, etag, now)
+--- Imports downloaded segments, one after another, in one transaction
+-- per database: statistics committed first, so a crash in between at
+-- worst repeats the (idempotent) import next time, and never marks
+-- unimported data seen. Each segment has its own savepoint, so a bad file
+-- leaves the others in.
+--
+-- The fingerprint check that keeps an all-exported database marked so
+-- (see markClean) reads all of page_stat_data, which on an e-reader takes
+-- far longer than merging a small segment: in a batch it's done once
+-- before and once after, not for every segment.
+--
+-- nextItem() gives the segments, { path, device, name, size, etag }, and
+-- nil when there are no more for this batch. Returns a list with each
+-- item's result, in order: { item, summary } or { item, err, kind = "format" }
+-- (the file is bad, and left unseen). Or nil, an error and "db" (database
+-- trouble): then nothing of the batch is in, and the error is the first
+-- item's (others may not have been asked for).
+function Store:importSegments(nextItem, now)
     local stats, err = self:openStats()
     if not stats then return nil, err, "db" end
     local state = self:openState()
-    local ok, summary, merr = pcall(function()
+    local results = {}
+    local ok, perr = pcall(function()
         stats:exec("BEGIN IMMEDIATE;")
         state:exec("BEGIN IMMEDIATE;")
         -- If everything was exported before this import, it still is after
@@ -946,34 +959,64 @@ function Store:importSegment(path, device_id, name, size, etag, now)
         local clean_row = q_clean:step()
         q_clean:close()
         local was_clean = clean_row and clean_row[1] == fingerprint(stats)
-        local s, e = mergeSegment(stats, state, path,
-            { join = self.join_versions, keep_md5 = self.join_versions and self:_openMd5() or nil })
-        if not s then return nil, e end
-        state:prepare(INSERT_SEEN):bind(device_id, name, size, etag, now, s.events):step()
-        if was_clean then
+        local merge_opts = { join = self.join_versions, keep_md5 = self.join_versions and self:_openMd5() or nil }
+        local imported = 0
+        local item = nextItem()
+        while item do
+            stats:exec("SAVEPOINT segment;")
+            state:exec("SAVEPOINT segment;")
+            local s, e = mergeSegment(stats, state, item.path, merge_opts)
+            if s then
+                state:prepare(INSERT_SEEN):bind(item.device, item.name, item.size, item.etag, now, s.events):step()
+                stats:exec("RELEASE segment;")
+                state:exec("RELEASE segment;")
+                imported = imported + 1
+                results[#results + 1] = { item = item, summary = s }
+            else
+                for _, conn in ipairs({ stats, state }) do
+                    conn:exec("ROLLBACK TO segment;")
+                    conn:exec("RELEASE segment;")
+                end
+                results[#results + 1] = { item = item, err = e, kind = "format" }
+            end
+            item = nextItem()
+        end
+        if was_clean and imported > 0 then
             state:prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('clean_fingerprint', ?);")
                 :bind(fingerprint(stats)):step()
         end
-        return s
     end)
-    if ok and summary then
+    if ok then
         local cok, cerr = pcall(stats.exec, stats, "COMMIT;")
         if cok then
             cok, cerr = pcall(state.exec, state, "COMMIT;")
         end
-        if not cok then
-            rollback(stats); rollback(state)
-            ok, summary, merr = false, nil, cerr
-        end
-    else
+        if not cok then ok, perr = false, cerr end
+    end
+    if not ok then
         rollback(stats)
         rollback(state)
     end
     stats:close()
     state:close()
-    if not ok then return nil, tostring(merr or summary), "db" end
-    if not summary then return nil, merr, "format" end
-    return summary
+    if not ok then return nil, tostring(perr), "db" end
+    return results
+end
+
+--- Imports one downloaded segment (see importSegments). Returns the
+-- summary, or nil, an error, and "format" (the file is bad) or "db"
+-- (database trouble). Either way the segment is left unseen.
+function Store:importSegment(path, device_id, name, size, etag, now)
+    local given = false
+    local results, err, kind = self:importSegments(function()
+        if given then return nil end
+        given = true
+        return { path = path, device = device_id, name = name, size = size, etag = etag }
+    end, now)
+    if not results then return nil, err, kind end
+    local r = results[1]
+    if r.summary then return r.summary end
+    return nil, r.err, r.kind
 end
 
 return Store

@@ -386,6 +386,50 @@ do -- a bad segment changes nothing and isn't marked seen
     cs:close()
 end
 
+do -- importSegments: several segments in one transaction, a bad one among them left out
+    local A, B = device("A"), device("B")
+    A:read(BOOK1, { { 1, 1000, 30 } })
+    local path = TMP .. "/batch-fp.jsonl"
+    local res = A.store:export{ device_id = "A", out_path = path, now = 1, max_events = 100 }
+    A.store:markExported(path, "A", "seg-1", res.size, nil, 1)
+    A.store:markClean(res.fp)
+    B:read(BOOK2, { { 1, 5000, 20 } })
+    local s1 = export(B)
+    B:read(BOOK2, { { 2, 5100, 20 }, { 3, 5200, 20 } })
+    local s2 = export(B)
+    local bad = segment{ HEADER, Codec.bookLine{ md5 = "zz", title = "Z", last_open = 1 },
+                         Codec.eventLine("zz", 1, 5, 5, 5) } -- no trailer
+    local items = { { path = s1, device = "B", name = "b-1" }, { path = bad, device = "B", name = "b-bad" },
+                    { path = s2, device = "B", name = "b-2" } }
+    local i = 0
+    local results = A.store:importSegments(function() i = i + 1; return items[i] end, 1)
+    check(results and #results == 3, "a result for each segment")
+    check(results[1].summary and results[1].summary.inserted == 1, "first segment imported")
+    check(results[2].kind == "format" and not results[2].summary, "bad segment reported as bad format")
+    check(results[3].summary and results[3].summary.inserted == 2, "the one after the bad one imported")
+    check(results[2].item == items[2], "results carry their items")
+    local seen = A.store:seenSegments().B or {}
+    check(seen["b-1"] and seen["b-2"] and not seen["b-bad"], "good segments seen, the bad one not")
+    check(A:count("SELECT count(*) FROM book WHERE md5 = 'zz'") == 0, "nothing of the bad segment written")
+    check(A:count("SELECT count(*) FROM page_stat_data") == 4, "all good events in")
+    local _, _, why = A.store:export{ device_id = "A", out_path = path, now = 1, max_events = 100 }
+    check(why == "unchanged", "a batch into a clean table keeps it clean")
+    local ok, totals_why = A:totalsMatch()
+    check(ok, "totals match KOReader after a batch: " .. tostring(totals_why))
+
+    -- Database trouble: nothing of the batch stays in.
+    local C = device("C")
+    local before = C:dump()
+    local j = 0
+    local none, err, kind = C.store:importSegments(function()
+        j = j + 1
+        if j == 1 then return items[1] end
+        if j == 2 then error("disk on fire") end
+    end, 1)
+    check(none == nil and kind == "db" and tostring(err):find("disk on fire"), "an error stops the batch as database trouble")
+    check(C:dump() == before and next(C.store:seenSegments()) == nil, "and nothing of it is in")
+end
+
 do -- pruneBad forgets bad segments from an older reader, and ones since imported
     local B = device("B")
     B.store:recordBad("X", "id-1.jsonl.zst", 10, "e", "unsupported format version 2", 301000) -- older reader

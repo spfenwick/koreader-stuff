@@ -201,10 +201,19 @@ identity in IDENTITY.md.
   at the **time limit (180 s)**, finished downloads and a verified upload
   still count. The main process polls every second with
   `UIManager:scheduleIn`.
-- **Import:** one segment per UI tick, each in its own transaction, statistics
-  database first, then the state database (seen, exported). **Deviation:**
+- **Import:** one step per UI tick: statistics segments in a row go into
+  one transaction until about 150 ms of merging is used up, each segment in
+  its own savepoint so a bad file leaves the others in; other segments one
+  per step. Statistics database first, then the state database (seen,
+  exported). The import carries the fingerprint (above) forward, which
+  reads the whole table before and after: per segment, that was most of the
+  time on an e-reader (about 350 ms a segment, 20 s for 56 small ones), so
+  it's once per batch. Steps are scheduled 50 ms apart, not with
+  `nextTick`: UIManager runs every task due, including ones scheduled with
+  no delay from inside them, before it reads input, so a chain of
+  `nextTick` steps holds the screen till the end. **Deviation:**
   the task said one transaction for the whole import, but also short
-  transactions; a first sync can be 300k events, so per segment. And the
+  transactions; a first sync can be 300k events, so in steps. And the
   two databases can't share one atomic transaction: `statistics.sqlite3` is
   in WAL mode, where SQLite only guarantees multi-database commits per file.
   Committing statistics first means a crash in between at worst repeats an

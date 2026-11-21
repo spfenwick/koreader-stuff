@@ -30,6 +30,20 @@ local Store = require("concordance/store")
 
 local Plugin = {}
 
+-- The gap between the steps of a sync. Not nextTick: UIManager runs every
+-- task that comes due, including those the tasks themselves schedule with
+-- no delay, before it looks at input again, so a chain of nextTick steps
+-- holds the screen until the whole chain is done. A step scheduled a
+-- little later lets the input in between: it isn't due yet when the loop
+-- checks the tasks again after repainting, so the loop goes on to input.
+-- (The gap counts from the end of the step, so it needs to outlast that
+-- repaint, not the step.)
+local STEP_GAP = 0.05
+
+local function schedule(delay, fn)
+    UIManager:scheduleIn(math.max(delay, STEP_GAP), fn)
+end
+
 -- Settings live in KOReader's settings folder, in settings/concordance/:
 --
 --   settings.lua    the same on every device (fine to sync between devices
@@ -323,9 +337,7 @@ function Plugin.annSync()
         logger = logger,
         ui_manager = UIManager,
         enabled = function() return true end,
-        schedule = function(delay, fn)
-            if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
-        end,
+        schedule = schedule,
         saveScanned = function(t)
             Plugin.deviceState().ann_scanned = t
             Plugin.saveDeviceState()
@@ -355,9 +367,7 @@ function Plugin.bookSync()
         logger = logger,
         ui_manager = UIManager,
         enabled = function() return true end,
-        schedule = function(delay, fn)
-            if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
-        end,
+        schedule = schedule,
         -- Athenaeum's library files: books never opened here can have a
         -- sidecar too (see BookSync:refresh).
         library_files = function()
@@ -437,9 +447,7 @@ function Plugin.collSync()
         now = os.time,
         logger = logger,
         enabled = function() return true end,
-        schedule = function(delay, fn)
-            if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
-        end,
+        schedule = schedule,
         idle = uiIdle,
         saved_ids = function()
             local data = require("luasettings"):open(DataStorage:getSettingsDir() .. "/collection.lua").data
@@ -535,9 +543,7 @@ function Plugin.histSync()
         now = os.time,
         logger = logger,
         enabled = function() return true end,
-        schedule = function(delay, fn)
-            if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
-        end,
+        schedule = schedule,
         uuids = function(md5s) return Plugin.idStore():uuids(md5s) end,
         resolve = cloudPath,
         refresh_ui = refreshAfterHistory,
@@ -734,9 +740,7 @@ function Plugin.engine()
         getDeviceId = Plugin.deviceId,
         now = os.time,
         clock = wallClockMs,
-        schedule = function(delay, fn)
-            if delay <= 0 then UIManager:nextTick(fn) else UIManager:scheduleIn(delay, fn) end
-        end,
+        schedule = schedule,
         canRun = function(reason, opts)
             local problem = Plugin.serverProblem()
             if problem then return false, problem end

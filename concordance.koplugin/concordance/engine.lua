@@ -827,50 +827,37 @@ function Engine:_packs(run, result)
     if result.meta_written then self.status.meta_key = run.meta_key end
 end
 
--- One segment per UI tick, so a big first import doesn't freeze the screen.
+-- How long one import step may go on taking statistics segments (they go
+-- into one transaction, see Store:importSegments). The first always goes
+-- in. A step also takes two reads of the whole statistics table, which on
+-- an e-reader can take as long again.
+local IMPORT_BUDGET_MS = 150
+
+local function isStats(item) return item.stream ~= "ann" and item.stream ~= "book" and item.stream ~= "id" end
+
+-- One import step per UI tick, so a big first import doesn't freeze the
+-- screen: a segment of highlights, book data or book identity, or as many
+-- statistics segments in a row as fit in IMPORT_BUDGET_MS.
 function Engine:_import(run)
     local d = self.deps
     local item = run.queue[run.qi]
     if not item then return self:_finish(run) end
-    run.qi = run.qi + 1
-    local t0 = os.clock()
-    local plain = item.path .. ".jsonl"
-    local summary, err, kind
+    local failed
+    if isStats(item) then
+        failed = self:_importStats(run)
+    else
+        failed = self:_importOne(run, item)
+    end
+    if failed then return end
+    d.schedule(0, function() self:_step(run, "import") end)
+end
+
+--- Counts a segment's import in the run; true when the run failed (database trouble).
+function Engine:_recordImport(run, item, summary, err, kind)
+    local d = self.deps
     local is_ann = item.stream == "ann"
     local is_book = item.stream == "book"
     local is_id = item.stream == "id"
-    local tl = d.clock()
-    local uok, uerr = self:_zstd().decompressFile(item.path, plain)
-    tl = self:_lap(run, "import", "decompress", tl)
-    if uok and is_id then
-        if run.id then
-            summary, err, kind = d.id.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
-        else
-            err, kind = "book identity sync is off", "skip"
-        end
-    elseif uok and is_book then
-        if run.book then
-            summary, err, kind = d.book.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
-        else
-            err, kind = "book data sync is off", "skip"
-        end
-    elseif uok and is_ann then
-        if run.ann then
-            summary, err, kind = d.ann.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
-        else
-            err, kind = "annotation sync is off", "skip"
-        end
-    elseif uok then
-        summary, err, kind = d.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
-    else
-        err, kind = "can't decompress: " .. tostring(uerr), "format"
-    end
-    run.import_cpu = (run.import_cpu or 0) + (os.clock() - t0)
-    self:_lap(run, "import", is_id and "identity" or is_book and "book data"
-        or is_ann and "annotations" or "statistics", tl)
-    os.remove(item.path)
-    os.remove(plain)
-
     if summary and is_id then
         run.id_segments_imported = run.id_segments_imported + 1
         run.id_imported_records = run.id_imported_records + summary.records
@@ -903,9 +890,100 @@ function Engine:_import(run)
         -- Database trouble: stop; nothing is marked, the next sync retries.
         for i = run.qi, #run.queue do os.remove(run.queue[i].path) end
         Problems.report("engine:import", "Writing into a database failed", err)
-        return self:_fail(run, "import: " .. tostring(err))
+        self:_fail(run, "import: " .. tostring(err))
+        return true
     end
-    d.schedule(0, function() self:_step(run, "import") end)
+end
+
+--- One highlights, book data or book identity segment.
+function Engine:_importOne(run, item)
+    local d = self.deps
+    run.qi = run.qi + 1
+    local t0 = os.clock()
+    local plain = item.path .. ".jsonl"
+    local summary, err, kind
+    local is_ann = item.stream == "ann"
+    local is_book = item.stream == "book"
+    local is_id = item.stream == "id"
+    local tl = d.clock()
+    local uok, uerr = self:_zstd().decompressFile(item.path, plain)
+    tl = self:_lap(run, "import", "decompress", tl)
+    if uok and is_id then
+        if run.id then
+            summary, err, kind = d.id.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
+        else
+            err, kind = "book identity sync is off", "skip"
+        end
+    elseif uok and is_book then
+        if run.book then
+            summary, err, kind = d.book.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
+        else
+            err, kind = "book data sync is off", "skip"
+        end
+    elseif uok and is_ann then
+        if run.ann then
+            summary, err, kind = d.ann.store:importSegment(plain, item.device, item.name, item.size, item.etag, d.now())
+        else
+            err, kind = "annotation sync is off", "skip"
+        end
+    else
+        err, kind = "can't decompress: " .. tostring(uerr), "format"
+    end
+    run.import_cpu = (run.import_cpu or 0) + (os.clock() - t0)
+    self:_lap(run, "import", is_id and "identity" or is_book and "book data" or "annotations", tl)
+    os.remove(item.path)
+    os.remove(plain)
+    return self:_recordImport(run, item, summary, err, kind)
+end
+
+--- Statistics segments, as many in a row as fit in IMPORT_BUDGET_MS, in
+-- one transaction.
+function Engine:_importStats(run)
+    local d = self.deps
+    local t0 = os.clock()
+    local start = d.clock()
+    local unzip_ms = 0
+    local handed, bad = {}, {}
+    -- The budget is for the segments: it starts after the store's first
+    -- look at the table (which takes as long however many there are).
+    local budget_start
+    local function nextItem()
+        budget_start = budget_start or d.clock()
+        while true do
+            local item = run.queue[run.qi]
+            if not item or not isStats(item) then return nil end
+            if #handed > 0 and d.clock() - budget_start >= IMPORT_BUDGET_MS then return nil end
+            run.qi = run.qi + 1
+            local plain = item.path .. ".jsonl"
+            local tl = d.clock()
+            local uok, uerr = self:_zstd().decompressFile(item.path, plain)
+            unzip_ms = unzip_ms + (d.clock() - tl)
+            os.remove(item.path)
+            if uok then
+                handed[#handed + 1] = plain
+                return { path = plain, device = item.device, name = item.name, size = item.size,
+                         etag = item.etag, queued = item }
+            end
+            os.remove(plain)
+            -- Recorded after the batch: the state database is ours till then.
+            bad[#bad + 1] = { item = item, err = "can't decompress: " .. tostring(uerr) }
+        end
+    end
+    local results, err = d.store:importSegments(nextItem, d.now())
+    for _, plain in ipairs(handed) do os.remove(plain) end
+    run.import_cpu = (run.import_cpu or 0) + (os.clock() - t0)
+    local now = d.clock()
+    self:_lap(run, "import", "decompress", now - unzip_ms)
+    self:_lap(run, "import", "statistics", start + unzip_ms)
+    for _, b in ipairs(bad) do
+        self:_recordImport(run, b.item, nil, b.err, "format")
+    end
+    if not results then
+        return self:_recordImport(run, run.queue[run.qi - 1] or {}, nil, err, "db")
+    end
+    for _, r in ipairs(results) do
+        if self:_recordImport(run, r.item.queued, r.summary, r.err, r.kind) then return true end
+    end
 end
 
 function Engine:_finish(run)
