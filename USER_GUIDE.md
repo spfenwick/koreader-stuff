@@ -61,10 +61,10 @@ Downloads run in the background, one at a time. Files are named like KOReader's 
 
 | Sync | What it does | Runs (default) |
 | --- | --- | --- |
-| Quick sync | Adds books new to the catalog. Becomes a full sync if the number of books changed | Every hour, when the file browser opens or Wi-Fi connects |
+| Quick sync | Adds books new to the catalog. Becomes a full sync if the number of books changed | When the file browser opens (at start-up and after closing a book), on wake-up and when Wi-Fi connects |
 | Full sync | Rereads the whole catalog: edited and removed books, series, titles. A catalog that comes back empty removes nothing | Weekly |
 
-Quick sync can be every 1, 3, 6 or 12 hours, daily or never; full sync daily, weekly or never. Neither turns Wi-Fi on. Run either by hand from the menu, or assign **Athenæum: quick sync** to a gesture.
+Automatic quick syncs can be turned off (**Quick sync automatically**); full sync can be daily, weekly or never. Neither turns Wi-Fi on. Run either by hand from the menu, or assign **Athenæum: quick sync** to a gesture.
 
 ### Menu
 

@@ -88,7 +88,7 @@ clean()
 Settings.save("folder", "/mnt/onboard/Books")
 Settings.save("badge_noncloud", true)
 Settings.save("server", { url = "https://books.example", username = "me" })
-Settings.save("quick_sync", "3h")
+Settings.save("quick_sync", "never")
 Settings.save(Settings.UPDATES_KEY, { mode = "install", last_check = 5 })
 local device, shared = file(Settings.path()), file(Settings.sharedPath())
 eq(device.folder, "/mnt/onboard/Books", "folder in this device's file")
@@ -96,7 +96,7 @@ eq(device.updates.last_check, 5, "updater state in this device's file")
 eq(device.badge_noncloud, nil, "badge not in this device's file")
 eq(shared.badge_noncloud, true, "badge in the shared file")
 eq(shared.server.url, "https://books.example", "catalog in the shared file")
-eq(shared.quick_sync, "3h", "sync schedule in the shared file")
+eq(shared.quick_sync, "never", "sync setting in the shared file")
 eq(shared.folder, nil, "folder not in the shared file")
 eq(shared.updates, nil, "updater state not in the shared file")
 
@@ -115,7 +115,7 @@ eq(file(Settings.path()).updates.mode, "off", "updater writes this device's file
 
 -- Read back after a restart.
 Settings.reset()
-eq(Settings.all().quick_sync, "3h", "shared key read back")
+eq(Settings.all().quick_sync, "never", "shared key read back")
 eq(Settings.all().folder, "/mnt/onboard/Books", "device key read back")
 
 -- Moving from 0.8.1 (everything in settings.lua) ------------------------------------

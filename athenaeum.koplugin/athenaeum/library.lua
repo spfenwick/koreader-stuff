@@ -8,8 +8,9 @@ the rest; see settings.lua):
   server     { url, username } of one of KOReader's OPDS catalogs
   folder     library folder (default: KOReader's download folder, else home)
   show       show cloud books (default true)
-  quick_sync  automatic quick sync, when the file browser opens and Wi-Fi is
-             on: "1h" (default), "3h", "6h", "12h", "daily" or "never"
+  quick_sync  automatic quick sync, when the file browser opens, on wake-up
+             and when Wi-Fi connects (only while Wi-Fi is on): "never" turns
+             it off; anything else (older versions' "1h"... too) is on
   full_sync  scheduled full sync: "daily", "weekly" (default) or "never"; a
              quick sync that finds the book count changed runs one anyway
   auto_sync  old on/off switch: false (and no quick_sync/full_sync) = never
@@ -81,9 +82,6 @@ Badge.isCloud = function(path) return Virtual.by_path[path] ~= nil end
 -- Automatic quick and full syncs (settings quick_sync, full_sync); a quick
 -- sync that finds the book count changed runs a full sync anyway.
 local HOUR = 60 * 60
-local QUICK_INTERVALS = { ["1h"] = HOUR, ["3h"] = 3 * HOUR, ["6h"] = 6 * HOUR, ["12h"] = 12 * HOUR,
-    daily = 24 * HOUR }
-local QUICK_SYNC_MODES = { "1h", "3h", "6h", "12h", "daily", "never" }
 local FULL_INTERVALS = { daily = 24 * HOUR, weekly = 7 * 24 * HOUR }
 local FULL_SYNC_MODES = { "daily", "weekly", "never" }
 local PREFETCH_COVERS = 300          -- covers a batch after each sync, newest first (all, in batches, on a first sync)
@@ -783,11 +781,22 @@ local function autoSyncOff(s)
     return s.auto_sync == false
 end
 
---- "1h", "3h", "6h", "12h", "daily" or "never".
-function Library.quickSyncMode()
+--- Whether quick syncs run automatically (when the file browser opens, on
+-- wake-up and when Wi-Fi connects). Off is saved as "never", which older
+-- versions read as off too; they read on (no setting) as hourly.
+function Library.quickSyncOn()
     local s = Library.settings()
-    if QUICK_INTERVALS[s.quick_sync] or s.quick_sync == "never" then return s.quick_sync end
-    return autoSyncOff(s) and "never" or "1h"
+    if s.quick_sync == nil then return not autoSyncOff(s) end
+    return s.quick_sync ~= "never" and s.quick_sync ~= false
+end
+
+function Library.setQuickSync(on)
+    Library.save("quick_sync", (not on) and "never" or nil)
+    -- The old switch would otherwise turn it off again; full syncs stay as they were.
+    if on and autoSyncOff(Library.settings()) then
+        if Library.settings().full_sync == nil then Library.save("full_sync", Library.fullSyncMode()) end
+        Library.save("auto_sync", nil)
+    end
 end
 
 --- "daily", "weekly" or "never".
@@ -795,11 +804,6 @@ function Library.fullSyncMode()
     local s = Library.settings()
     if FULL_INTERVALS[s.full_sync] or s.full_sync == "never" then return s.full_sync end
     return autoSyncOff(s) and "never" or "weekly"
-end
-
-local function quickSyncText(mode)
-    return ({ ["1h"] = _("every hour"), ["3h"] = _("every 3 hours"), ["6h"] = _("every 6 hours"),
-        ["12h"] = _("every 12 hours"), daily = _("daily"), never = _("never") })[mode]
 end
 
 local function fullSyncText(mode)
@@ -942,16 +946,31 @@ function Library.sync(mode, quiet, opts)
     return true
 end
 
--- A folder check that found no new, changed or deleted files, or a cover
--- download that got nothing, leaves the listing as it is: skip reloading.
+-- A quick sync that found no new books, or a folder check that found no new,
+-- changed or deleted files, or a cover download that got nothing, leaves the
+-- listing as it is: skip reloading (quick syncs run on every wake-up).
 local function listingMayHaveChanged(mode, r)
     if r.error then return true end
     if mode == "scan" then return (r.scanned or 0) > 0 or (r.removed or 0) > 0 end
+    if mode == "quick" and r.sync and not r.sync.escalated then
+        return (r.sync.added or 0) > 0 or (r.scanned or 0) > 0 or (r.removed or 0) > 0
+    end
     if mode == "prefetch" or mode == "covers" then
         return not r.covers or (r.covers.fetched or 0) > 0 or (r.covers.failed or 0) > 0
     end
     return true
 end
+
+-- After a sync: whether a cover download might find something (new books,
+-- a full sync's changes, or covers still missing or due a retry).
+local function coversWanted(r)
+    if r.sync.escalated or r.mode == "full" or (r.sync.added or 0) > 0 then return true end
+    local st = Library.stats or {}
+    if not st.covers_available then return true end
+    return (st.covers or 0) < st.covers_available
+end
+
+Library._listingMayHaveChanged, Library._coversWanted = listingMayHaveChanged, coversWanted -- for tests
 
 local function pollJob()
     local job = Library.job
@@ -1022,7 +1041,7 @@ local function pollJob()
     if more then
         Library.sync(job.mode, true, { manual = job.opts.manual, retry_before = job.opts.retry_before,
             fetched = covers.fetched_total, unchanged = covers.unchanged_total, crashes = crashes })
-    elseif result.sync and not result.error and Covers.canFetch() then
+    elseif result.sync and not result.error and Covers.canFetch() and coversWanted(result) then
         -- After a sync, download some missing covers (newest books first).
         Library.sync("prefetch", true)
     end
@@ -1053,26 +1072,25 @@ function Library.refreshCovers()
 end
 
 --- Called when the file browser opens: load, then sync if it's due.
--- The automatic sync due now: "quick", "full" or nil. A quick sync also
--- runs a full sync when one is due, so "full" only when quick syncs are off.
+-- The automatic sync to run now: "quick" (each time, when they're on), "full"
+-- or nil. A quick sync also runs a full sync when one is due, so "full" only
+-- when quick syncs are off.
 local function syncDue()
     local server = Library.server()
     if not server then return nil end
-    local quick, full = QUICK_INTERVALS[Library.quickSyncMode()], FULL_INTERVALS[Library.fullSyncMode()]
+    local quick, full = Library.quickSyncOn(), FULL_INTERVALS[Library.fullSyncMode()]
     if not quick and not full then return nil end
     local NetworkMgr = require("ui/network/manager")
     if not NetworkMgr:isConnected() then return nil end
+    if quick then return "quick" end
     local store = openStore(server)
-    local last = tonumber(store:getMeta("last_sync")) or 0
     local last_full = tonumber(store:getMeta("last_full_sync")) or 0
     store:close()
-    local now = os.time()
-    if quick and now - last > quick then return "quick" end
-    if full and now - last_full > full then return quick and "quick" or "full" end
+    if os.time() - last_full > full then return "full" end
     return nil
 end
 
---- Starts the automatic sync that's due, if any.
+--- Starts the automatic sync, if one is to run now (none while offline).
 function Library.syncIfDue()
     if Library.job then return false end
     local mode = syncDue()
@@ -1363,6 +1381,12 @@ function Library.onNetworkConnected()
     Library.syncIfDue()
 end
 
+--- Woken up, in the file browser: sync (if Wi-Fi is still on; otherwise
+-- when it connects).
+function Library.onResume()
+    Library.syncIfDue()
+end
+
 -- Menu -------------------------------------------------------------------------
 
 local function ago(t)
@@ -1375,47 +1399,62 @@ local function ago(t)
     return T(_("%1 days ago"), math.floor(d / 86400))
 end
 
+--- The Status page's text: headed sections, laid out as Concordance's.
 function Library.statusText()
     local server = Library.server()
     local lines = {}
-    if not server then
-        local problems = Guard.statusText()
-        return _("No catalog chosen.") .. (problems ~= "" and ("\n\n" .. problems) or "")
+    -- A heading, then its lines indented under it.
+    local function section(heading, items)
+        if #lines > 0 then table.insert(lines, "") end
+        table.insert(lines, heading)
+        for _i, line in ipairs(items) do table.insert(lines, "   " .. line) end
     end
-    table.insert(lines, T(_("Catalog: %1"), server.title or server.url))
-    table.insert(lines, T(_("Folder: %1"), Library.folder() or "?"))
-    local store = openStore(server)
-    local last, last_full = store:getMeta("last_quick_sync"), store:getMeta("last_full_sync")
-    store:close()
-    local st = Library.stats
-    if st.catalog then
-        table.insert(lines, T(_("Books in catalog: %1"), st.catalog))
-        table.insert(lines, T(_("On this device: %1"), st.on_device))
-        table.insert(lines, T(_("Shown as cloud books: %1"), st.cloud))
-        table.insert(lines, T(_("Files in the folder not in the catalog: %1"), st.unmatched_files))
-        table.insert(lines, T(_("Covers downloaded: %1 of %2"), st.covers, st.covers_available))
-        if (st.covers_failed or 0) > 0 then
-            table.insert(lines, T(_("Covers the server couldn't provide: %1 (tried again daily)"), st.covers_failed))
+    local problems = {}
+    local guard_text = Guard.statusText()
+    for line in guard_text:gmatch("[^\n]+") do table.insert(problems, "• " .. line) end
+
+    local overview = {}
+    if server then
+        local store = openStore(server)
+        local last, last_full = store:getMeta("last_quick_sync"), store:getMeta("last_full_sync")
+        store:close()
+        table.insert(overview, T(_("Quick sync: last %1 (automatic %2)"), ago(last),
+            Library.quickSyncOn() and _("on") or _("off")))
+        table.insert(overview, T(_("Full sync: last %1 (%2)"), ago(last_full), fullSyncText(Library.fullSyncMode())))
+        local r = Library.last_result
+        table.insert(overview, T(_("Last error: %1"), r and r.error
+            and T("%1 (%2)", r.error, jobName(r.mode, r.sync and r.sync.escalated)) or _("none")))
+        if Library.job then
+            table.insert(overview, ({ quick = _("Quick sync running…"), full = _("Full sync running…"),
+                scan = _("Checking the folder…") })[Library.job.mode] or _("Downloading covers…"))
         end
+    else
+        table.insert(overview, _("No catalog chosen."))
     end
-    table.insert(lines, T(_("Last quick sync: %1"), ago(last)))
-    table.insert(lines, T(_("Last full sync: %1"), ago(last_full)))
-    table.insert(lines, T(_("Quick sync: %1"), quickSyncText(Library.quickSyncMode())))
-    table.insert(lines, T(_("Full sync: %1"), fullSyncText(Library.fullSyncMode())))
-    local r = Library.last_result
-    if r and r.error then
-        table.insert(lines, T(_("Last error (%1): %2"), jobName(r.mode, r.sync and r.sync.escalated), r.error))
+    if #problems == 0 then table.insert(overview, _("Problems since KOReader started: none")) end
+    section(_("Overview"), overview)
+    if #problems > 0 then
+        section(_("Problems since KOReader started (often from a KOReader or ZenOS update)"), problems)
     end
-    local problems = Guard.statusText()
-    if problems ~= "" then
-        table.insert(lines, "")
-        table.insert(lines, _("Compatibility:"))
-        table.insert(lines, problems)
-    end
-    if Library.job then
-        local mode = Library.job.mode
-        table.insert(lines, ({ quick = _("Quick sync running…"), full = _("Full sync running…"),
-            scan = _("Checking the folder…") })[mode] or _("Downloading covers…"))
+    if not server then return table.concat(lines, "\n") end
+
+    section(_("Catalog"), {
+        T(_("Catalog: %1"), server.title or server.url),
+        T(_("Folder: %1"), Library.folder() or "?"),
+    })
+    local st = Library.stats or {}
+    if st.catalog then
+        section(_("Books"), {
+            T(_("In the catalog: %1"), st.catalog),
+            T(_("On this device: %1"), st.on_device),
+            T(_("Shown as cloud books: %1"), st.cloud),
+            T(_("Files in the folder not in the catalog: %1"), st.unmatched_files),
+        })
+        local covers = { T(_("Downloaded: %1 of %2"), st.covers, st.covers_available) }
+        if (st.covers_failed or 0) > 0 then
+            table.insert(covers, T(_("The server couldn't provide: %1 (tried again daily)"), st.covers_failed))
+        end
+        section(_("Covers"), covers)
     end
     return table.concat(lines, "\n")
 end
@@ -1457,22 +1496,10 @@ function Library.menuEntry(plugin)
                     callback = function() Library.refreshCovers() end,
                 },
                 {
-                    text_func = function()
-                        return T(_("Quick sync: %1"), quickSyncText(Library.quickSyncMode()))
-                    end,
-                    help_text = _("How often a quick sync looks for new books, when the file browser opens or Wi-Fi connects (Wi-Fi isn't turned on for it)."),
-                    sub_item_table_func = function()
-                        local modes = {}
-                        for _i, mode in ipairs(QUICK_SYNC_MODES) do
-                            table.insert(modes, {
-                                text = quickSyncText(mode),
-                                checked_func = function() return Library.quickSyncMode() == mode end,
-                                radio = true,
-                                callback = function() Library.save("quick_sync", mode) end,
-                            })
-                        end
-                        return modes
-                    end,
+                    text = _("Quick sync automatically"),
+                    help_text = _("Looks for new books when the file browser opens, on wake-up and when Wi-Fi connects (Wi-Fi isn't turned on for it)."),
+                    checked_func = function() return Library.quickSyncOn() end,
+                    callback = function() Library.setQuickSync(not Library.quickSyncOn()) end,
                 },
                 {
                     text_func = function()
@@ -1597,7 +1624,11 @@ function Library.menuEntry(plugin)
                 help_text = _("Catalog, folder, book and cover counts, last quick and full syncs, and any problems."),
                 keep_menu_open = true,
                 callback = function()
-                    UIManager:show(require("ui/widget/infomessage"):new{ text = Library.statusText() })
+                    UIManager:show(require("ui/widget/textviewer"):new{
+                        title = _("Athenæum status"),
+                        text = Library.statusText(),
+                        justified = false,
+                    })
                 end,
             })
             table.insert(items, {

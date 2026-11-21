@@ -99,6 +99,12 @@ function Athenaeum:onNetworkConnected()
     end
 end
 
+function Athenaeum:onResume()
+    if not self.ui.document then
+        require("athenaeum/guard").call("jobs", Library.onResume)
+    end
+end
+
 function Athenaeum:onAthenaeumSync()
     require("athenaeum/guard").call("jobs", Library.sync, "quick")
     return true

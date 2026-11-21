@@ -1434,14 +1434,75 @@ do
     Library.server = function() return server end
     UIManager.nextTick = function(_self, fn) fn() end
     Library.save("folder", folder)
+    eq(Library.quickSyncOn(), true, "quick syncs on by default")
     Library.save("auto_sync", false)
-    eq(Library.quickSyncMode(), "never", "old automatic sync off: no quick syncs")
+    eq(Library.quickSyncOn(), false, "old automatic sync off: no quick syncs")
     eq(Library.fullSyncMode(), "never", "old automatic sync off: no full syncs")
+    Library.setQuickSync(true)
+    eq(Library.quickSyncOn(), true, "quick syncs turned on over the old switch")
+    eq(Library.settings().quick_sync, nil, "on: nothing saved (older versions: hourly)")
+    eq(Library.fullSyncMode(), "never", "full syncs left as they were")
     Library.save("quick_sync", "3h")
+    eq(Library.quickSyncOn(), true, "an older version's interval: on")
     Library.save("full_sync", "bogus")
-    eq(Library.quickSyncMode(), "3h", "quick sync schedule")
-    eq(Library.fullSyncMode(), "never", "unknown full sync schedule ignored")
+    eq(Library.fullSyncMode(), "weekly", "unknown full sync schedule ignored: the default")
+    Library.setQuickSync(false)
+    eq(Library.settings().quick_sync, "never", "off saved as never (older versions: off too)")
+    eq(Library.quickSyncOn(), false, "quick syncs off")
+
+    -- The automatic sync: a quick sync each time while on and online, a
+    -- full sync only when due with quick syncs off.
+    do
+        local NetworkMgr = require("ui/network/manager")
+        local real_sync, real_connected = Library.sync, NetworkMgr.isConnected
+        local started
+        Library.sync = function(mode, quiet) started = { mode, quiet } return true end
+        local online = true
+        NetworkMgr.isConnected = function() return online end
+        local function run() started = nil Library.syncIfDue() return started and started[1] end
+        Library.setQuickSync(true)
+        eq(run(), "quick", "quick sync on wake-up/Wi-Fi/file browser")
+        eq(started[2], true, "automatic: quiet")
+        eq(run(), "quick", "and again straight after: no interval")
+        online = false
+        eq(run(), nil, "offline: nothing")
+        online = true
+        Library.setQuickSync(false)
+        Library.save("full_sync", "daily")
+        local st = Store.open(Library.dbPath(server), false)
+        st:setMeta("last_full_sync", os.time())
+        st:close()
+        eq(run(), nil, "quick syncs off, full sync not due: nothing")
+        st = Store.open(Library.dbPath(server), false)
+        st:setMeta("last_full_sync", os.time() - 2 * 24 * 3600)
+        st:close()
+        eq(run(), "full", "quick syncs off, full sync due")
+        Library.save("full_sync", "never")
+        eq(run(), nil, "both off: nothing")
+        Library.sync, NetworkMgr.isConnected = real_sync, real_connected
+    end
+
+    -- A quick sync that found nothing doesn't reload the listing or fetch covers.
+    do
+        local changed, wanted = Library._listingMayHaveChanged, Library._coversWanted
+        local function quick(sync, scanned) return { mode = "quick", sync = sync, scanned = scanned } end
+        eq(changed("quick", quick({ added = 0 }, 0)), false, "nothing new: no reload")
+        eq(changed("quick", quick({ added = 2 }, 0)), true, "new books: reload")
+        eq(changed("quick", quick({ added = 0 }, 1)), true, "changed files: reload")
+        eq(changed("quick", quick({ added = 0, escalated = true, deleted = 0 }, 0)), true, "became a full sync: reload")
+        eq(changed("quick", { mode = "quick", error = "x" }), true, "failed: reload")
+        eq(changed("full", { mode = "full", sync = { added = 0, deleted = 0 } }), true, "full sync: reload")
+        local real_stats = Library.stats
+        Library.stats = { covers = 5, covers_available = 5 }
+        eq(wanted(quick({ added = 0 }, 0)), false, "every cover there, nothing new: no cover download")
+        eq(wanted(quick({ added = 1 }, 0)), true, "a new book: cover download")
+        Library.stats = { covers = 4, covers_available = 5 }
+        eq(wanted(quick({ added = 0 }, 0)), true, "a cover missing: cover download")
+        Library.stats = real_stats
+    end
+
     Library.save("quick_sync", "never")
+    Library.save("auto_sync", false)
     Library.save("full_sync", nil)
     local store = Store.open(Library.dbPath(server), false)
     store:upsertBooks({
@@ -1458,6 +1519,22 @@ do
     Library.load()
     check(not Virtual.isVirtual(cloud_path), "downloaded book isn't a cloud book")
     eq(#Virtual.books, 1, "one cloud book before deleting")
+
+    -- Status: headed sections, as Concordance's.
+    do
+        local text = Library.statusText()
+        check(text:find("^Overview\n   Quick sync: last never %(automatic off%)\n   Full sync: last [^\n]* %(never%)\n"
+            .. "   Last error: none\n   Problems since KOReader started: none\n"), "status overview: " .. text)
+        check(text:find("\n\nCatalog\n   Catalog: http://test.invalid/opds\n   Folder: " .. folder, 1, true),
+            "status catalog section: " .. text)
+        check(text:find("\n\nBooks\n   In the catalog: 2\n   On this device: 1\n   Shown as cloud books: 1\n", 1, true),
+            "status book counts: " .. text)
+        check(text:find("\n\nCovers\n   Downloaded: ", 1, true), "status covers: " .. text)
+        local real_server = Library.server
+        Library.server = function() return nil end
+        check(Library.statusText():find("^Overview\n   No catalog chosen%."), "status without a catalog")
+        Library.server = real_server
+    end
 
     -- Results shown before the delete, as KOReader caches them.
     local FileSearcher = require("apps/filemanager/filemanagerfilesearcher")
@@ -2304,7 +2381,7 @@ do
     end
     local items = Library.menuEntry(nil).sub_item_table_func()
     eq(labels(items),
-        "Quick sync now | Full sync now | Download missing covers | Refresh all covers | Quick sync | Full sync | Catalog | Folder"
+        "Quick sync now | Full sync now | Download missing covers | Refresh all covers | Quick sync automatically | Full sync | Catalog | Folder"
         .. " | Show cloud books | Mark cloud books | Mark books on this device | Mark books not in the catalog"
         .. " | Include cloud books in Authors, Series and Tags | Include cloud books in file search | Status | Timings",
         "menu")
