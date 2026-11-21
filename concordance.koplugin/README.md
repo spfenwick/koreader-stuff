@@ -52,7 +52,7 @@ Tools → Concordance, in both the file browser and the reader:
   to say whether to remove them everywhere.
 - **Discard pulled settings waiting for a restart** (only while there are
   some; see [SETTINGS.md](SETTINGS.md#moving-to-another-server)).
-- **Settings** → **Sync now**, **Preview changes** (what would change),
+- **Sync Settings** → **Sync now**, **Preview changes** (what would change),
   **Log**.
 - **Statistics** → **Sync now**, **Sync automatically** (on unless you turn
   it off).
@@ -61,11 +61,11 @@ Tools → Concordance, in both the file browser and the reader:
   rating, review, metadata, the handmade table of contents,
   collections and favorites, and the reading history.
 - **Server** and **Folder on server**.
-- **Sync in the file browser**: every 5, 15, 30 or 60 minutes, or never (the
-  default).
 - **Turn on Wi-Fi for automatic syncs** (off by default).
-- **Status**: problems since KOReader started (see below), server and folders, last syncs and errors,
-  devices seen, books known in more than one version, what was sent and received, this device's ID.
+- **Status**: an overview (last syncs and errors, problems since KOReader
+  started, see below), then the server and folders, devices seen and this
+  device's ID, and a section each for statistics, highlights, book details and
+  book versions (what was sent and received, what's waiting).
 - **Troubleshooting** → **Rebuild from server** (imports every device's
   files again; nothing is deleted), **Reset device ID** (for a device
   restored from a backup of another one).
@@ -82,8 +82,7 @@ KOReader).
 
 Statistics and highlights sync automatically (each unless turned off): when
 a book is opened (only while Wi-Fi is on) or closed, on wake-up, when the network connects, and 20 seconds
-after KOReader starts; and, if "Sync in the file browser" is set, that often
-while the file browser is shown and Wi-Fi is on (it never turns Wi-Fi on).
+after KOReader starts.
 Highlights and books also sync a few seconds after a book's status, rating,
 review or metadata is changed on the device (from the file browser, the
 book information dialog, the reader's book status page, a metadata editor,

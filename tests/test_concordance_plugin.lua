@@ -109,6 +109,7 @@ stub("socket.http", S.Http.new())
 stub("apps/reader/readerui", { instance = { statistics = stats } })
 stub("ui/widget/confirmbox", { new = function(_, o) o.confirm = true; return o end })
 stub("ui/widget/infomessage", { new = function(_, o) return o end })
+stub("ui/widget/textviewer", { new = function(_, o) return o end })
 local folder_input
 stub("ui/widget/inputdialog", { new = function(_, o)
     o.getInputText = function() return folder_input end
@@ -260,47 +261,6 @@ loop:run(10)
 check(P.deviceState().status.last_attempt == before, "offline: automatic sync skipped")
 connected = true
 
--- Syncs from the file browser (this instance has no book open): never by default.
-check(item("Sync in the file browser: never") and not plugin.home_tick, "file browser syncs off by default")
-local intervals = item("Sync in the file browser").sub_item_table_func()
-check(#intervals == 5 and intervals[5].checked_func(), "5, 15, 30, 60 minutes or never")
-intervals[1].callback()
-check(fileData("concordance/settings.lua").home_interval == 5 and item("Sync in the file browser: every 5 min"),
-    "every 5 minutes chosen")
-local wait = loop:pending(plugin.home_tick)
-check(wait and wait > 290 and wait <= 300, "next file browser sync in 5 minutes (" .. tostring(wait) .. ")")
--- Runs the due file browser sync now; returns the one scheduled after it.
-local function homeTick()
-    local tick = plugin.home_tick
-    loop:unschedule(tick)
-    tick()
-    local nxt = plugin.home_tick
-    check(nxt and loop:pending(nxt), "next file browser sync scheduled")
-    loop:unschedule(nxt) -- the loop would wait 5 minutes for it
-    return nxt
-end
--- Offline when it's due: skipped, and Wi-Fi left alone.
-P.settings().allow_wifi = true
-connected = false
-P.engine().status.last_attempt = 0
-homeTick()
-loop:run(5)
-check(P.engine().status.last_attempt == 0 and not connected, "offline: file browser sync skipped, Wi-Fi not turned on")
-P.settings().allow_wifi = false
-connected = true
-homeTick()
-loop:run(60)
-check(P.engine().status.last_attempt ~= 0, "online: file browser sync ran")
-plugin:onSuspend()
-check(not plugin.home_tick, "stopped on suspend")
-plugin:onResume()
-wait = plugin.home_tick and loop:pending(plugin.home_tick)
-check(wait and wait > 290, "restarted on wake-up, a full interval away")
-loop:unschedule(plugin.home_tick)
-loop:run(60)
-item("Sync in the file browser").sub_item_table_func()[5].callback()
-check(not plugin.home_tick and fileData("concordance/settings.lua").home_interval == nil, "set back to never")
-
 -- Another device's reading of the open book shows up in the open book's totals
 local other = S.newDevice("other", TMP .. "/other")
 other:read(book, { { 10, 5000, 100 }, { 11, 5100, 100 } })
@@ -325,6 +285,13 @@ check(closed[syncing], "syncing message closed when the result is shown")
 check(shown[#shown] and shown[#shown].text:find("^Statistics synced") and not shown[#shown].text:find("Highlights"),
     "statistics sync reports statistics only: " .. tostring(shown[#shown] and shown[#shown].text))
 check(P.deviceState().status.imported_events == 2, "two events imported")
+check(shown[#shown].text == "Statistics synced.\nStatistics: received 2 entries from 1 files.",
+    "only what changed is reported: " .. shown[#shown].text)
+S.sleep(1.1)
+item("Statistics", "Sync now").callback()
+loop:run(60)
+check(shown[#shown].text == "Statistics synced.\nNothing new to send or receive.",
+    "nothing changed: " .. shown[#shown].text)
 check(P.deviceState().status.ann_last_success == ann_success, "highlights not synced with statistics")
 check(stats.book_read_time > time_before, "open book's cached totals refreshed ("
     .. tostring(time_before) .. " -> " .. tostring(stats.book_read_time) .. ")")
@@ -353,6 +320,8 @@ check(P.autoStats() and P.autoAnnotations(), "both on again")
 -- Status, rebuild
 item("Status").callback()
 check(shown[#shown].text:find("Devices seen: 2", 1, true), "status shows devices seen")
+check(shown[#shown].title == "Concordance status" and shown[#shown].text:find("^Overview\n   Last attempt: "),
+    "status opens with the overview")
 check(shown[#shown].text:find("Statistics and highlights folder: " .. server.url .. "/KOReader/Reading/", 1, true),
     "status shows the folder")
 item("Troubleshooting", "Rebuild from server").callback()
@@ -452,7 +421,8 @@ loop:run(60)
 check(#reader.annotation.annotations == 2, "applied live to the open book (" .. #reader.annotation.annotations .. ")")
 local ev = events[#events]
 check(ev and ev.name == "AnnotationsModified" and ev.args.nb_highlights_added == 1, "AnnotationsModified sent")
-check(shown[#shown].text:find("received 1", 1, true), "manual sync reports annotations: " .. shown[#shown].text)
+check(shown[#shown].text:find("Highlights and bookmarks: received 1 changes.", 1, true)
+    and not shown[#shown].text:find(" 0 ", 1, true), "manual sync reports annotations: " .. shown[#shown].text)
 -- The reader plugin instance: a new highlight, then the book closes
 local reader_plugin = setmetatable({ ui = reader }, Concordance)
 local XP3 = "/body/DocFragment[7]/body/p[1]/text().0"
@@ -485,7 +455,7 @@ check(q.multi and q.text:find("6 of 6", 1, true) and q.text:find("Annotated", 1,
 check(item("Removed highlights waiting"), "held removals: menu item shown")
 item("Status").callback()
 check(shown[#shown].text:find("Books with removals waiting for you: 1", 1, true), "status shows the held book")
-check(shown[#shown].text:find("Book status and details (synced with highlights): 1 books", 1, true),
+check(shown[#shown].text:find("Book status and details\n   Books: 1\n", 1, true),
     "status shows book data")
 package.loaded["apps/reader/readerui"].instance = reader
 q.choice1_callback() -- restore them here

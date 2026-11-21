@@ -110,7 +110,7 @@ This relies on two things: each device's clock being roughly right (KOReader set
 | Handmade table of contents, hidden flows | WebDAV | Automatically |
 | Collections, favorites and reading history | WebDAV | Automatically |
 
-Automatic syncs run when a book is opened (only if Wi-Fi is already on) or closed, on wake-up, when the network connects, and 20 seconds after KOReader starts. Highlights and books also sync a few seconds after you change a book's status, rating, review or metadata (only if Wi-Fi is already on). With **Sync in the file browser** set (every 5, 15, 30 or 60 minutes; never by default), they also run that often while the file browser is shown and Wi-Fi is on. They run in the background, so reading isn't interrupted. Without a network they're skipped and the next sync catches up, unless you turn on **Turn on Wi-Fi for automatic syncs**.
+Automatic syncs run when a book is opened (only if Wi-Fi is already on) or closed, on wake-up, when the network connects, and 20 seconds after KOReader starts. Highlights and books also sync a few seconds after you change a book's status, rating, review or metadata (only if Wi-Fi is already on). They run in the background, so reading isn't interrupted. Without a network they're skipped and the next sync catches up, unless you turn on **Turn on Wi-Fi for automatic syncs**.
 
 ### Settings sync
 
@@ -165,10 +165,9 @@ Tools → Concordance, in the file browser and the reader:
 | Item | What it does |
 | --- | --- |
 | Sync now | Statistics, highlights, bookmarks and book status |
-| Settings → Sync now / Preview changes / Log | Settings sync |
+| Sync Settings → Sync now / Preview changes / Log | Settings sync |
 | Statistics, Highlights and books | Sync now, and Sync automatically (on) |
 | Server, Folder on server | Where your data is kept |
-| Sync in the file browser | Never by default; every 5, 15, 30 or 60 minutes, only while Wi-Fi is on |
 | Turn on Wi-Fi for automatic syncs | Off by default |
 | Status | Server, last syncs and errors, devices seen, books in several versions |
 | Troubleshooting → Rebuild from server | Imports every device's files again; deletes nothing |

@@ -83,7 +83,6 @@ local Concordance = WidgetContainer:extend{
 }
 
 local started -- once per KOReader process
-local home    -- the file browser's instance, while it's open
 
 function Concordance:onDispatcherRegisterActions()
     Dispatcher:registerAction("concordance_sync", {
@@ -118,10 +117,6 @@ function Concordance:init()
     if not started then
         started = true
         UIManager:scheduleIn(STARTUP_DELAY, function() self.trigger("start") end)
-    end
-    if self.ui and not self.ui.document then
-        home = self
-        self:scheduleHomeSync()
     end
     Updates.register(function() return self:updateEntries() end)
     Updates.scheduleCheck()
@@ -239,21 +234,29 @@ Or send everything this device has to this folder?]]), Plugin.serverLocation() o
     elseif run.error then
         text = T(_("%1 sync failed: %2"), syncWhat(run), run.error)
     else
+        -- Only what changed: a part with nothing sent or received is left out.
         local lines = {}
+        local function changed(label, sent, received, sent_text, received_text)
+            local parts = {}
+            if (sent or 0) > 0 then table.insert(parts, T(sent_text, sent)) end
+            if (received or 0) > 0 then table.insert(parts, received_text) end
+            if #parts > 0 then table.insert(lines, T("%1: %2.", label, table.concat(parts, ", "))) end
+        end
         if run.stats then
-            table.insert(lines, T(_("Statistics: sent %1 entries, received %2 entries from %3 files."),
-                run.uploaded_events or 0, run.imported_events or 0, run.segments_imported or 0))
+            changed(_("Statistics"), run.uploaded_events, run.imported_events, _("sent %1 entries"),
+                T(_("received %1 entries from %2 files"), run.imported_events or 0, run.segments_imported or 0))
         end
         if run.ann then
-            table.insert(lines, T(_("Highlights and bookmarks: sent %1 changes, received %2."),
-                run.ann_uploaded_records or 0, run.ann_imported_records or 0))
-        end
-        if run.upload_error then
-            table.insert(lines, T(_("Upload of statistics failed: %1"), run.upload_error))
+            changed(_("Highlights and bookmarks"), run.ann_uploaded_records, run.ann_imported_records,
+                _("sent %1 changes"), T(_("received %1 changes"), run.ann_imported_records or 0))
         end
         if run.book then
-            table.insert(lines, T(_("Book status, details, collections and history: sent %1 changes, received %2."),
-                run.book_uploaded_records or 0, run.book_imported_records or 0))
+            changed(_("Book status, details, collections and history"), run.book_uploaded_records,
+                run.book_imported_records, _("sent %1 changes"), T(_("received %1 changes"), run.book_imported_records or 0))
+        end
+        if #lines == 0 then table.insert(lines, _("Nothing new to send or receive.")) end
+        if run.upload_error then
+            table.insert(lines, T(_("Upload of statistics failed: %1"), run.upload_error))
         end
         if run.ann_upload_error then
             table.insert(lines, T(_("Upload of highlights and bookmarks failed: %1"), run.ann_upload_error))
@@ -386,48 +389,12 @@ function Concordance.onBookMetadataChanged()
     if not Plugin.bookSync().broadcasting then Concordance.bookChanged() end
 end
 
--- Syncs every few minutes while the file browser is shown --------------------------
-
---- (Re)starts the wait for the next sync from the file browser, a full
--- interval from now, or stops it (set to never, or not the file browser).
-function Concordance:scheduleHomeSync()
-    if self.home_tick then UIManager:unschedule(self.home_tick) end
-    self.home_tick = nil
-    if home ~= self then return end
-    local minutes = Plugin.homeInterval()
-    if minutes <= 0 then return end
-    self.home_tick = function()
-        self.home_tick = nil
-        if home ~= self then return end
-        -- Only while Wi-Fi is on already: never turns it on for this.
-        if NetworkMgr:isConnected() then self.trigger("home") end
-        self:scheduleHomeSync()
-    end
-    UIManager:scheduleIn(minutes * 60, self.home_tick)
-end
-
-function Concordance:onCloseWidget()
-    if home == self then
-        home = nil
-        self:scheduleHomeSync()
-    end
-end
-
-function Concordance:onSuspend()
-    if self.home_tick then UIManager:unschedule(self.home_tick) end
-    self.home_tick = nil
-end
-
--- Waking up and Wi-Fi connecting sync anyway: the next one from the file
--- browser is a full interval after.
 function Concordance:onResume()
     self.trigger("resume")
-    self:scheduleHomeSync()
 end
 
 function Concordance:onNetworkConnected()
     self.trigger("network")
-    self:scheduleHomeSync()
 end
 
 function Concordance:onConcordanceNow()
@@ -501,9 +468,14 @@ function Concordance:syncSettings(preview, opts)
             UIManager:broadcastEvent(Event:new("FlushSettings"))
             G_reader_settings:flush()
         end
+        -- A normal toast; tapping it cancels the sync.
+        local toast = InfoMessage:new{
+            text = preview and _("Checking what would change…") or _("Syncing settings…"),
+        }
         local Trapper = require("ui/trapper")
         Trapper:wrap(function()
-            local text = preview and _("Checking what would change…") or _("Syncing settings…")
+            UIManager:show(toast)
+            UIManager:forceRePaint()
             local completed, result = Trapper:dismissableRunInSubprocess(function()
                 local ok, res = pcall(function()
                     local Remote = require("concordance/remote")
@@ -514,11 +486,12 @@ function Concordance:syncSettings(preview, opts)
                 end)
                 if ok then return res end
                 return { fatal = tostring(res), log = tostring(res) }
-            end, text)
+            end, toast)
             if not completed then
                 notify(_("Sync cancelled. Run it again to finish."))
                 return
             end
+            UIManager:close(toast)
             self:reportSettings(result or { fatal = _("The sync stopped unexpectedly.") }, preview,
                 opts.previous)
         end)
@@ -677,55 +650,81 @@ function Concordance:showStatus()
     local iok, id = pcall(function() return Plugin.idStore():counts() end)
     id = iok and id or {}
     local function onOff(v) return v and _("on") or _("off") end
-    local lines = {
+    local function sentReceived(sent, received)
+        return T(_("Last sync: sent %1, received %2"), sent or 0, received or 0)
+    end
+    local function files(seen, bad)
+        return T(_("Server files read: %1, unreadable: %2"), seen or "?", bad or "?")
+    end
+    local lines = {}
+    -- A heading, then its lines indented under it.
+    local function section(heading, items)
+        if #lines > 0 then table.insert(lines, "") end
+        table.insert(lines, heading)
+        for __, line in ipairs(items) do table.insert(lines, "   " .. line) end
+    end
+
+    local problems = require("concordance/problems").statusLines()
+    local overview = {
+        T(_("Last attempt: %1"), when(st.last_attempt)),
+        T(_("Last error: %1"), st.last_error or _("none")),
+        T(_("Statistics: last synced %1 (automatic sync %2)"),
+            when(st.stats_last_success or st.last_success), onOff(Plugin.autoStats())),
+        T(_("Highlights and books: last synced %1 (automatic sync %2)"),
+            when(st.ann_last_success), onOff(Plugin.autoAnnotations())),
+    }
+    if #problems == 0 then
+        table.insert(overview, _("Problems since KOReader started: none"))
+    end
+    section(_("Overview"), overview)
+    if #problems > 0 then
+        local items = {}
+        for __, p in ipairs(problems) do table.insert(items, "• " .. p) end
+        section(_("Problems since KOReader started (often from a KOReader or ZenOS update)"), items)
+    end
+    section(_("Server"), {
         T(_("Server: %1"), self:serverText()),
         T(_("Settings folder: %1"), Plugin.settingsRoot()),
         T(_("Statistics and highlights folder: %1"), Plugin.serverLocation() or Plugin.serverProblem() or "?"),
-        T(_("Last attempt: %1"), when(st.last_attempt)),
-        T(_("Last error: %1"), st.last_error or _("none")),
         T(_("Devices seen: %1"), st.devices or "?"),
         T(_("This device's ID: %1"), d.device_id or _("not yet created")),
-        "",
-        T(_("Statistics: automatic sync %1, last synced %2"), onOff(Plugin.autoStats()),
-            when(st.stats_last_success or st.last_success)),
-        T(_("Entries sent last time: %1, received: %2"), st.uploaded_events or 0, st.imported_events or 0),
+    })
+    section(_("Statistics"), {
+        sentReceived(st.uploaded_events, st.imported_events),
         T(_("Entries published or received in total: %1"), counts.exported or "?"),
-        T(_("Files imported: %1, unreadable: %2"), counts.seen or "?", counts.bad or "?"),
-        "",
-        T(_("Highlights and bookmarks: automatic sync %1, last synced %2"), onOff(Plugin.autoAnnotations()),
-            when(st.ann_last_success)),
+        files(counts.seen, counts.bad),
+    })
+    section(_("Highlights and bookmarks"), {
         T(_("%1 in %2 books"), a.annotations or "?", a.books or "?"),
+        sentReceived(st.ann_uploaded, st.ann_imported),
         T(_("Changes waiting to be sent: %1"), a.outbox or "?"),
         T(_("Books to update when opened: %1"), a.pending or "?"),
         T(_("Books with removals waiting for you: %1"), a.held or "?"),
-        T(_("Changes sent last time: %1, received: %2"), st.ann_uploaded or 0, st.ann_imported or 0),
-        T(_("Files imported: %1, unreadable: %2"), counts.ann_seen or "?", counts.ann_bad or "?"),
         T(_("Reading history read: %1"), when(d.ann_scanned)),
-        "",
-        T(_("Book status and details (synced with highlights): %1 books"), b.books or "?"),
+        files(counts.ann_seen, counts.ann_bad),
+    })
+    section(_("Book status and details"), {
+        T(_("Books: %1"), b.books or "?"),
+        sentReceived(st.book_uploaded, st.book_imported),
         T(_("Changes waiting to be sent: %1"), b.outbox or "?"),
         T(_("Books to update on this device: %1"), b.write or "?"),
-        T(_("Changes sent last time: %1, received: %2"), st.book_uploaded or 0, st.book_imported or 0),
-        T(_("Files imported: %1, unreadable: %2"), counts.book_seen or "?", counts.book_bad or "?"),
-        "",
-        T(_("Book identity (synced with highlights): %1 book files known, %2 read on this device"),
-            id.files or "?", id.scanned or "?"),
+        files(counts.book_seen, counts.book_bad),
+    })
+    section(_("Book versions"), {
+        T(_("Book files known: %1, read on this device: %2"), id.files or "?", id.scanned or "?"),
         T(_("Books known in more than one version: %1"), id.versions or "?"),
         T(_("Books with different editions under one ID: %1"), id.editions or "?"),
         T(_("Book IDs shared by unrelated books (not joined): %1"), id.held or "?"),
+        sentReceived(st.id_uploaded, st.id_imported),
         T(_("Facts waiting to be sent: %1"), id.outbox or "?"),
-        T(_("Facts sent last time: %1, received: %2"), st.id_uploaded or 0, st.id_imported or 0),
-        T(_("Files imported: %1, unreadable: %2"), counts.id_seen or "?", counts.id_bad or "?"),
-    }
-    local problems = require("concordance/problems").statusLines()
-    table.insert(lines, 1, "")
-    if #problems == 0 then
-        table.insert(lines, 1, _("Problems since KOReader started: none"))
-    else
-        for i = #problems, 1, -1 do table.insert(lines, 1, "• " .. problems[i]) end
-        table.insert(lines, 1, _("Problems since KOReader started (often from a KOReader or ZenOS update):"))
-    end
-    UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
+        files(counts.id_seen, counts.id_bad),
+    })
+    local TextViewer = require("ui/widget/textviewer")
+    UIManager:show(TextViewer:new{
+        title = _("Concordance status"),
+        text = table.concat(lines, "\n"),
+        justified = false,
+    })
 end
 
 --- The Dropbox and WebDAV servers from Cloud storage, to choose one.
@@ -839,7 +838,7 @@ function Concordance:menuItems()
 
     local more = {
         {
-            text = _("Settings"),
+            text = _("Sync Settings"),
             help_text = _([[Settings, plugins, patches, dictionaries, fonts and anything else in KOReader's folder that settings/concordance/sync.txt lists. Pulled settings are put in place at the next start.]]),
             sub_item_table = {
                 {
@@ -917,32 +916,6 @@ Turn off KOReader's "Export annotations on book closing" (in the reader's Bookma
             help_text = _([[Settings are synced in its Files folder, statistics, highlights and book data in its Reading folder. Use the same server and folder on every device.]]),
             keep_menu_open = true,
             callback = function(touchmenu_instance) self:editRoot(touchmenu_instance) end,
-        },
-        {
-            text_func = function()
-                local m = Plugin.homeInterval()
-                return T(_("Sync in the file browser: %1"),
-                    m > 0 and T(_("every %1 min"), m) or _("never"))
-            end,
-            help_text = _([[While the file browser is shown, sync statistics and highlights this often too (as set to sync automatically), so changes from other devices show up without opening a book. Only while Wi-Fi is on: it's never turned on for this.]]),
-            sub_item_table_func = function()
-                local list = {}
-                local function choice(text, minutes)
-                    table.insert(list, {
-                        text = text,
-                        radio = true,
-                        checked_func = function() return Plugin.homeInterval() == minutes end,
-                        callback = function()
-                            Plugin.settings().home_interval = minutes > 0 and minutes or nil
-                            Plugin.saveSettings()
-                            if home then home:scheduleHomeSync() end
-                        end,
-                    })
-                end
-                for _i, m in ipairs(Plugin.HOME_INTERVALS) do choice(T(_("Every %1 minutes"), m), m) end
-                choice(_("Never"), 0)
-                return list
-            end,
         },
         {
             text = _("Turn on Wi-Fi for automatic syncs"),

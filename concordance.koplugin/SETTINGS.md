@@ -6,7 +6,7 @@ server from Cloud storage. (This was OmniSync, and before that SuperSync and Set
 See [README.md](README.md) for installing and the menu.
 
 List what to sync in `settings/concordance/sync.txt` (below). Tools →
-Concordance → Settings → "Sync now" syncs; "Preview changes" shows what a
+Concordance → Sync Settings → "Sync now" syncs; "Preview changes" shows what a
 sync would change without changing it ("Sync now" there runs it). A sync
 runs in the background, and tapping the message cancels it; running it
 again finishes the job. It's also a gesture: General → "Concordance: sync

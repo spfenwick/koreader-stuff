@@ -785,6 +785,7 @@ write(P.kodir .. "/settings/gestures.lua", "return { p = 1 }\n")
 touch(P.kodir .. "/settings/gestures.lua", os.time() - 7200) -- the server's is newer
 
 local shown, notified, restarts, flushed, broadcast = {}, {}, {}, 0, {}
+local toasts, closed = {}, {}
 local saved = {}
 _G.G_reader_settings = {
     readSetting = function(_, key) return saved[key] end,
@@ -824,7 +825,9 @@ stub("ui/event", { new = function(_, name) return { name = name } end })
 -- Messages that stay until tapped (no timeout) are what the user is told.
 stub("ui/widget/infomessage", {
     new = function(_, o)
-        if not o.timeout then table.insert(notified, o.text) end
+        -- The toast while settings sync runs isn't a result.
+        if o.text == "Syncing settings…" or o.text == "Checking what would change…" then table.insert(toasts, o)
+        elseif not o.timeout then table.insert(notified, o.text) end
         return o
     end,
 })
@@ -836,12 +839,19 @@ stub("ui/network/manager", { runWhenOnline = function(_, fn) fn() end, isConnect
 stub("ui/widget/notification", { notify = function() error("a notification that times out") end })
 stub("device", { model = "Test" })
 stub("datetime", { secondsToDateTime = function(t) return tostring(t) end })
+-- The sync's task, and the widget a tap on cancels it.
+local trap_widgets = {}
 stub("ui/trapper", {
     wrap = function(_, fn) fn() end,
-    dismissableRunInSubprocess = function(_, task) return true, task() end,
+    dismissableRunInSubprocess = function(_, task, widget)
+        table.insert(trap_widgets, widget)
+        return true, task()
+    end,
 })
 stub("ui/uimanager", {
     show = function(_, w) table.insert(shown, w) end,
+    close = function(_, w) closed[w] = true end,
+    forceRePaint = function() end,
     nextTick = function(_, fn) fn() end,
     scheduleIn = function() end,
     broadcastEvent = function(_, ev) table.insert(broadcast, ev.name) end,
@@ -903,8 +913,8 @@ local function item(...)
         list = found.sub_item_table or found.sub_item_table_func()
     end
 end
-check(item("Settings", "Sync now") and item("Statistics", "Sync now") and item("Highlights and books", "Sync now")
-    and item("Settings", "Preview changes"), "a sync item each for settings, statistics and highlights")
+check(item("Sync Settings", "Sync now") and item("Statistics", "Sync now") and item("Highlights and books", "Sync now")
+    and item("Sync Settings", "Preview changes"), "a sync item each for settings, statistics and highlights")
 check(item("Statistics", "Sync automatically").checked_func() and item("Highlights and books", "Sync automatically").checked_func(),
     "automatic syncs shown on")
 item("Statistics", "Sync automatically").callback()
@@ -927,12 +937,13 @@ plugin:syncSettings(true)
 local viewer = shown[#shown]
 check(viewer and viewer.viewer and viewer.title:find("would make") and #broadcast == 0,
     "preview shows what would change")
+check(#toasts == 1 and toasts[1].text == "Checking what would change…" and closed[toasts[1]],
+    "a toast while checking, closed when done")
+check(trap_widgets[1] == toasts[1], "tapping the toast cancels the check")
 local row = viewer and viewer.buttons_table and viewer.buttons_table[1] or {}
 check(#row == 2 and row[2].text == "Sync now", "preview offers Sync now")
-local closed
-package.loaded["ui/uimanager"].close = function(_, w) closed = w end
 if row[2] then row[2].callback() end
-check(closed == viewer, "Sync now closes the preview")
+check(closed[viewer] and #toasts == 2 and toasts[2].text == "Syncing settings…" and closed[toasts[2]], "Sync now closes the preview")
 
 check(broadcast[1] == "FlushSettings" and flushed == 1, "sync saves settings first")
 -- gestures.lua changed here and on the server: which to keep?
@@ -946,7 +957,7 @@ check(table.concat(choices, "|") == "Keep the server's versions|Keep this device
 -- Later: left as it is, and the report says so.
 local before_later = #notified
 dialog.buttons[4][1].callback()
-check(closed == dialog and #notified == before_later + 1 and notified[#notified]:find("left as they are", 1, true),
+check(closed[dialog] and #notified == before_later + 1 and notified[#notified]:find("left as they are", 1, true),
     "decided later: " .. tostring(notified[#notified]))
 check(read(P.kodir .. "/settings/gestures.lua") == "return { p = 1 }\n" and not Engine.isPending(P.paths),
     "gestures left alone")
