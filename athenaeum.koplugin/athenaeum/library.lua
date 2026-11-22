@@ -88,6 +88,8 @@ local PREFETCH_COVERS = 300          -- covers a batch after each sync, newest f
 local PREFETCH_SECONDS = 180        -- (a batch, also for "Download missing covers")
 local MAX_CRASHES = 3               -- cover jobs dying in a row before giving up
 local CHECK_DELAY = 3                -- s after the file browser opens: let it draw first
+local FULL_SYNC_DELAY = 120         -- s before an automatic full sync that's only due by time (see deferFullSync)
+local FULL_SYNC_RETRY = 30          -- s to wait when another job is still running then
 
 -- Settings ----------------------------------------------------------------------
 
@@ -848,7 +850,12 @@ local function runJob(server, folder, mode, db_path, wal, covers_dir, opts)
                 r, serr = sync:quick()
                 local last_full = tonumber(store:getMeta("last_full_sync")) or 0
                 local interval = FULL_INTERVALS[Library.fullSyncMode()]
-                if r and (r.needs_full or (interval and os.time() - last_full > interval)) then
+                local due = interval and os.time() - last_full > interval
+                if r and not r.needs_full and due and opts.defer_full then
+                    -- Only due by time: an automatic sync leaves it for later
+                    -- (see Library.deferFullSync).
+                    r.full_due = true
+                elseif r and (r.needs_full or due) then
                     r, serr = sync:full()
                     if r then r.escalated = true end
                 end
@@ -1020,6 +1027,7 @@ local function pollJob()
             string.format("%d files read", result.scanned or 0))
     end
     if listingMayHaveChanged(job.mode, result) then Library.load() end
+    if result.sync and result.sync.full_due and not result.error then Library.deferFullSync() end
     local changed = result.sync and ((result.sync.added or 0) > 0 or (result.sync.deleted or 0) > 0)
     -- Cover downloads go in batches: "Download missing covers" until done,
     -- and after a sync while backfilling (most covers were missing).
@@ -1090,17 +1098,58 @@ local function syncDue()
     return nil
 end
 
+-- An automatic full sync that's only due by time (daily or weekly) waits
+-- FULL_SYNC_DELAY seconds rather than running at once. It takes a minute
+-- or more of a single-core Kobo's processor and disk, which right after
+-- startup or waking up is when the device is busiest (the listing being
+-- built, the book being opened). One the books count calls for (books
+-- removed or changed) still runs at once, and so does one asked for.
+local fullSyncTask
+local function deferredFullSync()
+    if Library.job then
+        UIManager:scheduleIn(FULL_SYNC_RETRY, fullSyncTask)
+        return
+    end
+    if not Library.server() or not require("ui/network/manager"):isConnected() then
+        return -- the next automatic sync finds it still due
+    end
+    Library.sync("full", true)
+end
+fullSyncTask = Guard.task("jobs", deferredFullSync)
+
+--- Runs an automatic full sync in FULL_SYNC_DELAY seconds (or a little
+-- later, if another job is running then).
+function Library.deferFullSync()
+    UIManager:unschedule(fullSyncTask)
+    UIManager:scheduleIn(FULL_SYNC_DELAY, fullSyncTask)
+end
+Library._deferredFullSync = deferredFullSync -- for tests
+
+-- Starts an automatic sync: one due by time, later.
+local function startAutomatic(mode)
+    if mode == "full" then
+        Library.deferFullSync()
+        return false
+    end
+    return Library.sync(mode, true, mode == "quick" and { defer_full = true } or nil)
+end
+
 --- Starts the automatic sync, if one is to run now (none while offline).
 function Library.syncIfDue()
     if Library.job then return false end
     local mode = syncDue()
-    return mode ~= nil and Library.sync(mode, true)
+    return mode ~= nil and startAutomatic(mode)
 end
 
 -- Even without syncing, check the folder for new or changed files.
 local function backgroundCheck()
     if Library.job or not Library.server() then return end
-    Library.sync(syncDue() or "scan", true)
+    local mode = syncDue()
+    if mode == "full" then
+        Library.deferFullSync()
+        mode = nil
+    end
+    startAutomatic(mode or "scan")
 end
 local scheduledCheck = Guard.task("jobs", backgroundCheck)
 

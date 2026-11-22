@@ -1454,15 +1454,20 @@ do
     -- full sync only when due with quick syncs off.
     do
         local NetworkMgr = require("ui/network/manager")
+        local UIManager = require("ui/uimanager")
         local real_sync, real_connected = Library.sync, NetworkMgr.isConnected
-        local started
-        Library.sync = function(mode, quiet) started = { mode, quiet } return true end
+        local real_schedule, real_unschedule = UIManager.scheduleIn, UIManager.unschedule
+        local started, scheduled
+        Library.sync = function(mode, quiet, opts) started = { mode, quiet, opts } return true end
+        UIManager.scheduleIn = function(_self, s, fn) scheduled = { s, fn } end
+        UIManager.unschedule = function() scheduled = nil end
         local online = true
         NetworkMgr.isConnected = function() return online end
         local function run() started = nil Library.syncIfDue() return started and started[1] end
         Library.setQuickSync(true)
         eq(run(), "quick", "quick sync on wake-up/Wi-Fi/file browser")
         eq(started[2], true, "automatic: quiet")
+        check(started[3] and started[3].defer_full == true, "automatic: a full sync due by time waits")
         eq(run(), "quick", "and again straight after: no interval")
         online = false
         eq(run(), nil, "offline: nothing")
@@ -1476,10 +1481,27 @@ do
         st = Store.open(Library.dbPath(server), false)
         st:setMeta("last_full_sync", os.time() - 2 * 24 * 3600)
         st:close()
-        eq(run(), "full", "quick syncs off, full sync due")
+        scheduled = nil
+        eq(run(), nil, "quick syncs off, full sync due: not at once")
+        check(scheduled and scheduled[1] == 120, "but in two minutes")
+        Library._deferredFullSync()
+        eq(started and started[1], "full", "then a full sync")
+        Library.job = { mode = "prefetch" }
+        started, scheduled = nil, nil
+        Library._deferredFullSync()
+        check(not started and scheduled and scheduled[1] == 30, "another job running: tried again soon")
+        Library.job = nil
+        online = false
+        started, scheduled = nil, nil
+        Library._deferredFullSync()
+        check(not started and not scheduled, "offline by then: left for the next automatic sync")
+        online = true
         Library.save("full_sync", "never")
+        scheduled = nil
         eq(run(), nil, "both off: nothing")
+        check(not scheduled, "both off: nothing later either")
         Library.sync, NetworkMgr.isConnected = real_sync, real_connected
+        UIManager.scheduleIn, UIManager.unschedule = real_schedule, real_unschedule
     end
 
     -- A quick sync that found nothing doesn't reload the listing or fetch covers.
@@ -1877,6 +1899,33 @@ do
     local ok = pcall(Virtual.timeListing, fc, collate, function() error("boom") end)
     check(not ok and rawget(fc, "getMenuItemMandatory") == nil, "put back after a failed listing too")
     Timing.clock, BookList.hasBookBeenOpened = real_clock, real_opened
+end
+
+-- Cloud books skip the opened (sidecar) and collection (realpath) checks ----------
+
+do
+    local Guard = require("athenaeum/guard")
+    local BookList = require("ui/widget/booklist")
+    local ReadCollection = require("readcollection")
+    local real_opened, real_in = BookList.hasBookBeenOpened, ReadCollection.isFileInCollections
+    local real_coll = ReadCollection.coll
+    local asked = {}
+    BookList.hasBookBeenOpened = function(file) asked[#asked + 1] = file return true end
+    ReadCollection.isFileInCollections = function(_self, file) asked[#asked + 1] = file return true end
+    Virtual.setCatalog("/lib/", { { id = "c1", title = "Cloud" } })
+    local cloud = Virtual.books[1].path
+    Virtual._installCloudShortcuts()
+    check(Guard.ok("library"), "library on")
+    eq(BookList.hasBookBeenOpened(cloud), false, "cloud book: never opened")
+    eq(BookList.hasBookBeenOpened("/lib/local.epub"), true, "local file: asked as before")
+    ReadCollection.coll = { favorites = { [cloud] = { file = cloud } }, other = {} }
+    eq(ReadCollection:isFileInCollections(cloud, true), true, "cloud book in a collection")
+    ReadCollection.coll = { favorites = {} }
+    eq(ReadCollection:isFileInCollections(cloud, true), false, "cloud book in none")
+    eq(ReadCollection:isFileInCollections("/lib/local.epub", true), true, "local file: asked as before")
+    eq(#asked, 2, "only local files reach KOReader's checks")
+    BookList.hasBookBeenOpened, ReadCollection.isFileInCollections = real_opened, real_in
+    ReadCollection.coll = real_coll
 end
 
 -- "Rebuilding library…" while the listing is rebuilt after a catalog change ---------------

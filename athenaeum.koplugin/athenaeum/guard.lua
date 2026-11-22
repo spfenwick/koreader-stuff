@@ -194,6 +194,8 @@ function Guard.check()
     })
     requires("library", "apps/reader/readerui", { showReader = 2 })
     requires("library", "docsettings", { flush = 1 })
+    requires("library", "ui/widget/booklist", { hasBookBeenOpened = 1 })
+    requires("library", "readcollection", { isFileInCollections = 2 })
     requires("library", "apps/filemanager/filemanager", { openFile = true })
     -- ZenOS's book sources (the plugin is ZenOS-only).
     local ok_zen, zen = pcall(require, "common/book_sources")

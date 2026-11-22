@@ -569,6 +569,33 @@ local function installSettingsGuard()
     end
 end
 
+-- Listing a book asks whether it was opened (a stat for each place its
+-- sidecar could be) and whether it's in a collection (a realpath() call,
+-- with a 4 KB buffer each time). A cloud book has no file: KOReader never
+-- writes its settings (installSettingsGuard), so it was never opened here,
+-- and realpath() fails on it anyway, so its own path is what collections
+-- are checked with. For 2,000 cloud books that saves 3 to 6 s a listing
+-- on a Kobo, most of it when the disk is cold or busy.
+local function installCloudShortcuts()
+    local BookList = require("ui/widget/booklist")
+    Guard.hook("library", BookList, "hasBookBeenOpened", function(orig, file, ...)
+        if Virtual.by_path[file] then return false end
+        return orig(file, ...)
+    end, "BookList.hasBookBeenOpened")
+    local ReadCollection = require("readcollection")
+    Guard.hook("library", ReadCollection, "isFileInCollections", function(orig, self, file, ignore_mark, ...)
+        if not (Virtual.by_path[file] and type(self.coll) == "table") then
+            return orig(self, file, ignore_mark, ...)
+        end
+        if not (ignore_mark or G_reader_settings:nilOrTrue("collection_show_mark")) then return false end
+        for _name, coll in pairs(self.coll) do
+            if type(coll) == "table" and coll[file] then return true end
+        end
+        return false
+    end, "ReadCollection:isFileInCollections")
+end
+Virtual._installCloudShortcuts = installCloudShortcuts -- for tests
+
 --- Installs the hooks. Returns false (and installs nothing) when the
 -- startup check finds KOReader has changed in a way the plugin relies on.
 function Virtual.install()
@@ -597,6 +624,7 @@ function Virtual.install()
     installSelectAndHold()
     installOpen()
     installSettingsGuard()
+    installCloudShortcuts()
     logger.info("Athenaeum: installed,", #Virtual.books, "cloud books in", Virtual.folder)
     return true
 end
