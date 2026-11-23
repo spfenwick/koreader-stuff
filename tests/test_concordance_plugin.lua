@@ -571,6 +571,32 @@ do
     package.loaded["common/shared_state"] = old_shared
 end
 
+-- ZenOS's incognito mode: its shared config, or its plugin in the file browser or reader.
+do
+    local old_fm, old_rui = package.loaded["apps/filemanager/filemanager"], package.loaded["apps/reader/readerui"]
+    local old_mgr = package.loaded["config/manager"]
+    package.loaded["apps/filemanager/filemanager"] = nil
+    package.loaded["config/manager"] = nil
+    package.loaded["apps/reader/readerui"] = { instance = nil }
+    check(P.incognito() == false, "no ZenOS: not incognito")
+    local config = { features = { incognito_mode = false } }
+    package.loaded["config/manager"] = { get = function() return config end }
+    check(P.incognito() == false, "ZenOS, incognito off")
+    config.features.incognito_mode = true
+    check(P.incognito() == true, "incognito on (ZenOS's shared config)")
+    package.loaded["config/manager"] = { get = function() error("boom") end }
+    check(P.incognito() == false, "a failing config/manager: not incognito")
+    package.loaded["apps/reader/readerui"] = { instance = { zenos = { config = config } } }
+    check(P.incognito() == true, "incognito on (the reader's ZenOS)")
+    package.loaded["apps/reader/readerui"] = { instance = nil }
+    package.loaded["apps/filemanager/filemanager"] = { instance = { zenos = { config = config } } }
+    check(P.incognito() == true, "incognito on (the file browser's ZenOS)")
+    package.loaded["apps/filemanager/filemanager"] = { instance = { zenos = { config = { features = "?" } } } }
+    check(P.incognito() == false, "an odd config: not incognito")
+    package.loaded["apps/filemanager/filemanager"], package.loaded["apps/reader/readerui"] = old_fm, old_rui
+    package.loaded["config/manager"] = old_mgr
+end
+
 -- The device's name: progress sync's "Device hostname", else the model.
 do
     local kosync = dev.dir .. "/kosync.lua"

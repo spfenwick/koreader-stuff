@@ -299,6 +299,8 @@ end
 -- for this.
 function Concordance:scheduleOpenSync()
     self:unscheduleOpenSync()
+    -- Read in ZenOS's incognito mode: not in the history, so nothing to tell.
+    if Plugin.incognito() then return end
     self.open_tick = function()
         self.open_tick = nil
         if NetworkMgr:isConnected() then self.trigger("open") end

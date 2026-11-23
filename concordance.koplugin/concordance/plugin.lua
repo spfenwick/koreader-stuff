@@ -327,6 +327,35 @@ function Plugin.annotationsNeedScan()
     return not Plugin.deviceState().ann_scanned
 end
 
+-- ZenOS's incognito mode ----------------------------------------------------------------
+
+-- Whether a ZenOS config table has incognito mode on.
+local function incognitoIn(config)
+    local features = type(config) == "table" and config.features
+    return type(features) == "table" and features.incognito_mode == true
+end
+
+--- Whether ZenOS's incognito mode is on: books read then leave no trace
+-- here (ZenOS doesn't save their settings, history or statistics), so
+-- Concordance doesn't record the open book or write into closed ones
+-- (ZenOS would drop the write) until it's off. ZenOS's plugin instances
+-- share one config (its config/manager); the file browser's and the
+-- reader's instances are asked too, in case that changes. On when any says so.
+function Plugin.incognito()
+    local Manager = package.loaded["config/manager"]
+    if type(Manager) == "table" and type(Manager.get) == "function" then
+        local ok, config = pcall(Manager.get)
+        if ok and incognitoIn(config) then return true end
+    end
+    for _, name in ipairs({ "apps/filemanager/filemanager", "apps/reader/readerui" }) do
+        local mod = package.loaded[name]
+        local inst = type(mod) == "table" and mod.instance
+        local zen = type(inst) == "table" and (inst.zenos or inst.zen_ui)
+        if type(zen) == "table" and incognitoIn(zen.config) then return true end
+    end
+    return false
+end
+
 --- The process-wide annotation sync (KOReader side).
 function Plugin.annSync()
     if ann_sync then return ann_sync end
@@ -337,6 +366,7 @@ function Plugin.annSync()
         logger = logger,
         ui_manager = UIManager,
         enabled = function() return true end,
+        incognito = Plugin.incognito,
         schedule = schedule,
         saveScanned = function(t)
             Plugin.deviceState().ann_scanned = t
@@ -367,6 +397,7 @@ function Plugin.bookSync()
         logger = logger,
         ui_manager = UIManager,
         enabled = function() return true end,
+        incognito = Plugin.incognito,
         schedule = schedule,
         -- Athenaeum's library files: books never opened here can have a
         -- sidecar too (see BookSync:refresh).

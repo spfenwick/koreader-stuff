@@ -174,6 +174,21 @@ ZenOS then keeps the edit in custom metadata, as KOReader's book
 information dialog does, and it syncs like any other override. Without a
 server ZenOS decides as before.
 
+### ZenOS's incognito mode
+
+While ZenOS's incognito mode is on, a book read leaves no trace on the
+device: ZenOS doesn't save its settings (`DocSettings.flush`), add it to the
+history or record statistics. Concordance follows (`Plugin.incognito()`,
+from ZenOS's shared config, `config/manager`): the open book is neither
+read nor written (status, rating, review, metadata, TOC and flows here;
+highlights and notes in ANNOTATIONS.md's terms), and closed books aren't
+written either, since ZenOS would drop the write. Those writes stay to do
+and go in at the first sync after incognito mode is turned off. A book
+read in incognito mode is never recorded, so the highlights it loses on
+closing (ZenOS doesn't save them) aren't taken as deletions later. Opening
+a book in incognito mode doesn't start the sync that opening one usually
+does.
+
 ## Applying merged changes
 
 - **The open book**, on open and after a sync (unless a menu or dialog is

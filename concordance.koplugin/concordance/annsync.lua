@@ -27,7 +27,9 @@ AnnSync.SCAN_CHUNK = 20
 --- deps: store (AnnStore), getDeviceId(), now(), logger, schedule(delay, fn),
 -- enabled(), ui_manager (UIManager), and optionally readerUI() (the open
 -- ReaderUI or nil), event (ui/event), docsettings, readhistory, lfs,
--- confirm(opts) (shows the held-deletion question), saveScanned(time)
+-- confirm(opts) (shows the held-deletion question), saveScanned(time),
+-- incognito() (ZenOS's incognito mode is on: the open book isn't read or
+-- written, nor closed books written)
 function AnnSync.new(deps)
     local self = setmetatable({ deps = deps }, AnnSync)
     self.log = deps.logger
@@ -41,7 +43,16 @@ function AnnSync:_readerUI()
 end
 
 --- The open book's identity: { md5, kind, title, authors, path }, or nil and why.
+--- Whether ZenOS's incognito mode is on (deps.incognito).
+function AnnSync:_incognito()
+    if not self.deps.incognito then return false end
+    local ok, on = pcall(self.deps.incognito)
+    return ok and on == true
+end
+
 function AnnSync:bookOf(ui)
+    -- Read in incognito mode: not recorded, and nothing applied to it.
+    if self:_incognito() then return nil, "incognito mode" end
     if not (ui and ui.document and ui.annotation and type(ui.annotation.annotations) == "table") then
         if ui and ui.document then
             local why = not ui.annotation and "ReaderUI.annotation is missing"
@@ -299,6 +310,9 @@ end
 --- Writes merged changes into every closed book that needs them, a few
 -- per UI tick. done(written, held). Returns false if already running.
 function AnnSync:writeAll(done)
+    -- ZenOS's incognito mode drops sidecar writes: wait until it's off
+    -- (the changes stay to do; the next sync writes them).
+    if self:_incognito() then return false end
     if self.writing or not self.deps.enabled() then return false end
     self.writing = true
     local ui = self:_readerUI()

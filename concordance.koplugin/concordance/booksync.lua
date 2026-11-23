@@ -30,7 +30,9 @@ BookSync.RETRY_TRIES = 90
 
 --- deps: store (BookStore), getDeviceId(), now(), logger, schedule(delay, fn),
 -- enabled(), ui_manager, and optionally readerUI(), docsettings, readhistory,
--- lfs, booklist, event, global_settings (G_reader_settings)
+-- lfs, booklist, event, global_settings (G_reader_settings), incognito()
+-- (ZenOS's incognito mode is on: the open book isn't read or written, nor
+-- closed books written)
 function BookSync.new(deps)
     local self = setmetatable({ deps = deps }, BookSync)
     self.log = deps.logger
@@ -139,7 +141,16 @@ local function handmadeValue(items, enabled, kind)
 end
 
 --- The open book: { md5, path, kind, title, authors }, or nil and why.
+--- Whether ZenOS's incognito mode is on (deps.incognito).
+function BookSync:_incognito()
+    if not self.deps.incognito then return false end
+    local ok, on = pcall(self.deps.incognito)
+    return ok and on == true
+end
+
 function BookSync:bookOf(ui)
+    -- Read in incognito mode: not recorded, and nothing applied to it.
+    if self:_incognito() then return nil, "incognito mode" end
     if not (ui and ui.document and ui.doc_settings) then return nil, "no book open" end
     local md5 = ui.doc_settings:readSetting("partial_md5_checksum")
     if type(md5) ~= "string" or md5 == "" then return nil, "book has no MD5" end
@@ -571,6 +582,9 @@ end
 
 --- Writes merged changes into every closed book that needs them. done(n).
 function BookSync:writeAll(done)
+    -- ZenOS's incognito mode drops sidecar writes: wait until it's off
+    -- (the changes stay to do; the next sync writes them).
+    if self:_incognito() then return false end
     if self.writing then return false end
     self.writing = true
     local ui = self:_readerUI()

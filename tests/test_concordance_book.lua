@@ -776,4 +776,60 @@ do
         and cm.custom_props.series == "Saga", "ZenOS edit: B gets the authors and keeps the title and series")
 end
 
+-- ZenOS's incognito mode -------------------------------------------------------------------
+do
+    local a, b = newDev("incog-a"), newDev("incog-b")
+    local MD = string.rep("c", 32)
+    local props = { title = "Quiet", authors = "Writer" }
+    local pa = a:book("quiet", { partial_md5_checksum = MD, doc_props = props,
+                                 summary = { status = "reading", modified = "2026-01-01" } })
+    local pb = b:book("quiet", { partial_md5_checksum = MD, doc_props = props,
+                                 summary = { status = "reading", modified = "2026-01-02" } })
+    a.sync:refresh(); a:run()
+    b.sync:refresh(); b:run()
+    local outbox = b.store:counts().outbox
+    local incognito = false
+    b.sync.deps.incognito = function() return incognito end
+
+    -- B reads it in incognito mode and finishes it: nothing recorded.
+    local doc = { partial_md5_checksum = MD, summary = { status = "reading" } }
+    local ub = {
+        rolling = true, document = { file = pb }, doc_props = { title = "Quiet" },
+        doc_settings = { readSetting = function(_, k) return doc[k] end, saveSetting = function(_, k, v) doc[k] = v end,
+                         getCustomMetadataFile = function() end },
+    }
+    ub.dialog = ub
+    b.ui = ub
+    incognito = true
+    local book, why = b.sync:bookOf(ub)
+    check(book == nil and why == "incognito mode", "incognito: the open book isn't read")
+    b.sync:onReadSettings(ub, { readSetting = function(_, k) return doc[k] end })
+    b.sync:onReaderReady(ub)
+    tick(10)
+    doc.summary = { status = "complete", rating = 5, modified = os.date("%Y-%m-%d", clock) }
+    b.sync:collect()
+    b.sync:onClose(ub)
+    b.ui = nil
+    check(b.store:counts().outbox == outbox, "incognito: the open book's changes not recorded")
+
+    -- A finishes it meanwhile: B doesn't write it while incognito (ZenOS would drop the write).
+    tick(10)
+    local data = readSidecar(pa)
+    data.summary = { status = "complete", rating = 3, modified = "2026-02-02" }
+    writeSidecar(pa, data)
+    lfs.touch(sdrDir(pa) .. "/metadata.epub.lua", clock + 5, clock + 5)
+    a.sync:refresh(); a:run()
+    a:send(b)
+    b.sync:afterSync(nil); b:run()
+    check(readSidecar(pb).summary.status == "reading", "incognito: closed books not written")
+    check(b.store:counts().write == 1, "the write stays to do")
+
+    -- Incognito off: the next sync writes it.
+    incognito = false
+    b.sync:afterSync(nil); b:run()
+    local sb = readSidecar(pb).summary
+    check(sb.status == "complete" and sb.rating == 3, "incognito off: written at the next sync")
+    check(b:merged(MD, "rating") == 3, "B's incognito rating never recorded")
+end
+
 S.finish("concordance book data tests")

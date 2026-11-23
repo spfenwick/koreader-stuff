@@ -697,6 +697,27 @@ do -- closed books: merged changes written into their sidecars
     check(B:export() == nil, "nothing removed elsewhere")
     B.asked[1].done("restore")
     check(#sidecarList() == 7, "restore: written back into the closed book at once")
+
+    -- ZenOS's incognito mode: closed books not written (ZenOS would drop the
+    -- write), the open book neither read nor written.
+    A:open(M1, "rolling"); tick(); A:highlight(9, 1, 0, 5); A:close()
+    B:import(A:export(), A.id)
+    local incognito = true
+    B.sync.deps.incognito = function() return incognito end
+    local before = flushes
+    B.sync:afterSync({})
+    check(flushes == before and #sidecarList() == 7, "incognito: closed book not written")
+    check(B.store:isPending(M1, "rolling"), "incognito: still to write")
+    local outbox = B:outbox()
+    B:sidecar(M1, "rolling", deepcopy(sidecarList()))
+    B:open(M1, "rolling"); tick(); B:highlight(10, 1, 0, 5); B:close()
+    check(B:outbox() == outbox, "incognito: a highlight made in the open book isn't recorded")
+    incognito = false
+    B.sync:afterSync({})
+    check(flushes == before + 1 and #sidecarList() == 8 and texts(sidecarList()):find("text 9.1.0", 1, true)
+        and not texts(sidecarList()):find("text 10.1.0", 1, true),
+        "incognito off: written at the next sync, without B's incognito highlight")
+    B.sync.deps.incognito = nil
 end
 
 do -- status counts and requeue
