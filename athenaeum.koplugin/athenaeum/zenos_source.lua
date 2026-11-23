@@ -15,6 +15,10 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   cached folder listings, via listingKey(): a listing is rebuilt when the
   cloud books in it change, and one saved before the plugin was removed
   isn't reused
+  downloads and deletes, via BookSources.moved(): ZenOS's open views list
+  the book at its file (or back at its cloud entry), and after a download
+  ZenOS edits its cached listing of the library folder instead of
+  rebuilding it (ZENOS_PRS.md, #4)
   reading status, rating and the date a book was finished from other
   devices (from Concordance), via
   status(), for cloud books and for the library's downloaded books not
@@ -40,7 +44,6 @@ Setting "zenos_groups" (default true): cloud books in the groups.
 ]]
 
 local logger = require("logger")
-local UIManager = require("ui/uimanager")
 local Guard = require("athenaeum/guard")
 
 local ZenSource = {
@@ -186,64 +189,29 @@ function ZenSource.install(virtual)
     return true
 end
 
--- Redrawing after a download ---------------------------------------------------
+-- Moves ------------------------------------------------------------------------
 
-local function swapInList(list, old, new)
-    local found = false
-    for i, v in ipairs(list) do
-        if v == old then list[i], found = new, true end
-    end
-    return found
+--- A book moved between its cloud entry and its file (downloaded, or the
+-- file deleted): ZenOS's open views (Authors, Series, Languages, Tags and
+-- their book lists, To Be Read, history and search lists) list it at
+-- new_path, and its cached listing of the library folder is edited rather
+-- than rebuilt when new_path is a file (ZENOS_PRS.md, #4). Call it once the
+-- catalog has been set (Virtual.listingKey() is the new one). False when
+-- ZenOS has no BookSources.moved: the caller redraws the folder itself.
+function ZenSource.moved(old_path, new_path)
+    local BookSources = package.loaded[MODULE]
+    if type(BookSources) ~= "table" or type(BookSources.moved) ~= "function" then return false end
+    return BookSources.moved(old_path, new_path) == true
 end
 
--- Points a list item (and the series groups and file lists in it) at the
--- downloaded file. True if anything changed.
-local function swapInItem(item, old, new)
-    if type(item) ~= "table" then return false end
-    local found = false
-    for _i, key in ipairs({ "path", "filepath", "file" }) do
-        if item[key] == old then item[key], found = new, true end
-    end
-    if found and item.text == (old:match("([^/]+)$") or ""):gsub("%.[^%.]+$", "") then
-        item.text = (new:match("([^/]+)$") or new):gsub("%.[^%.]+$", "")
-    end
-    -- ZenOS group items share their file list with the book list opened
-    -- from them, so a later rebuild of that list sees the file too.
-    if type(item._zen_files) == "table" and swapInList(item._zen_files, old, new) then found = true end
-    if type(item.series_items) == "table" then
-        for _i, sub in ipairs(item.series_items) do
-            if swapInItem(sub, old, new) then found = true end
-        end
-    end
-    return found
-end
-
---- Every open ZenOS view that lists a book at old_path (Authors/Series/
--- Languages/Tags and their book lists, To Be Read, history and search
--- lists) lists it at new_path instead, and is redrawn. The library folder
--- itself is redrawn by Virtual.refresh().
-function ZenSource.replaceInViews(old_path, new_path)
-    for _i, entry in ipairs(UIManager._window_stack or {}) do
-        local w = entry.widget
-        if type(w) == "table" and type(w.item_table) == "table" then
-            if type(w._zen_tbr_refresh) == "function" then
-                -- To Be Read reloads its list itself.
-                w._zen_tbr_refresh()
-            else
-                local found = false
-                for _j, item in ipairs(w.item_table) do
-                    if swapInItem(item, old_path, new_path) then found = true end
-                end
-                if found and type(w.updateItems) == "function" then w:updateItems() end
-            end
-        end
-    end
-end
-
---- A cloud book was downloaded: open views and Home show the file.
+--- A cloud book was downloaded: open views, the library folder and Home
+-- show the file. False when the folder wasn't redrawn (see moved()).
 function ZenSource.downloaded(old_path, new_path)
-    ZenSource.replaceInViews(old_path, new_path)
+    local told = ZenSource.moved(old_path, new_path)
+    -- ZenOS edits its listing: no "Rebuilding library…" for this change.
+    if told then Virtual.rebuild_pending = false end
     ZenSource.refreshHome({ old_path, new_path })
+    return told
 end
 
 --- A book's file came or went (downloaded, or deleted and back to its

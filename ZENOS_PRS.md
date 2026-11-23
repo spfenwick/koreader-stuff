@@ -8,7 +8,7 @@ upstream as #892 on 2026-11-17). Base each PR on upstream's `dev`.
 Each entry: what's wrong in ZenOS, the fix, and what goes away in the
 plugins. When one merges, remove the plugin code and update this file.
 
-Suggested order: 1, 2, 3, 4. The first two are small.
+Suggested order: 1, 2, 3, 4, then 5 (an idea that builds on 4). The first two are small.
 
 ## 1. Opens and long-presses ask the book sources everywhere
 
@@ -133,14 +133,55 @@ Things to watch:
   as long as the stable key matches, so it shouldn't rebuild. Not checked
   for other sort orders.
 
-**Status (2026-11-24):** not started. Time a download's listing before and
-after in the emulator.
+**Status (2026-11-24):** implemented on ZenOS branch `book-source-move`
+(from upstream `dev`; not committed yet, PR not opened). `BookSources.moved`
+calls listeners ZenOS registers with `BookSources.onMoved`:
+- `browser_item_table_cache.lua`: `FileChooser:_zen_update_item_table(path,
+  edit, affected)` edits a cached listing (in memory, or restored from the
+  saved copy), keys it as current and queues the saved copy;
+  `_zen_move_in_item_tables(old, new)` uses it to swap the entry, placed by
+  the listing's sort (by last read: `apply_history_order`). A listing is
+  kept only when its other folders still match; a child folder the move
+  touched, or a `new` that isn't a file (a delete, back to the cloud entry),
+  drops it. The file browser is redrawn on the next tick, after the group
+  views have the new path (a redraw during a group view's delete would take
+  the book out of them).
+- `group_view.lua`: `replace_file` swaps the path in the Authors/Series/
+  Languages/Tags pages and their book lists, reloads To Be Read, and swaps
+  it in any other open list (history, collections, search).
+
+Athenæum (0.9.16) calls it after a download (`Library.load({ keep_listing =
+true })`, then `ZenSource.downloaded`) and after a delete (file → cloud
+entry: views only, the listing is still rebuilt). Without `moved` in ZenOS
+it redraws the folder as before. Its badges now decorate items in a
+`FileChooser:getListItem` wrapper, so the item ZenOS builds for the file gets
+one. Specs and Athenæum's tests pass; not yet timed in the emulator (needs a
+live server: `tests/athenaeum/e2e_download.py`).
 
 **Plugins lose:** `replaceInViews` and `swapInItem` in
 `athenaeum/zenos_source.lua`, which edit ZenOS's private fields
 (`_zen_files`, `series_items`, `_zen_tbr_refresh`), and the full listing
-rebuild after every download. Kindle and any other source that moves files
-get the same.
+rebuild after every download. (Removed from Athenæum 0.9.16.) Any other
+source that moves its books gets the same, but none does today: the Kindle
+source lists files already on the device and never moves them (its books
+arrive through Amazon sync or USB, which folder timestamps catch).
+
+## 5. Renames and moves in the file manager use `moved()`
+
+**In ZenOS:** renaming a book or cutting and pasting it in KOReader's file
+manager (`FileManager:renameFile`, the paste of a cut) rescans the folder
+(`refreshPath()`), and ZenOS's open group views (Authors, Series, their
+book lists, To Be Read) keep the old path until reopened.
+
+**Fix:** ZenOS's wrappers around those call `BookSources.moved(old, new)`
+for each book file moved, so every book (Kindle files included) gets #4's
+listing edit and view updates. To check: a folder renamed or moved (many
+paths at once: probably drop the listings instead), a batch paste (one
+call per file, or a list form of `moved()`), a paste into another folder
+(both folders' listings), and a failed or partial move.
+
+**Status (2026-11-24):** idea only, after #4. Not a plugin hook: nothing in
+the plugins goes away, so it's a ZenOS improvement that #4 makes cheap.
 
 ## Not worth a PR
 

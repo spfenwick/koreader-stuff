@@ -1782,25 +1782,19 @@ do
     Library.installDeleteHooks()
     local ticks = {}
     UIManager.nextTick = function(_self, fn) table.insert(ticks, fn) end
-    -- An open ZenOS Series list with the book, and its book list.
-    local real_stack = UIManager._window_stack
-    local series_files = { up }
-    local series_redraws = 0
-    local series = { item_table = { { text = "Saga", _zen_files = series_files } },
-        updateItems = function() series_redraws = series_redraws + 1 end }
-    local book_list = { item_table = { { text = "Bo Writer - Up", path = up, filepath = up } },
-        updateItems = function() series_redraws = series_redraws + 1 end }
-    UIManager._window_stack = { { widget = series }, { widget = book_list } }
-    check(FileManager.deleteFile(FileManager, up, true), "file deleted")
-    eq(series_files[1], cloud1, "series list has the cloud entry before the caller redraws")
-    eq(book_list.item_table[1].path, cloud1, "book list item is the cloud entry")
-    eq(series_redraws, 2, "both redrawn")
-    -- ZenOS then takes the deleted file out of its lists: nothing to take.
-    for i = #series_files, 1, -1 do
-        if series_files[i] == up then table.remove(series_files, i) end
+    -- ZenOS is told the file went back to its cloud entry before the caller
+    -- redraws, so its open lists (Series...) keep the book.
+    local zen = package.loaded["common/book_sources"]
+    local moves = {}
+    zen.moved = function(old, new)
+        moves[#moves + 1] = { old, new, Virtual.isVirtual(new) }
+        return true
     end
-    eq(#series_files, 1, "book still in the series after ZenOS's clean-up")
-    UIManager._window_stack = real_stack
+    check(FileManager.deleteFile(FileManager, up, true), "file deleted")
+    check(#moves == 1 and moves[1][1] == up and moves[1][2] == cloud1,
+        "ZenOS told the file moved to its cloud entry")
+    check(moves[1] and moves[1][3], "after the cloud entry is back in the catalog")
+    zen.moved = nil
     check(ReadHistory:getIndexByFile(cloud1) and not ReadHistory:getIndexByFile(up),
         "deleted: the cloud entry again, before the reload")
     eq(ReadHistory:getIndexByFile(cloud1), 2, "in the same place")
@@ -2099,42 +2093,29 @@ do
     -- ZenOS's tag groups are left alone.
     check(db.getGroupedByTags == orig_tags, "tags not hooked")
 
-    -- A download: open views point at the file and are redrawn.
-    local UIManager = require("ui/uimanager")
-    local real_stack = UIManager._window_stack
+    -- A download: ZenOS is told the book moved (it redraws its views and
+    -- edits its listing), and Home is rebuilt.
     local cloud, file = "/lib/cloud-c2.epub", "/lib/Ann - Cloud Two.epub"
-    local shared_files = { "/lib/a.epub", cloud }
-    local updates, tbr_reloads, home_rebuilds = 0, 0, 0
-    local groups = { item_table = {
-        { text = "Ann", _zen_files = shared_files },
-        { text = "Saga", series_items = { { text = "cloud-c2", path = cloud, filepath = cloud } } },
-    }, updateItems = function() updates = updates + 1 end }
-    local detail = { item_table = { { text = "cloud-c2", path = cloud, filepath = cloud } },
-        updateItems = function() updates = updates + 1 end }
-    local history = { item_table = { { text = "Cloud Two", file = cloud } },
-        updateItems = function() updates = updates + 1 end }
-    local unrelated = { item_table = { { path = "/lib/a.epub" } },
-        updateItems = function() error("redrawn without the book") end }
-    local tbr = { item_table = {}, _zen_tbr_refresh = function() tbr_reloads = tbr_reloads + 1 end }
-    UIManager._window_stack = { { widget = groups }, { widget = detail }, { widget = history },
-        { widget = unrelated }, { widget = tbr } }
+    local zen = package.loaded["common/book_sources"]
+    local moves, home_rebuilds = {}, 0
+    zen.moved = function(old, new) moves[#moves + 1] = { old, new } return true end
     local FileManager = require("apps/filemanager/filemanager")
     local real_fm = FileManager.instance
     local plugin = { _zen_shared = { home = { rebuildActive = function() home_rebuilds = home_rebuilds + 1 end } },
         _zen_shared_registry = { home = true } }
     FileManager.instance = { zenos = plugin }
     package.loaded["common/shared_state"] = { get = function(p, key) return p._zen_shared[key] end }
-    ZenSource.downloaded(cloud, file)
-    eq(shared_files[2], file, "group's file list (shared with its book list) has the file")
-    eq(groups.item_table[2].series_items[1].path, file, "series group's book has the file")
-    check(detail.item_table[1].path == file and detail.item_table[1].filepath == file, "book list item has the file")
-    eq(detail.item_table[1].text, "Ann - Cloud Two", "file name shown as the file browser would")
-    eq(history.item_table[1].file, file, "history item has the file")
-    eq(history.item_table[1].text, "Cloud Two", "other titles kept")
-    eq(updates, 3, "views listing the book redrawn")
-    eq(tbr_reloads, 1, "To Be Read reloaded")
+    Virtual.rebuild_pending = true
+    check(ZenSource.downloaded(cloud, file), "ZenOS told")
+    check(#moves == 1 and moves[1][1] == cloud and moves[1][2] == file, "the move reported")
+    check(not Virtual.rebuild_pending, "no rebuilding message: ZenOS edits its listing")
     eq(home_rebuilds, 1, "Home rebuilt")
-    UIManager._window_stack = real_stack
+    -- A ZenOS without moved(): the caller redraws the folder.
+    zen.moved = nil
+    Virtual.rebuild_pending = true
+    check(not ZenSource.downloaded(cloud, file), "older ZenOS: not told")
+    check(Virtual.rebuild_pending, "older ZenOS: the folder is rebuilt, with the message")
+    Virtual.rebuild_pending = false
     FileManager.instance = real_fm
     package.loaded["common/shared_state"] = nil
 

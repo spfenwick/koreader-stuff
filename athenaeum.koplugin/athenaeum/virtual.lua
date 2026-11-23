@@ -9,6 +9,7 @@ getDocProps for them (from Virtual.bookInfoFor) and keys its cached
 listings on Virtual.listingKey(). The KOReader and CoverBrowser functions
 changed here:
   FileChooser:getList              adds the entries to the library folder
+  FileChooser:getListItem          badges make room on the folder's items
   BookInfoManager:extractInBackground / :isExtractingInBackground
                                    covers not downloaded yet are fetched when
                                    CoverBrowser (or ZenOS) asks to extract
@@ -449,9 +450,6 @@ local function installListing()
                         book.path, attributes(book), collate), book))
                 end
             end)
-            local t_decorate = Timing.start()
-            for _i, item in ipairs(files) do decorate(item) end
-            local decorate_ms = Timing.since(t_decorate)
             local total = Timing.since(t0)
             local n = #Virtual.books .. " books"
             Timing.record("listing: add cloud books", total, n)
@@ -459,11 +457,24 @@ local function installListing()
             Timing.record("listing: sort lookups", spent.sort, n)
             Timing.record("listing: opened checks", spent.opened, n)
             Timing.record("listing: size and collection text", spent.mandatory, n)
-            Timing.record("listing: badges", decorate_ms, #files .. " items")
-            Timing.record("listing: other", total - decorate_ms - spent.sort - spent.opened - spent.mandatory, n)
+            Timing.record("listing: other", total - spent.sort - spent.opened - spent.mandatory, n)
         end
         return dirs, files, readable
     end, "FileChooser:getList")
+    -- Badges make room on the library folder's items, cloud books and files
+    -- alike: also on those ZenOS builds itself when told a book was
+    -- downloaded (ZenSource.downloaded). Called for every item listed, so
+    -- not through Guard.hook; decorate() is guarded itself.
+    local getListItem = FileChooser.getListItem
+    FileChooser.getListItem = function(self, dirpath, ...)
+        local item = getListItem(self, dirpath, ...)
+        local folder = Virtual.folder
+        if folder and self.name == "filemanager" and type(dirpath) == "string"
+                and (dirpath == folder or normalize(dirpath) == folder) and Guard.ok("library") then
+            decorate(item)
+        end
+        return item
+    end
 end
 
 local function installBookInfo()

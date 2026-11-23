@@ -161,13 +161,14 @@ end
 -- Loading into the file browser --------------------------------------------------
 
 -- The folder is redrawn only when the cloud books shown changed (ZenOS's
--- cached listing is keyed on the same signature, Virtual.listingKey()).
-local function showCatalog(folder, cloud)
+-- cached listing is keyed on the same signature, Virtual.listingKey()),
+-- and not when keep_listing: the caller tells ZenOS what changed instead.
+local function showCatalog(folder, cloud, keep_listing)
     local before = Virtual.catalog_sig
     Virtual.setCatalog(folder, cloud)
     -- A refetched cover keeps its file name: don't show the old image.
     Virtual.forgetDecodedCovers()
-    if Virtual.catalog_sig ~= before then Virtual.refresh() end
+    if Virtual.catalog_sig ~= before and not keep_listing then Virtual.refresh() end
 end
 
 --- Library.load() with a message up, for when it's slow (many cloud books
@@ -206,7 +207,9 @@ local function loadKey(server, folder, s)
 end
 
 --- Reads the catalog, matches local files, and updates the cloud books shown.
-function Library.load()
+-- opts.keep_listing: the library folder isn't redrawn (see showCatalog).
+function Library.load(opts)
+    local keep_listing = type(opts) == "table" and opts.keep_listing == true
     local server, folder = Library.server(), Library.folder()
     local s = Library.settings()
     Library.loaded_key = nil -- set once loaded
@@ -221,7 +224,7 @@ function Library.load()
         Library.copies = {}
         Library.by_title, Library.file_info = {}, {}
         Covers.configure(nil)
-        showCatalog(folder, {})
+        showCatalog(folder, {}, keep_listing)
         Guard.call("history", History.reconcile)
         Library.loaded_key = loadKey(server, folder, s)
         return
@@ -264,7 +267,7 @@ function Library.load()
     }
     logger.info("Athenaeum: loaded", Library.stats)
     t0 = Timing.start()
-    showCatalog(folder, cloud)
+    showCatalog(folder, cloud, keep_listing)
     Guard.call("history", History.reconcile)
     Timing.record("catalog: show in folder", Timing.since(t0))
     Timing.record("catalog: load", Timing.since(t_load),
@@ -354,7 +357,7 @@ local function showCloudInViews(changed)
     for path, id in pairs(changed) do
         local cloud = cloudPathFor(id)
         if cloud then
-            local ok, err = pcall(ZenSource.replaceInViews, path, cloud)
+            local ok, err = pcall(ZenSource.moved, path, cloud)
             if not ok then logger.warn("Athenaeum: redrawing views after a delete:", err) end
         end
     end
@@ -1249,7 +1252,11 @@ function Library.downloaded(book, result, opts)
     for _i, b in ipairs(Virtual.books) do
         if b.id == book.id then cloud_path = b.path; break end
     end
-    Library.load() -- redraws the library folder if it's shown
+    -- ZenOS is told the book moved from its cloud entry to the file: it
+    -- edits its cached listing of the library folder rather than rebuilding
+    -- it (seconds for a big library), and its open views (Authors, Series,
+    -- To Be Read...) show the file.
+    Library.load({ keep_listing = cloud_path ~= nil })
     for _i, b in ipairs(Library.catalog or {}) do
         if b.id == book.id then
             if b.cover_stale then Covers.request({ b }) end
@@ -1257,9 +1264,11 @@ function Library.downloaded(book, result, opts)
         end
     end
     if cloud_path then
-        -- Other views listing the book (Home, Authors, Series, ...) show the file.
-        local ok, err = pcall(ZenSource.downloaded, cloud_path, result.path)
-        if not ok then logger.warn("Athenaeum: redrawing views after a download:", err) end
+        local ok, res = pcall(ZenSource.downloaded, cloud_path, result.path)
+        if not (ok and res) then
+            if not ok then logger.warn("Athenaeum: redrawing views after a download:", res) end
+            Virtual.refresh()
+        end
     end
     -- Concordance reads the new file's identity before it's first opened, so
     -- other versions' highlights, status... apply at once.
