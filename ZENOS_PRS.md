@@ -84,17 +84,63 @@ reports.
 The largest of these, and the one upstream is most likely to want to
 discuss.
 
-## 4. `BookSources.moved(old, new)` (lower priority)
+## 4. `BookSources.moved(old, new)`, without a listing rebuild
 
-**In ZenOS:** nothing; a source can't say a book's path changed.
+**In ZenOS:** a source can't say a book's path changed. And a download
+always rebuilds the library folder's whole listing (about 2,150 entries on
+the Kobo, with "Rebuilding library…"), because ZenOS's cached listing
+(`browser_item_table_cache.lua`) is keyed on two things the download
+changes:
 
-**Fix:** ZenOS updates its own open views (group item file lists, series
-items, To Be Read) when told a path moved.
+1. the stable key, which includes `BookSources.listingKey`. Athenæum's
+   key (`Virtual.catalog_sig`) changes because the book leaves the cloud
+   list (`Library.downloaded` → `Library.load` → `setCatalog`);
+2. the folder's `directory_signature` (mtime, ctime, size, inode), which
+   changes when the file is written.
+
+Either one misses the cache, and `Virtual.refresh()` → `refreshPath` then
+rebuilds the whole listing.
+
+There's no way around this in the plugin:
+- Keeping `listingKey` unchanged after a download doesn't help, because the
+  folder signature still changes. ctime can't be set back, and touching
+  the folder was removed in 0.5.x.
+- Editing the cached listing means reaching ZenOS's `shared_cache` (a local)
+  through `debug.getupvalue`, and faking the saved copy too. Too fragile.
+- Skipping the refresh after a download only delays the rebuild: the next
+  listing still misses, and `history_reorder` (the "back from the reader"
+  path) needs the stable key to match.
+
+**Fix:** when told a path moved, ZenOS updates its own open views (group
+item file lists, series items, To Be Read) *and* its cached listings of the
+folder, in memory and the saved copy. It:
+- swaps the old entry for the file's entry, inside series groups too (what
+  Athenæum's `swapInItem` does for open views);
+- moves that one entry if the sort needs it. Sorting by date added or last
+  read leaves it in place (Athenæum sets a downloaded file's date to the
+  date the book was added); sorting by name can move it, since the file is
+  named "Author - Title";
+- stores the current key, so the next listing is a cache hit.
+
+This could be a `FileChooser:_zen_update_item_table(path, edit)` that
+`moved()` uses.
+
+Things to watch:
+- The re-key must happen after the file is renamed into place, or the
+  FAT32 2 s window in `changed_near_scan` marks the listing stale.
+- Download & read: the first open creates the `.sdr` folder, changing the
+  folder again. When sorting by last read, `history_reorder` ignores that
+  as long as the stable key matches, so it shouldn't rebuild. Not checked
+  for other sort orders.
+
+**Status (2026-11-24):** not started. Time a download's listing before and
+after in the emulator.
 
 **Plugins lose:** `replaceInViews` and `swapInItem` in
 `athenaeum/zenos_source.lua`, which edit ZenOS's private fields
-(`_zen_files`, `series_items`, `_zen_tbr_refresh`). The case for ZenOS on
-its own is weaker here.
+(`_zen_files`, `series_items`, `_zen_tbr_refresh`), and the full listing
+rebuild after every download. Kindle and any other source that moves files
+get the same.
 
 ## Not worth a PR
 
