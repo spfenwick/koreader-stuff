@@ -26,9 +26,7 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   ZenOS skips a history() entry for a book already in it. See
   INFORMATION_ARCHITECTURE.md, #4.
 
-Also, until ZenOS does these itself:
-  getGroupedByTags     each book once per tag (ZenOS adds a book again for
-                       each time a tag appears in its keywords)
+Also, until ZenOS does this itself:
   filemanagerutil.openFile, the file chooser's showFileDialog
                        for ZenOS views that don't ask the book sources yet
                        (To Be Read, end-of-book "next in series"): a cloud
@@ -36,6 +34,8 @@ Also, until ZenOS does these itself:
                        plugin starts, so they're re-wrapped outermost
                        whenever ZenOS rebuilds a grouping.
 If those change, the hooks turn themselves off (feature "zenos").
+(Until 0.9.14 getGroupedByTags was hooked too, to list each book once per
+tag; ZenOS was never found adding a book twice, so it was removed.)
 Setting "zenos_groups" (default true): cloud books in the groups.
 ]]
 
@@ -123,45 +123,6 @@ function ZenSource.ensureOutermost()
     if fc and type(fc.showFileDialog) == "function" and fc.showFileDialog ~= our_dialogs[fc] then
         wrapFileDialog(fc)
     end
-end
-
--- Tags ------------------------------------------------------------------------
-
---- ZenOS's tag groups with each book listed once per tag (a new list when
--- one changes; ZenOS caches the one it gives).
-function ZenSource.dedupeTags(groups)
-    local out = {}
-    for i, g in ipairs(groups or {}) do
-        if type(g) == "table" and type(g.files) == "table" then
-            local files, seen = {}, {}
-            for _j, file in ipairs(g.files) do
-                if not seen[file] then
-                    seen[file] = true
-                    files[#files + 1] = file
-                end
-            end
-            if #files ~= #g.files then
-                local copy = {}
-                for k, v in pairs(g) do copy[k] = v end
-                copy.files = files
-                g = copy
-            end
-        end
-        out[i] = g
-    end
-    return out
-end
-
-local function hookTags()
-    local ok, db = pcall(require, "common/db_bookinfo")
-    if not ok or type(db) ~= "table" or type(db.getGroupedByTags) ~= "function" then return end
-    local last_in, last_out
-    Guard.hook("zenos", db, "getGroupedByTags", function(orig, ...)
-        local groups = orig(...)
-        if type(groups) ~= "table" then return groups end
-        if groups ~= last_in then last_in, last_out = groups, ZenSource.dedupeTags(groups) end
-        return last_out
-    end, "ZenOS getGroupedByTags")
 end
 
 -- The source ------------------------------------------------------------------
@@ -258,7 +219,6 @@ function ZenSource.install(virtual)
     Guard.on_failure.zenos = function() ZenSource.changed() end
     fmu = require("apps/filemanager/filemanagerutil")
     ZenSource.ensureOutermost()
-    hookTags()
     logger.info("Athenaeum: registered as a ZenOS book source")
     return true
 end

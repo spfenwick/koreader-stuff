@@ -1983,8 +1983,7 @@ end
 do
     local ZenSource = require("athenaeum/zenos_source")
     local Settings = require("athenaeum/settings")
-    local zen_tags = { { tag = "x", files = { "/lib/a.epub", "/lib/a.epub" } }, { tag = "y", files = { "/lib/a.epub" } } }
-    local db = { getGroupedByTags = function() return zen_tags end }
+    local db = { getGroupedByTags = function() return {} end }
     local orig_tags = db.getGroupedByTags
     package.loaded["common/db_bookinfo"] = db
     Virtual.setCatalog("/lib", {
@@ -2104,13 +2103,8 @@ do
     Covers.on_arrived({ Virtual.books[1] })
     check(ZenOS.changes[1] and ZenOS.changes[1][1] == "/lib/cloud-c2.epub", "cover arrival reported")
 
-    -- Tags: each book once.
-    check(db.getGroupedByTags ~= orig_tags, "tags hooked")
-    local tags = db.getGroupedByTags()
-    eq(#tags[1].files, 1, "tag lists each book once")
-    eq(#zen_tags[1].files, 2, "ZenOS's cached list is left alone")
-    check(tags[2] == zen_tags[2], "unchanged tag groups reused")
-    check(db.getGroupedByTags() == tags, "de-duplicated once while ZenOS's list is the same")
+    -- ZenOS's tag groups are left alone.
+    check(db.getGroupedByTags == orig_tags, "tags not hooked")
 
     -- A download: open views point at the file and are redrawn.
     local UIManager = require("ui/uimanager")

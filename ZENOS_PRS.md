@@ -9,7 +9,7 @@ it merges.
 Each entry: what's wrong in ZenOS, the fix, and what goes away in the
 plugins. When one merges, remove the plugin code and update this file.
 
-Suggested order: 2, 1, 3, 4, 5. The first three are small.
+Suggested order: 1, 2, 3, 4. The first two are small.
 
 ## 1. Opens and long-presses ask the book sources everywhere
 
@@ -30,19 +30,7 @@ opening banner.
 rebuilds a grouping). In `athenaeum/virtual.lua`, `cancelZenOSOpeningBanner`
 (the `__ZEN_UI_CANCEL_OPENING_BANNER` global).
 
-## 2. Each book once per tag
-
-**In ZenOS:** `db_bookinfo.getGroupedByTags` (`add_tags`) adds a file once
-for every time a tag appears in its keywords, so "Fiction, Fiction" lists
-the book twice and counts it twice.
-
-**Fix:** a per-book set of tags already added in `add_tags` (about three
-lines).
-
-**Plugins lose:** `hookTags` and `dedupeTags` in `athenaeum/zenos_source.lua`
-(about 40 lines).
-
-## 3. History changes in the middle are noticed
+## 2. History changes in the middle are noticed
 
 **In ZenOS:** the "last read" index memo
 (`browser_item_table_cache.lua`, `history_time_map`) compares only the
@@ -58,7 +46,7 @@ the memo exists to avoid.
 **Plugins lose:** the `rh:reload(true)` workaround (and its comment) in
 `concordance/histsync.lua` and `athenaeum/history.lua`.
 
-## 4. Home refreshes itself when the sources report changes
+## 3. Home refreshes itself when the sources report changes
 
 **In ZenOS:** there's no public way to tell Home a book changed. Both
 plugins reach into `FileManager.instance.zenos`, then
@@ -79,7 +67,7 @@ reports.
 The largest of these, and the one upstream is most likely to want to
 discuss.
 
-## 5. `BookSources.moved(old, new)` (lower priority)
+## 4. `BookSources.moved(old, new)` (lower priority)
 
 **In ZenOS:** nothing; a source can't say a book's path changed.
 
@@ -92,6 +80,16 @@ items, To Be Read) when told a path moved.
 its own is weaker here.
 
 ## Not worth a PR
+
+- **Each book once per tag** (dropped 2026-11-24): this listed ZenOS's
+  `getGroupedByTags` as adding a book once per repeat of a tag in its
+  keywords. That was never shown: the Kobo's CoverBrowser database has no
+  book whose keywords repeat a tag after ZenOS's split and trim, and no
+  repeated paths, so ZenOS lists each book once. Athenæum's `hookTags` /
+  `dedupeTags` were removed in 0.9.14. If books show twice under a tag
+  again, find the cause before raising anything. (A book whose file was
+  saved under a second capitalisation has two CoverBrowser rows, and ZenOS
+  lists it twice in every tab; that's a different problem.)
 
 - **`editsEmbedded`** (`concordance/metadatahook.lua`): a ZenOS setting for
   writing edits into the EPUB would help users, but Concordance would still
