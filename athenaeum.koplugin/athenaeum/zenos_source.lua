@@ -4,7 +4,11 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   Authors, Series, Languages and Tags tabs (and what ZenOS builds from
   them: Home rows, end-of-book suggestions), via books()
   Home's reading history strip, book switcher, To Be Read, via owns()
-  taps and long-presses there, via open() and showContextMenu()
+  taps and long-presses everywhere ZenOS opens or long-presses a book (the
+  file browser, Home, group views, To Be Read, collections, end-of-book
+  suggestions), via open() and showContextMenu(): ZenOS asks the sources
+  in its filemanagerutil.openFile and FileChooser:showFileDialog wrappers,
+  and cancels its opening banner when a source opens a book
   covers and metadata everywhere, via bookInfo(), answered inside ZenOS's
   own cover caches (changed(paths) drops their entries when a cover
   arrives)
@@ -26,16 +30,12 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   ZenOS skips a history() entry for a book already in it. See
   INFORMATION_ARCHITECTURE.md, #4.
 
-Also, until ZenOS does this itself:
-  filemanagerutil.openFile, the file chooser's showFileDialog
-                       for ZenOS views that don't ask the book sources yet
-                       (To Be Read, end-of-book "next in series"): a cloud
-                       book shows its details. ZenOS wraps both after the
-                       plugin starts, so they're re-wrapped outermost
-                       whenever ZenOS rebuilds a grouping.
-If those change, the hooks turn themselves off (feature "zenos").
-(Until 0.9.14 getGroupedByTags was hooked too, to list each book once per
-tag; ZenOS was never found adding a book twice, so it was removed.)
+Athenaeum used to hook filemanagerutil.openFile, the file chooser's
+showFileDialog and the file browser's onMenuSelect/onMenuHold, for ZenOS
+views that didn't ask the sources; it now needs a ZenOS that does
+(ZENOS_PRS.md, #1). Until 0.9.14 getGroupedByTags was hooked too, to list
+each book once per tag; ZenOS was never found adding a book twice, so it was
+removed.
 Setting "zenos_groups" (default true): cloud books in the groups.
 ]]
 
@@ -78,20 +78,7 @@ local function selecting()
     return fm and fm.selected_files ~= nil
 end
 
--- Open and long-press backstops ----------------------------------------------
-
-local fmu, our_openFile
-local our_dialogs = setmetatable({}, { __mode = "k" }) -- file chooser -> our wrapper
-
-local function wrapOpenFile()
-    our_openFile = Guard.hook("zenos", fmu, "openFile", function(orig, ui, file, ...)
-        if Virtual.by_path[file] and not selecting() then
-            Virtual.showDetails(file)
-            return
-        end
-        return orig(ui, file, ...)
-    end, "filemanagerutil.openFile")
-end
+-- Open and long-press -----------------------------------------------------------
 
 -- Details for a book ZenOS shows from a history list (Home's Recently read
 -- passes _zen_is_history): with "Remove from history", after which Home
@@ -104,33 +91,11 @@ local function historyOpts(item, path)
     end) }
 end
 
-local function wrapFileDialog(fc)
-    our_dialogs[fc] = Guard.hook("zenos", fc, "showFileDialog", function(orig, self, item, ...)
-        if type(item) == "table" and Virtual.by_path[item.path] and not selecting() then
-            Virtual.showDetails(item.path, historyOpts(item, item.path))
-            return true
-        end
-        return orig(self, item, ...)
-    end, "FileChooser:showFileDialog")
-end
-
---- Keeps the open and long-press hooks outside ZenOS's own wrappers.
-function ZenSource.ensureOutermost()
-    if not (fmu and Guard.ok("zenos")) then return end
-    if fmu.openFile ~= our_openFile then wrapOpenFile() end
-    local FileManager = require("apps/filemanager/filemanager")
-    local fc = FileManager.instance and FileManager.instance.file_chooser
-    if fc and type(fc.showFileDialog) == "function" and fc.showFileDialog ~= our_dialogs[fc] then
-        wrapFileDialog(fc)
-    end
-end
-
 -- The source ------------------------------------------------------------------
 
 -- db_bookinfo rebuilds a grouping from this; rebuilt with the catalog.
 local books_cache, books_gen
 local function books()
-    ZenSource.ensureOutermost()
     if not (ZenSource.enabled and ZenSource.enabled()) then return {} end
     if books_cache and books_gen == Virtual.generation then return books_cache end
     local out = {}
@@ -217,8 +182,6 @@ function ZenSource.install(virtual)
     if not (ok_meta and res) then logger.warn("Athenaeum: ZenOS metadata integration unavailable", res) end
     -- Turned off after an error: ZenOS rebuilds its groupings without them.
     Guard.on_failure.zenos = function() ZenSource.changed() end
-    fmu = require("apps/filemanager/filemanagerutil")
-    ZenSource.ensureOutermost()
     logger.info("Athenaeum: registered as a ZenOS book source")
     return true
 end

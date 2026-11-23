@@ -2027,17 +2027,10 @@ do
     check(history_rows[1] and history_rows[1][1].text:find("Remove from history", 1, true),
         "Recently read: Remove from history")
 
-    -- Open backstop, outside ZenOS's openFile wrapper (ZenOS wraps it later).
-    local opened
-    fmu.openFile = function(_ui, file) opened = file end
-    shown = nil
-    source.books() -- ZenOS rebuilding a grouping
-    fmu.openFile(nil, "/lib/cloud-c1.epub")
-    check(shown == "/lib/cloud-c1.epub" and opened == nil, "tap from other ZenOS views: details")
-    fmu.openFile(nil, "/lib/a.epub")
-    eq(opened, "/lib/a.epub", "other books open as usual")
-    fmu.openFile = real_openFile
     Virtual.showDetails = real_show
+    -- ZenOS asks the source wherever a book is opened or long-pressed:
+    -- Athenaeum doesn't hook either itself.
+    check(fmu.openFile == real_openFile, "openFile not hooked")
 
     local bi = source.bookInfo("/lib/cloud-c1.epub", false)
     check(bi and bi.title == "Cloud One" and bi.cover_fetched == "Y", "bookInfo for a cloud book")

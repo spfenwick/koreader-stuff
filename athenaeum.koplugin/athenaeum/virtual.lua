@@ -524,30 +524,6 @@ local function installOpen()
     end
 end
 
-local function isVirtualItem(chooser, item)
-    return chooser.name == "filemanager" and type(item) == "table"
-        and Virtual.by_path[item.path] ~= nil
-        and not (chooser.ui and chooser.ui.selected_files)
-end
-
--- Taps are caught here, before KOReader's open path starts: ZenOS wraps
--- filemanagerutil.openFile to mark the book as being read. Long-press: the
--- file browser's own menu (and ZenOS's) offers rename, delete, edit
--- metadata, read status..., which would act on a file that doesn't exist;
--- show the book's details instead.
-local function installSelectAndHold()
-    local FileChooser = require("ui/widget/filechooser")
-    for _i, name in ipairs({ "onMenuSelect", "onMenuHold" }) do
-        Guard.hook("library", FileChooser, name, function(orig, self, item, ...)
-            if isVirtualItem(self, item) then
-                Virtual.showDetails(item.path)
-                return true
-            end
-            return orig(self, item, ...)
-        end, "FileChooser:" .. name)
-    end
-end
-
 local function installSettingsGuard()
     local DocSettings = require("docsettings")
     Guard.hook("library", DocSettings, "flush", function(orig, self, data, ...)
@@ -621,7 +597,6 @@ function Virtual.install()
     end
     installListing()
     installBookInfo()
-    installSelectAndHold()
     installOpen()
     installSettingsGuard()
     installCloudShortcuts()

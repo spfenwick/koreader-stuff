@@ -2,9 +2,8 @@
 
 Changes to ZenOS that would fix something in ZenOS itself *and* let
 Athenæum or Concordance drop a hook. Written 2026-11-19, against the
-book-sources work (`book-source-enhancements` in the zen-os fork, not yet
-merged upstream). Base each PR on upstream's `dev`, or on that branch once
-it merges.
+book-sources work (`book-source-enhancements` in the zen-os fork, merged
+upstream as #892 on 2026-11-17). Base each PR on upstream's `dev`.
 
 Each entry: what's wrong in ZenOS, the fix, and what goes away in the
 plugins. When one merges, remove the plugin code and update this file.
@@ -25,10 +24,28 @@ and `showFileDialog` in `modules/filebrowser/patches/context_menu.lua`. That
 covers every caller. When a source handles an open, ZenOS cancels its own
 opening banner.
 
+**Status (2026-11-24):** committed on ZenOS branch `book-source-long-press`
+(from upstream `dev`; commit a55c77ee, pushed to the fork, PR not opened
+yet) and on `custom` (07553f7a). `BookSources.open` and `showContextMenu`
+are asked from the `openFile` and `showFileDialog` wrappers; they guard
+against re-entry (a source's handler that opens a file or shows ZenOS's
+dialog, as the Kindle source does, gets ZenOS's own), and `open` cancels the
+opening banner when a source handles it. Dialogs the Kindle library asks for
+itself (`_zen_kindle_book`) aren't sent back to it.
+
+Athenæum 0.9.15 assumes a ZenOS with this change (no feature detection:
+install the ZenOS update first) and has dropped the hooks below, plus its
+file browser tap and long-press hooks (`installSelectAndHold`,
+`isVirtualItem` in `athenaeum/virtual.lua`); checked in the emulator
+2026-11-24. Still there: `cancelZenOSOpeningBanner`, since Athenæum's own
+History view hook and search results show details without going through the
+sources.
+
 **Plugins lose:** in `athenaeum/zenos_source.lua`, `wrapOpenFile`,
 `wrapFileDialog` and `ensureOutermost` (re-wrapping outermost whenever ZenOS
 rebuilds a grouping). In `athenaeum/virtual.lua`, `cancelZenOSOpeningBanner`
-(the `__ZEN_UI_CANCEL_OPENING_BANNER` global).
+(the `__ZEN_UI_CANCEL_OPENING_BANNER` global), once nothing shows details
+outside the sources (see the status above).
 
 ## 2. History changes in the middle are noticed
 
