@@ -2060,6 +2060,15 @@ do
     eq(st.status .. " " .. st.rating, "complete 4", "status and rating of a cloud book")
     eq(st.finished_at, 1700000000, "when it was finished")
     eq(source.status("/lib/a.epub"), nil, "nothing known: nothing given")
+    -- Books read elsewhere waiting to go into the history (Concordance).
+    local real_history = ZenSource.history
+    ZenSource.history = function() return { { file = "/lib/cloud-c1.epub", time = 1700000000 } } end
+    local waiting = source.history()
+    eq(#waiting .. " " .. waiting[1].file .. " " .. waiting[1].time, "1 /lib/cloud-c1.epub 1700000000",
+        "history: the books waiting")
+    ZenSource.history = function() return nil end
+    eq(#source.history(), 0, "history: none known, an empty list")
+    ZenSource.history = real_history
     ZenSource.state = function() return nil end
     eq(source.status("/lib/cloud-c1.epub"), nil, "no state: no status")
     ZenSource.state = real_state
@@ -2175,6 +2184,8 @@ do
     -- Without Concordance: no state.
     package.loaded["concordance/identity"] = nil
     eq(Library.stateText(A_ID), nil, "no Concordance: no state")
+    local ZenSource_history = require("athenaeum/zenos_source").history
+    eq(#ZenSource_history(), 0, "no Concordance: no books waiting for the history")
     local listener
     local states = {}
     local THIS = {}
@@ -2185,6 +2196,12 @@ do
         onChanged = function(key, fn) listener = { key, fn } end,
     }
     eq(Library.stateText(A_ID), nil, "Concordance knows nothing: no state")
+    eq(#ZenSource_history(), 0, "older Concordance: no books waiting for the history")
+    package.loaded["concordance/identity"].pendingHistory = function()
+        return { { file = "/lib/cloud-a.epub", time = 1700000000 } }
+    end
+    eq(ZenSource_history()[1].file, "/lib/cloud-a.epub", "books waiting for the history, from Concordance")
+    package.loaded["concordance/identity"].pendingHistory = nil
     check(listener and listener[1] == "athenaeum", "listens for Concordance's changes")
     local t = os.time{ year = 2026, month = 10, day = 5, hour = 12 }
     states[A_ID] = { status = "complete", rating = 4, last_read = t, last_device = "Kobo Forma" }

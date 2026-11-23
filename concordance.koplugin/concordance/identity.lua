@@ -16,6 +16,13 @@ Concordance isn't installed). See IDENTITY.md, "Athenaeum's side".
     Identity.onChanged(key, fn) fn() after book states may have changed
                                 (a sync brought new data); one per key
     Identity.revision()         changes whenever states may have
+    Identity.pendingHistory()   { { file, time }, … }: books read elsewhere
+                                that wait to go into KOReader's history (a
+                                menu or a book is open), at the time they
+                                were read; file is a book file here or
+                                Athenaeum's cloud entry. Cheap (kept between
+                                syncs); onChanged listeners are told when
+                                one is added. Don't change the list.
 
 last_device is the device's name when known, else nil; "this device" is
 given as Identity.THIS_DEVICE.
@@ -46,7 +53,7 @@ local listeners = {}
 -- files() -> { [path] = { md5 } } for books opened here (BookStore:files),
 -- handles(path) -> true for files scan() reads, scan(path) -> IdScan
 -- result or nil, refresh() -> changed md5s (the
--- engine's refreshIdentity), logger.
+-- engine's refreshIdentity), pending_history() -> HistSync:pending(), logger.
 function Identity.setup(d)
     deps = d
     rev = rev + 1
@@ -245,6 +252,16 @@ function Identity.fileAdded(path)
     end
     if n > 0 then deps.refresh() end
     return n
+end
+
+function Identity.pendingHistory()
+    if not deps or type(deps.pending_history) ~= "function" then return {} end
+    local ok, list = pcall(deps.pending_history)
+    if not ok then
+        warn("listing books read elsewhere failed:", list)
+        return {}
+    end
+    return type(list) == "table" and list or {}
 end
 
 function Identity.onChanged(key, fn)

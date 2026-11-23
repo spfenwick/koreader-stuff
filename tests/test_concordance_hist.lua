@@ -280,6 +280,8 @@ do
     round(A, B)
     check(B.rh.hist[1].file == b3, "while B reads three, A's newer book waits: " .. B.rh:files())
     -- Closing: KOReader sets the top entry's time, then a sync.
+    local p = B.sync:pending()
+    check(#p == 1 and p[1].file == b1, "the waiting book listed for ZenOS meanwhile")
     B.open = nil
     B.rh.hist[1].time = clock; tick(5)
     round(A, B)
@@ -294,12 +296,36 @@ do
     A:send(B); B:send(A)
     A:after()
     B.idle = false
+    local told = 0
+    B.sync.deps.pending_changed = function() told = told + 1 end
     B.sync:afterSync()
     check(B.rh.hist[1].file ~= b2, "a menu is open: not yet")
     check(#B.scheduled == 1 and B.sync.retrying, "retry scheduled")
+    local p = B.sync:pending()
+    check(#p == 1 and p[1].file == b2 and p[1].time == A.rh:timeOf(a2), "waiting: listed for ZenOS")
+    check(told == 1, "listeners told of the waiting book")
+    B.sync:apply()
+    check(told == 1, "still busy: not worked out or told again")
     B.idle = true
     B:run()
     check(B.rh.hist[1].file == b2, "applied on retry")
+    check(#B.sync:pending() == 0, "in the history now: no longer waiting")
+    check(told == 1, "not told when the list only shrinks (the history views are redrawn)")
+end
+
+-- Waiting books, worked out when first asked (after a restart) ------------------------------
+do
+    A.rh:open(a3, clock); tick(10)
+    A:before(); B:before()
+    A:send(B); B:send(A)
+    A:after()
+    local fresh = HistSync.new(B.sync.deps)
+    local p = fresh:pending()
+    check(#p == 1 and p[1].file == b3, "not applied yet: waiting, found without a sync")
+    check(fresh:pending() == p, "kept, not worked out again")
+    B:after()
+    check(B.rh.hist[1].file == b3, "applied")
+    check(#B.sync:pending() == 0, "nothing waiting after it's applied")
 end
 
 -- Versions of a book --------------------------------------------------------------------------

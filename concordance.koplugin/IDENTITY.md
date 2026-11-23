@@ -388,7 +388,10 @@ they load in doesn't matter:
 - Concordance's side is `concordance/identity.lua`
   (`package.loaded["concordance/identity"]`): `available()`,
   `bookState(uuids)` -> `{ status, rating, last_read, last_device }`,
-  `fileAdded(path)`, `onChanged(key, fn)` and `revision()`. There's no
+  `fileAdded(path)`, `onChanged(key, fn)`, `revision()` and
+  `pendingHistory()` (books read elsewhere waiting to go into the history,
+  which Athenaeum gives ZenOS as its book source's `history()`; added
+  2026-11-24). There's no
   `groupFor`: nothing needed it. `last_device` is the device's name, or
   `Identity.THIS_DEVICE`.
 - Links go the other way from the plan: Concordance asks Athenaeum for

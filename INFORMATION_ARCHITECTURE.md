@@ -137,6 +137,15 @@ an entry already works: ZenOS's "Remove from history" removes it from
 unless the book is read again later. The cost is that Athenæum depends on
 `ReadHistory` internals, which Guard turns off if they change.
 
+**Added 2026-11-24: `history()` for the sync gap only.** Concordance doesn't
+put books read elsewhere into `ReadHistory` while a menu or a book is open
+(or in ZenOS's incognito mode); it waits for the next chance. Athenæum's
+`history()` gives ZenOS just those waiting books
+(`Identity.pendingHistory()`, kept by `HistSync:pending()`), so Home and the
+book switcher show them meanwhile. Once they're in `ReadHistory`,
+`mergeHistory` skips them. It never lists a book Concordance already put
+in, so an entry removed from the history doesn't come back through it.
+
 ### 5. Athenæum gives ZenOS less than the book-source contract allows
 
 Its `status()` returns only `{status}`.

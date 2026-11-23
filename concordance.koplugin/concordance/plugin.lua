@@ -547,6 +547,8 @@ function Plugin.histSync()
         uuids = function(md5s) return Plugin.idStore():uuids(md5s) end,
         resolve = cloudPath,
         refresh_ui = refreshAfterHistory,
+        -- Athenaeum shows them in ZenOS until they're in the history.
+        pending_changed = function() Identity.changed() end,
     }
     return hist_sync
 end
@@ -911,6 +913,7 @@ function Plugin.setupIdentity()
             Identity.changed()
         end,
         changed_here = function() if Plugin.onBookChanged then Plugin.onBookChanged() end end,
+        pending_history = function() return Plugin.histSync():pending() end,
         logger = logger,
     }
 end

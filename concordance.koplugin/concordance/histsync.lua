@@ -26,6 +26,11 @@ every sync.
 While a book is open, nothing is put above it in the history (KOReader
 takes the top entry for the open book when it closes it); those wait for
 the next sync, which closing the book starts.
+
+Books read elsewhere that wait to go in (a menu was open, a book is open,
+ZenOS's incognito mode) are listed by pending(), so ZenOS can show them
+on Home and in its book switcher until they're in the history (through
+Athenaeum's book source; see concordance/identity.lua).
 --]]
 
 local BookFormat = require("concordance/bookformat")
@@ -43,9 +48,13 @@ local HIST = BookFormat.HISTORY
 -- getDeviceId(), now(), logger, schedule(delay, fn), enabled(), and
 -- optionally readhistory, lfs, realpath(path), uuids(md5s) -> { [md5] =
 -- { uuid, … } }, resolve(uuids) -> path or nil, idle(), open_book() ->
--- path or nil, refresh_ui(paths) (paths: books put into the history)
+-- path or nil, refresh_ui(paths) (paths: books put into the history),
+-- pending_changed() (books waiting to go in were added or changed; see
+-- pending())
 function HistSync.new(deps)
-    local self = setmetatable({ deps = deps }, HistSync)
+    -- pending_stale: the waiting books aren't known yet (worked out when
+    -- first asked) or a sync may have brought more.
+    local self = setmetatable({ deps = deps, pending_stale = true }, HistSync)
     self.log = deps.logger
     return self
 end
@@ -176,15 +185,52 @@ end
 -- while a menu or dialog is open (KOReader's History view keeps its own
 -- copy). Returns the number of entries changed, or nil and why.
 function HistSync:apply(force)
-    if not force and not self:_idle() then return nil, "busy" end
+    if not force and not self:_idle() then
+        -- Waiting: ZenOS can show them meanwhile (worked out once per sync).
+        if self.pending_stale then
+            local ok, list = pcall(self._waiting, self)
+            if ok then
+                self:_setPending(list)
+            else
+                self.log.warn("Concordance: finding books read elsewhere failed:", list)
+            end
+        end
+        return nil, "busy"
+    end
     self:observe()
-    local store = self.deps.store
-    local merged = store:history()
+    local todo, order = self:_plan()
+    if not todo then
+        self:_setPending({})
+        return 0
+    end
+    local rh = self:_rh()
+    if type(rh.hist) ~= "table" then
+        self.log.warn("Concordance: KOReader's history has no list of books (ReadHistory.hist)")
+        Problems.report("check:ReadHistory.hist", "The reading history isn't synced: KOReader's history has changed",
+            "ReadHistory.hist is missing")
+        return nil, "no history"
+    end
+    local n, seen, moved, applied = self:_put(rh, todo, order)
+    -- Before the views are redrawn (they ask for these again).
+    local waiting = {}
+    for _, w in ipairs(order) do
+        if not applied[w] then waiting[#waiting + 1] = { file = w.path, time = w.time } end
+    end
+    self:_setPending(waiting)
+    self:_finishPut(rh, n, seen, moved)
+    return n
+end
+
+--- Books read elsewhere not applied yet: their records (md5 -> record) and
+-- where each goes, { { path, time, md5s }, … } sorted by path; nil when
+-- there are none. Changes nothing.
+function HistSync:_plan()
+    local merged = self.deps.store:history()
     local todo = {}
     for md5, rec in pairs(merged) do
         if rec.hash ~= rec.seen then todo[md5] = rec end
     end
-    if next(todo) == nil then return 0 end
+    if next(todo) == nil then return nil end
 
     local paths = self.deps.finder:paths()
     local uuids = {}
@@ -213,20 +259,74 @@ function HistSync:apply(force)
         end
     end
     table.sort(order, function(a, b) return a.path < b.path end)
+    return todo, order
+end
 
+--- The planned books the history doesn't have yet, as new or newer.
+function HistSync:_waiting()
+    local todo, order = self:_plan()
+    if not todo then return {} end
     local rh = self:_rh()
-    if type(rh.hist) ~= "table" then
-        self.log.warn("Concordance: KOReader's history has no list of books (ReadHistory.hist)")
-        Problems.report("check:ReadHistory.hist", "The reading history isn't synced: KOReader's history has changed",
-            "ReadHistory.hist is missing")
-        return nil, "no history"
+    local at = {}
+    for _, e in ipairs(type(rh.hist) == "table" and rh.hist or {}) do
+        local t = tonumber(e.time)
+        if e.file and t and (not at[e.file] or t > at[e.file]) then at[e.file] = t end
     end
+    local out = {}
+    for _, w in ipairs(order) do
+        if not (at[w.path] and at[w.path] >= w.time) then out[#out + 1] = { file = w.path, time = w.time } end
+    end
+    return out
+end
+
+local function signature(list)
+    local parts = {}
+    for i, e in ipairs(list) do parts[i] = tostring(e.time) .. "\t" .. e.file end
+    return table.concat(parts, "\n")
+end
+
+--- Keeps the waiting books; tells pending_changed when one was added or its
+-- time changed (ones gone went into the history, whose views are redrawn).
+function HistSync:_setPending(list)
+    local old = {}
+    for _, e in ipairs(self.waiting or {}) do old[e.file] = e.time end
+    local grew = false
+    for _, e in ipairs(list) do
+        if old[e.file] ~= e.time then grew = true break end
+    end
+    self.waiting, self.pending_stale = list, false
+    if grew and self.deps.pending_changed then
+        local ok, err = pcall(self.deps.pending_changed)
+        if not ok then self.log.warn("Concordance: telling of books read elsewhere failed:", err) end
+    end
+end
+
+--- Books read elsewhere waiting to go into the history: { { file, time },
+-- … } (file: a book file here, or Athenaeum's cloud entry). Kept between
+-- syncs; worked out the first time it's asked. Don't change it.
+function HistSync:pending()
+    if self.pending_stale then
+        local ok, list = pcall(self._waiting, self)
+        if not ok then
+            self.log.warn("Concordance: finding books read elsewhere failed:", list)
+            list = {}
+        end
+        self.waiting, self.pending_stale = list, false
+    end
+    return self.waiting or {}
+end
+
+--- Puts the planned books into rh (KOReader's history). Returns the number put in, the
+-- records now seen, the paths moved and { [planned entry] = true } for
+-- those in the history now.
+function HistSync:_put(rh, todo, order)
     local open = self:_openBook()
     local top = rh.hist[1]
     local cap = open and top and top.file == open and top.time or nil
     local lfs = self:_lfs()
-    local n, seen, moved = 0, {}, {}
+    local n, seen, moved, applied = 0, {}, {}, {}
     local function markSeen(w)
+        applied[w] = true
         for _, md5 in ipairs(w.md5s) do seen[#seen + 1] = { md5 = md5, values = { [HIST] = todo[md5].time } } end
     end
     local function indexOf(path)
@@ -312,6 +412,14 @@ function HistSync:apply(force)
                     "ReadHistory:_flush is missing")
             end
         end
+    end
+    return n, seen, moved, applied
+end
+
+--- After _put: reads the history back, redraws and records what's applied.
+function HistSync:_finishPut(rh, n, seen, moved)
+    local store = self.deps.store
+    if n > 0 then
         -- Read back from the file just saved, so every entry is a new table.
         -- ZenOS's "last read" order is cached while the history's length and
         -- first and last entries (the tables) stay the same, so a book moved
@@ -333,11 +441,11 @@ function HistSync:apply(force)
     end
     store:appliedMany(seen)
     if n > 0 then self:observe() end -- what's there now is this device's copy
-    return n
 end
 
 --- After a sync: apply, or retry while the user is busy.
 function HistSync:afterSync()
+    self.pending_stale = true -- the sync may have brought more
     local ok, n, why = pcall(self.apply, self)
     if not ok then
         self.log.warn("Concordance: applying the history failed:", n)

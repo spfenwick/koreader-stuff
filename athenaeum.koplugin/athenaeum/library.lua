@@ -581,6 +581,14 @@ ZenSource.state = function(path)
     return { status = st.status, rating = st.rating, finished_at = finished_at }
 end
 
+-- For ZenOS: books read elsewhere that Concordance will put into the
+-- history once nothing is open (it keeps the list, so this is cheap).
+ZenSource.history = function()
+    local Identity = Library.identity()
+    if not Identity or type(Identity.pendingHistory) ~= "function" then return {} end
+    return Identity.pendingHistory()
+end
+
 function Library.installHistory()
     History.install{
         folder = Library.folder,

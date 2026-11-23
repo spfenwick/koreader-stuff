@@ -18,11 +18,13 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   asks only about books without a sidecar, so a book opened here keeps its
   own)
 
-Not history(): cloud books read elsewhere are already in ReadHistory.hist
-(Concordance puts them there, athenaeum/history.lua keeps them), which
-every history view reads, ZenOS's History tab included. Giving them
-through history() as well would make two paths for the same entries; see
-INFORMATION_ARCHITECTURE.md, #4.
+  books read elsewhere that Concordance hasn't put into ReadHistory.hist
+  yet (it waits while a menu or a book is open), via history(): Home and
+  the book switcher show them meanwhile. Only those: once in the history,
+  Concordance's entries (athenaeum/history.lua keeps cloud ones there)
+  are what every history view reads, ZenOS's History tab included, and
+  ZenOS skips a history() entry for a book already in it. See
+  INFORMATION_ARCHITECTURE.md, #4.
 
 Also, until ZenOS does these itself:
   getGroupedByTags     each book once per tag (ZenOS adds a book again for
@@ -45,6 +47,7 @@ local ZenSource = {
     registered = false,
     enabled = nil, -- function() -> true to list cloud books in groups
     state = nil,   -- function(path) -> { status, rating, finished_at } or nil
+    history = nil, -- function() -> { { file, time }, … } waiting to go into the history
 }
 
 local MODULE = "common/book_sources"
@@ -208,6 +211,12 @@ local function status(path)
         and { status = state.status, rating = state.rating, finished_at = state.finished_at } or nil
 end
 
+-- Books read elsewhere waiting to go into the history (see ZenSource.history).
+local function history()
+    local list = ZenSource.history and ZenSource.history()
+    return type(list) == "table" and list or {}
+end
+
 --- Registers the source. Returns false when ZenOS refuses it (the startup
 -- check has already made sure ZenOS has book sources).
 function ZenSource.install(virtual)
@@ -233,6 +242,7 @@ function ZenSource.install(virtual)
         end),
         listingKey = protect("library", "listingKey", listingKey),
         status = protect("library", "status", status),
+        history = protect("zenos", "history", history),
     }
     if not BookSources.register(ID, source) then
         Guard.problem("library", "ZenOS refused the book source")
