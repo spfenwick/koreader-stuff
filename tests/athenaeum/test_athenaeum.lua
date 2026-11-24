@@ -18,11 +18,12 @@ package.path = REPO .. "/athenaeum.koplugin/?.lua;" .. package.path
 
 -- ZenOS's book sources (common/book_sources.lua), which the plugin needs:
 -- records what the plugin registers and reports.
-local ZenOS = { sources = {}, changes = {}, history_changes = {}, integrated = 0, home_on_top = false }
+local ZenOS = { sources = {}, changes = {}, history_changes = {}, moves = {}, integrated = 0, home_on_top = false }
 package.loaded["common/book_sources"] = {
     register = function(id, source) ZenOS.sources[id] = source return true end,
     changed = function(paths) table.insert(ZenOS.changes, paths or false) end,
     historyChanged = function(paths) table.insert(ZenOS.history_changes, paths or false) end,
+    moved = function(old, new) table.insert(ZenOS.moves, { old, new }) return true end,
     isHomeOnTop = function() return ZenOS.home_on_top end,
     bookInfo = function() end,
     listingKey = function() end,
@@ -1846,25 +1847,12 @@ do
     Library.installDeleteHooks()
     local ticks = {}
     UIManager.nextTick = function(_self, fn) table.insert(ticks, fn) end
-    -- An open ZenOS Series list with the book, and its book list.
-    local real_stack = UIManager._window_stack
-    local series_files = { up }
-    local series_redraws = 0
-    local series = { item_table = { { text = "Saga", _zen_files = series_files } },
-        updateItems = function() series_redraws = series_redraws + 1 end }
-    local book_list = { item_table = { { text = "Bo Writer - Up", path = up, filepath = up } },
-        updateItems = function() series_redraws = series_redraws + 1 end }
-    UIManager._window_stack = { { widget = series }, { widget = book_list } }
+    -- ZenOS's open views are told the book is its cloud entry again.
+    ZenOS.moves = {}
     check(FileManager.deleteFile(FileManager, up, true), "file deleted")
-    eq(series_files[1], cloud1, "series list has the cloud entry before the caller redraws")
-    eq(book_list.item_table[1].path, cloud1, "book list item is the cloud entry")
-    eq(series_redraws, 2, "both redrawn")
-    -- ZenOS then takes the deleted file out of its lists: nothing to take.
-    for i = #series_files, 1, -1 do
-        if series_files[i] == up then table.remove(series_files, i) end
-    end
-    eq(#series_files, 1, "book still in the series after ZenOS's clean-up")
-    UIManager._window_stack = real_stack
+    check(#ZenOS.moves == 1 and ZenOS.moves[1][1] == up and ZenOS.moves[1][2] == cloud1,
+        "ZenOS told the book moved to its cloud entry, before the caller redraws")
+    check(#ticks > 0, "the reload waits for the caller's redraw")
     check(ReadHistory:getIndexByFile(cloud1) and not ReadHistory:getIndexByFile(up),
         "deleted: the cloud entry again, before the reload")
     eq(ReadHistory:getIndexByFile(cloud1), 2, "in the same place")
@@ -2159,39 +2147,13 @@ do
     -- ZenOS's tag groups are left alone.
     check(db.getGroupedByTags == orig_tags, "tags not hooked")
 
-    -- A download: open views point at the file and are redrawn.
-    local UIManager = require("ui/uimanager")
-    local real_stack = UIManager._window_stack
+    -- A download: ZenOS is told the book moved to its file (its views and
+    -- Home show the file).
     local cloud, file = "/lib/cloud-c2.epub", "/lib/Ann - Cloud Two.epub"
-    local shared_files = { "/lib/a.epub", cloud }
-    local updates, tbr_reloads = 0, 0
-    local groups = { item_table = {
-        { text = "Ann", _zen_files = shared_files },
-        { text = "Saga", series_items = { { text = "cloud-c2", path = cloud, filepath = cloud } } },
-    }, updateItems = function() updates = updates + 1 end }
-    local detail = { item_table = { { text = "cloud-c2", path = cloud, filepath = cloud } },
-        updateItems = function() updates = updates + 1 end }
-    local history = { item_table = { { text = "Cloud Two", file = cloud } },
-        updateItems = function() updates = updates + 1 end }
-    local unrelated = { item_table = { { path = "/lib/a.epub" } },
-        updateItems = function() error("redrawn without the book") end }
-    local tbr = { item_table = {}, _zen_tbr_refresh = function() tbr_reloads = tbr_reloads + 1 end }
-    UIManager._window_stack = { { widget = groups }, { widget = detail }, { widget = history },
-        { widget = unrelated }, { widget = tbr } }
-    ZenOS.changes = {}
-    ZenSource.downloaded(cloud, file)
-    eq(shared_files[2], file, "group's file list (shared with its book list) has the file")
-    eq(groups.item_table[2].series_items[1].path, file, "series group's book has the file")
-    check(detail.item_table[1].path == file and detail.item_table[1].filepath == file, "book list item has the file")
-    eq(detail.item_table[1].text, "Ann - Cloud Two", "file name shown as the file browser would")
-    eq(history.item_table[1].file, file, "history item has the file")
-    eq(history.item_table[1].text, "Cloud Two", "other titles kept")
-    eq(updates, 3, "views listing the book redrawn")
-    eq(tbr_reloads, 1, "To Be Read reloaded")
-    local told = ZenOS.changes[1]
-    check(#ZenOS.changes == 1 and told[1] == cloud and told[2] == file,
-        "ZenOS told of the cloud entry and the file (Home refreshes)")
-    UIManager._window_stack = real_stack
+    ZenOS.moves = {}
+    ZenSource.moved(cloud, file)
+    check(#ZenOS.moves == 1 and ZenOS.moves[1][1] == cloud and ZenOS.moves[1][2] == file,
+        "ZenOS told the book moved to its file")
 
     package.loaded["common/db_bookinfo"] = nil
     Virtual.setCatalog(nil, {})

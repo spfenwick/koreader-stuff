@@ -125,7 +125,7 @@ There's no way around this in the plugin:
 item file lists, series items, To Be Read) *and* its cached listings of the
 folder, in memory and the saved copy. It:
 - swaps the old entry for the file's entry, inside series groups too (what
-  Athenæum's `swapInItem` does for open views);
+  `moved()` now does for open views);
 - moves that one entry if the sort needs it. Sorting by date added or last
   read leaves it in place (Athenæum sets a downloaded file's date to the
   date the book was added); sorting by name can move it, since the file is
@@ -143,8 +143,15 @@ Things to watch:
   as long as the stable key matches, so it shouldn't rebuild. Not checked
   for other sort orders.
 
-**Status (2026-11-24):** not started. Time a download's listing before and
-after in the emulator.
+**Status (2026-11-24):** the views half is committed on ZenOS `custom`
+(856d8434; no PR branch yet): `BookSources.moved(old, new)` swaps the path
+in ZenOS's open views (group pages and their book lists, To Be Read, other
+open lists) and redraws the file browser when it shows either folder.
+Athenæum calls it on download and on delete (back to the cloud entry) and
+assumes a ZenOS with it; its `replaceInViews`, `swapInItem` and
+`ZenSource.downloaded` are gone. Still to do: updating ZenOS's cached
+listings so a download doesn't rebuild the whole folder. Time a download's
+listing before and after in the emulator.
 
 **Plugins lose:** `replaceInViews` and `swapInItem` in
 `athenaeum/zenos_source.lua`, which edit ZenOS's private fields

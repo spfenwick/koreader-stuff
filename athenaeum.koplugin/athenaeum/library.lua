@@ -354,8 +354,8 @@ local function showCloudInViews(changed)
     for path, id in pairs(changed) do
         local cloud = cloudPathFor(id)
         if cloud then
-            local ok, err = pcall(ZenSource.replaceInViews, path, cloud)
-            if not ok then logger.warn("Athenaeum: redrawing views after a delete:", err) end
+            local ok, err = pcall(ZenSource.moved, path, cloud)
+            if not ok then logger.warn("Athenaeum: telling ZenOS about a delete:", err) end
         end
     end
 end
@@ -1264,7 +1264,7 @@ function Library.downloaded(book, result, opts)
     end
     if cloud_path then
         -- Other views listing the book (Home, Authors, Series, ...) show the file.
-        local ok, err = pcall(ZenSource.downloaded, cloud_path, result.path)
+        local ok, err = pcall(ZenSource.moved, cloud_path, result.path)
         if not ok then logger.warn("Athenaeum: redrawing views after a download:", err) end
     end
     -- Concordance reads the new file's identity before it's first opened, so

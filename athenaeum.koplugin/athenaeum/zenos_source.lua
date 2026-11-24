@@ -40,7 +40,6 @@ Setting "zenos_groups" (default true): cloud books in the groups.
 ]]
 
 local logger = require("logger")
-local UIManager = require("ui/uimanager")
 local Guard = require("athenaeum/guard")
 
 local ZenSource = {
@@ -186,69 +185,20 @@ function ZenSource.install(virtual)
     return true
 end
 
--- Redrawing after a download ---------------------------------------------------
-
-local function swapInList(list, old, new)
-    local found = false
-    for i, v in ipairs(list) do
-        if v == old then list[i], found = new, true end
-    end
-    return found
-end
-
--- Points a list item (and the series groups and file lists in it) at the
--- downloaded file. True if anything changed.
-local function swapInItem(item, old, new)
-    if type(item) ~= "table" then return false end
-    local found = false
-    for _i, key in ipairs({ "path", "filepath", "file" }) do
-        if item[key] == old then item[key], found = new, true end
-    end
-    if found and item.text == (old:match("([^/]+)$") or ""):gsub("%.[^%.]+$", "") then
-        item.text = (new:match("([^/]+)$") or new):gsub("%.[^%.]+$", "")
-    end
-    -- ZenOS group items share their file list with the book list opened
-    -- from them, so a later rebuild of that list sees the file too.
-    if type(item._zen_files) == "table" and swapInList(item._zen_files, old, new) then found = true end
-    if type(item.series_items) == "table" then
-        for _i, sub in ipairs(item.series_items) do
-            if swapInItem(sub, old, new) then found = true end
-        end
-    end
-    return found
-end
-
---- Every open ZenOS view that lists a book at old_path (Authors/Series/
--- Languages/Tags and their book lists, To Be Read, history and search
--- lists) lists it at new_path instead, and is redrawn. The library folder
--- itself is redrawn by Virtual.refresh().
-function ZenSource.replaceInViews(old_path, new_path)
-    for _i, entry in ipairs(UIManager._window_stack or {}) do
-        local w = entry.widget
-        if type(w) == "table" and type(w.item_table) == "table" then
-            if type(w._zen_tbr_refresh) == "function" then
-                -- To Be Read reloads its list itself.
-                w._zen_tbr_refresh()
-            else
-                local found = false
-                for _j, item in ipairs(w.item_table) do
-                    if swapInItem(item, old_path, new_path) then found = true end
-                end
-                if found and type(w.updateItems) == "function" then w:updateItems() end
-            end
-        end
-    end
-end
-
---- A cloud book was downloaded: open views and Home show the file.
-function ZenSource.downloaded(old_path, new_path)
-    ZenSource.replaceInViews(old_path, new_path)
-    ZenSource.changed({ old_path, new_path })
-end
-
 local function bookSources()
     local BookSources = package.loaded[MODULE]
     return type(BookSources) == "table" and BookSources or nil
+end
+
+--- A book's path changed (a cloud book downloaded to a file, or a deleted
+-- file back to its cloud entry): ZenOS's open views list it at new_path,
+-- and drops what it cached for both paths (Home refreshes).
+function ZenSource.moved(old_path, new_path)
+    books_cache = nil
+    local BookSources = bookSources()
+    if not (BookSources and type(BookSources.moved) == "function") then return end
+    local ok, err = pcall(BookSources.moved, old_path, new_path)
+    if not ok then logger.warn("Athenaeum: ZenOS book sources moved():", err) end
 end
 
 --- True when ZenOS's Home is shown, or about to be (ZenOS can start on
