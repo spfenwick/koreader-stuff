@@ -1062,6 +1062,29 @@ do
         eq(Http.auth({ username = "ann", password = "p%41ss" }), "Basic " .. require("mime").b64("ann:p%41ss"),
             "password with % sent as typed")
         eq(Http.auth({ username = "" }), nil, "no header without a user name")
+        -- A network error is tried again once per job, after a pause.
+        local answers, calls, slept = {}, 0, {}
+        local function fetch()
+            calls = calls + 1
+            local a = table.remove(answers, 1)
+            return a[1], a[2], a[3]
+        end
+        local function sleep(s) slept[#slept + 1] = s end
+        local f = Http.retrying(fetch, 5, sleep)
+        answers = { { nil, "Network error: timeout", "network" }, { "body" } }
+        eq(f("u"), "body", "network error, then the server answers: the body")
+        check(calls == 2 and slept[1] == 5, "tried again after 5 seconds")
+        answers = { { nil, "Network error: timeout", "network" } }
+        local body, err, kind = f("u")
+        check(body == nil and kind == "network" and calls == 3 and #slept == 1,
+            "only once per job: the next network error is returned at once")
+        f = Http.retrying(fetch, 5, sleep)
+        answers = { { nil, "Request failed: 500", "http" } }
+        body, err, kind = f("u")
+        check(kind == "http" and calls == 4 and #slept == 1, "a server error isn't tried again")
+        answers = { { nil, "not modified", "not_modified" } }
+        body, err, kind = f("u")
+        check(kind == "not_modified" and calls == 5 and #slept == 1, "nor a 304")
     end
 
     local path = folder .. "/ok.epub"
@@ -1509,6 +1532,48 @@ do
         check(not scheduled, "both off: nothing later either")
         Library.sync, NetworkMgr.isConnected = real_sync, real_connected
         UIManager.scheduleIn, UIManager.unschedule = real_schedule, real_unschedule
+    end
+
+    -- An automatic sync that couldn't reach the server (just after waking,
+    -- before Wi-Fi is really back) says nothing; Wi-Fi connecting meanwhile
+    -- runs it again. One asked for still reports it.
+    do
+        local ffiutil = require("ffi/util")
+        local NetworkMgr = require("ui/network/manager")
+        local UIManager = require("ui/uimanager")
+        local real = { ffiutil.isSubProcessDone, ffiutil.readAllFromFD, Library.syncIfDue,
+            package.loaded["ui/widget/notification"], UIManager.scheduleIn, NetworkMgr.isConnected,
+            Library.last_result }
+        local notified, retried = {}, 0
+        package.loaded["ui/widget/notification"] = {
+            SOURCE_ALWAYS_SHOW = 1, notify = function(_self, text) notified[#notified + 1] = text end,
+        }
+        ffiutil.isSubProcessDone = function() return true end
+        UIManager.scheduleIn = function() end
+        NetworkMgr.isConnected = function() return false end
+        local function finish(job, err)
+            ffiutil.readAllFromFD = function() return require("dump")({ mode = job.mode, error = err }) end
+            Library.job = job
+            Library.syncIfDue = function() retried = retried + 1 end
+            Library.poll()
+            Library.syncIfDue = real[3]
+        end
+        finish({ mode = "quick", quiet = true, opts = {}, t0 = 0 }, "Network error: timeout")
+        eq(#notified, 0, "automatic, network error: no notification")
+        eq(retried, 0, "and no retry without Wi-Fi connecting")
+        Library.job = { mode = "quick" }
+        Library.onNetworkConnected()
+        check(Library.connected_while_running, "Wi-Fi connected while it ran: noted")
+        finish({ mode = "quick", quiet = true, opts = {}, t0 = 0 }, "Network error: timeout")
+        eq(retried, 1, "then run again when it's done")
+        check(not Library.connected_while_running, "once")
+        finish({ mode = "quick", quiet = true, opts = {}, t0 = 0 }, "The server refused the user name or password (401).")
+        eq(#notified, 1, "automatic, another error: still reported")
+        finish({ mode = "quick", quiet = false, opts = {}, t0 = 0 }, "Network error: timeout")
+        eq(#notified, 2, "asked for: a network error reported")
+        ffiutil.isSubProcessDone, ffiutil.readAllFromFD, Library.syncIfDue = real[1], real[2], real[3]
+        package.loaded["ui/widget/notification"], UIManager.scheduleIn, NetworkMgr.isConnected = real[4], real[5], real[6]
+        Library.job, Library.last_result = nil, real[7]
     end
 
     -- A quick sync that found nothing doesn't reload the listing or fetch covers.

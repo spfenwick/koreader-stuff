@@ -51,6 +51,12 @@ function Http.get(server, url, extra_headers)
     return nil, "Request failed: " .. tostring(status or code) .. " " .. url, "http"
 end
 
+--- True for an error message from Http.get when the server wasn't reached
+-- (no network yet, as just after waking up, or a timeout).
+function Http.isNetworkError(err)
+    return type(err) == "string" and err:find("^Network error:") ~= nil
+end
+
 --- Downloads url to path, streaming (books can be large). Returns true, or
 -- nil and an error message; on failure path is removed.
 function Http.download(server, url, path)
@@ -81,6 +87,26 @@ end
 --- fetch(url) for Sync.
 function Http.fetcher(server)
     return function(url, headers) return Http.get(server, url, headers) end
+end
+
+--- fetch, but a request the network failed is tried again once, after wait
+-- seconds (default 5): just after waking up, Wi-Fi counts as connected a
+-- moment before the server can be reached. Once per job, so a sync while
+-- really offline doesn't wait at every request. sleep: for tests.
+function Http.retrying(fetch, wait, sleep)
+    local left = 1
+    return function(url, headers)
+        local body, err, kind, resp_headers = fetch(url, headers)
+        if kind == "network" and left > 0 then
+            left = left - 1
+            local logger = require("logger")
+            logger.info("Athenaeum: network error, trying again shortly:", err)
+            local pause = sleep or require("ffi/util").sleep
+            pause(wait or 5)
+            return fetch(url, headers)
+        end
+        return body, err, kind, resp_headers
+    end
 end
 
 return Http

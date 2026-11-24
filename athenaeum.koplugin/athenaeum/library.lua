@@ -850,7 +850,7 @@ local function runJob(server, folder, mode, db_path, wal, covers_dir, opts)
             return
         end
         if mode ~= "scan" then
-            local sync = Sync.new{ store = store, root = server.url, fetch = Http.fetcher(server) }
+            local sync = Sync.new{ store = store, root = server.url, fetch = Http.retrying(Http.fetcher(server)) }
             local r, serr
             if mode == "full" then
                 r, serr = sync:full()
@@ -1046,7 +1046,13 @@ local function pollJob()
     end
     local more = covers and covers.more and not result.error and Covers.canFetch()
     local quiet = job.quiet and not job.opts.manual
-    if not more and (not quiet or result.error or changed) then
+    -- An automatic sync that couldn't reach the server (Wi-Fi still coming
+    -- back after waking up) says nothing: it runs again once Wi-Fi connects.
+    local offline = quiet and result.error and require("athenaeum/http").isNetworkError(result.error)
+    if offline then
+        logger.info("Athenaeum: automatic sync couldn't reach the server:", result.error)
+    end
+    if not more and not offline and (not quiet or result.error or changed) then
         if (job.mode ~= "scan" and job.mode ~= "prefetch") or result.error then
             notify(describeResult(result))
         end
@@ -1060,7 +1066,11 @@ local function pollJob()
     elseif result.sync and not result.error and Covers.canFetch() and coversWanted(result) then
         -- After a sync, download some missing covers (newest books first).
         Library.sync("prefetch", true)
+    elseif offline and Library.connected_while_running then
+        -- Wi-Fi connected while this one was failing: try again now.
+        Library.syncIfDue()
     end
+    Library.connected_while_running = nil
 end
 
 --- Marks every downloaded cover out of date and downloads them all again
@@ -1435,6 +1445,9 @@ function Library.onNetworkConnected()
         Timing.record("network: redraw library", 0, "after Wi-Fi connected", true)
         fc:updateItems(1, true)
     end))
+    -- A sync that started before the network was really up (just after
+    -- waking) may still be failing: run again once it's done.
+    if Library.job then Library.connected_while_running = true end
     Library.syncIfDue()
 end
 
