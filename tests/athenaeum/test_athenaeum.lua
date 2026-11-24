@@ -1180,6 +1180,13 @@ do
     local other = { path = "/lib/local.epub" }
     Badge.decorate(other)
     check(other.indent == nil, "plain row: no room for a book without a badge")
+    local real_state, states_asked = Badge.cloudState, 0
+    Badge.cloudState = function() states_asked = states_asked + 1 return "complete" end
+    local stated = { path = "/lib/cloud-x.epub" }
+    Badge.decorate(stated)
+    check(stated.indent == slot and states_asked == 0,
+        "plain row: room made without asking the book's state")
+    Badge.cloudState = real_state
     bb:fill(Blitbuffer.COLOR_GRAY)
     local row = { entry = item, dimen = Geom:new{ x = 0, y = 220, w = 400, h = 60 },
         _underline_container = { dimen = Geom:new{ x = 50, y = 220, w = 300, h = 60 } } }
@@ -1867,38 +1874,43 @@ do
     eq(Virtual.listItem(fc, Virtual.books[1]).doc_props.title, "Own", "metadata set by a sort is kept")
 end
 
--- The library listing's time, split between what getListItem does for each book ------------
+-- Metadata sorts get cloud books' metadata from the book sources directly ----------
 
 do
-    local Timing = require("athenaeum/timing")
-    local BookList = require("ui/widget/booklist")
-    local FileChooser = require("ui/widget/filechooser")
-    local real_clock, real_opened = Timing.clock, BookList.hasBookBeenOpened
-    local now = 0
-    Timing.clock = function() return now end
-    -- The sort's lookup takes 10 ms, and checks the book was opened (3 ms) inside it.
-    BookList.hasBookBeenOpened = function() now = now + 3; return false end
-    local collate = {
-        item_func = function(item) now = now + 10; item.opened = BookList.hasBookBeenOpened(item.path) end,
-        mandatory_func = function() now = now + 2; return "" end,
-    }
-    local fc = setmetatable({}, { __index = FileChooser })
-    local items = {}
-    local spent = Virtual.timeListing(fc, collate, function()
-        for i = 1, 2 do
-            items[i] = fc:getListItem("/lib", "b" .. i .. ".epub", "/lib/b" .. i .. ".epub",
-                { mode = "file", size = 1 }, collate)
+    Virtual.setCatalog("/lib/", { { id = "m1", title = "Meta" } })
+    local cloud = Virtual.books[1].path
+    local zen = package.loaded["common/book_sources"]
+    local real_info = zen.bookInfo
+    zen.bookInfo = function(path, get_cover)
+        if path == cloud and get_cover == false then
+            return { title = "Edited", authors = "A", series = "S", series_index = 2,
+                language = "en", keywords = "K", description = "D", cover_fetched = "Y" }
         end
+    end
+    local slow = 0
+    local bookinfo = { getDocProps = function(_self, file) slow = slow + 1 return { title = "db " .. file } end }
+    local ui = { coverbrowser = {}, bookinfo = bookinfo }
+    local got, other
+    Virtual._withCloudDocProps(ui, function()
+        got = ui.bookinfo:getDocProps(cloud)
+        other = ui.bookinfo:getDocProps("/lib/local.epub")
     end)
-    eq(#items, 2, "books listed")
-    eq(spent.sort, 20, "sort lookups, leaving out the opened checks inside them")
-    eq(spent.opened, 6, "opened checks, wherever they're made")
-    eq(spent.mandatory, 4, "size and collection text")
-    check(BookList.hasBookBeenOpened ~= real_opened and rawget(fc, "getMenuItemMandatory") == nil
-        and type(collate.item_func) == "function", "functions put back after the listing")
-    local ok = pcall(Virtual.timeListing, fc, collate, function() error("boom") end)
-    check(not ok and rawget(fc, "getMenuItemMandatory") == nil, "put back after a failed listing too")
-    Timing.clock, BookList.hasBookBeenOpened = real_clock, real_opened
+    check(got and got.title == "Edited" and got.display_title == "Edited" and got.series_index == 2
+        and got.description == "D" and got.cover_fetched == nil, "cloud book: the sources' fields")
+    eq(other and other.title, "db /lib/local.epub", "local file: asked as before")
+    eq(slow, 1, "only the local file reached the slow lookup")
+    check(rawget(bookinfo, "getDocProps") ~= nil and bookinfo.getDocProps(bookinfo, cloud).title == "db " .. cloud,
+        "put back after the listing")
+    check(not pcall(Virtual._withCloudDocProps, ui, function() error("boom") end)
+        and bookinfo.getDocProps(bookinfo, cloud).title == "db " .. cloud, "put back after a failed listing too")
+    zen.bookInfo = function() return { authors = "A" } end
+    Virtual._withCloudDocProps(ui, function() got = ui.bookinfo:getDocProps(cloud) end)
+    eq(got.display_title, "cloud-m1", "no title: the file name, as KOReader shows it")
+    local plain = { bookinfo = bookinfo } -- no CoverBrowser: KOReader's own lookup
+    Virtual._withCloudDocProps(plain, function() got = plain.bookinfo:getDocProps(cloud) end)
+    eq(got.title, "db " .. cloud, "without CoverBrowser: not answered")
+    zen.bookInfo = real_info
+    Virtual.setCatalog(nil, {})
 end
 
 -- Cloud books skip the opened (sidecar) and collection (realpath) checks ----------

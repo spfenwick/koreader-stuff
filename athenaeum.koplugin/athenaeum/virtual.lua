@@ -362,8 +362,10 @@ end
 
 --- A file browser item for a virtual book (as in the library folder).
 -- Optional: decorate(item) adjusts a listed item (the badge reserves room
--- for itself in plain list rows).
+-- for itself in plain list rows); decorateAll(items) does it for a whole
+-- listing at once.
 Virtual.decorate = nil
+Virtual.decorateAll = nil
 
 local function decorate(item)
     if Virtual.decorate and type(item) == "table" then Virtual.decorate(item) end
@@ -388,43 +390,40 @@ function Virtual.listItem(fc, book, collate)
     return decorate(withProps(fc:getListItem(dir, book.filename, book.path, attributes(book), collate), book))
 end
 
--- Runs fn (listing the cloud books) with what FileChooser:getListItem does
--- for each book timed: the sort's lookup (collate.item_func: the book's
--- metadata, for the title, author and series sorts), whether the book was
--- opened (a sidecar check), and the size and collection text. Each part's
--- time leaves out the parts called inside it. Returns the times (ms).
-function Virtual.timeListing(fc, collate, fn)
-    local BookList = require("ui/widget/booklist")
-    local unpack = table.unpack or unpack
-    local spent = { sort = 0, opened = 0, mandatory = 0 }
-    local active
-    local function timed(key, func)
-        return function(...)
-            local outer, t = active, Timing.clock()
-            active = key
-            local r = Timing.pack(pcall(func, ...))
-            local ms = Timing.clock() - t
-            active = outer
-            spent[key] = spent[key] + ms
-            if outer then spent[outer] = spent[outer] - ms end
-            if not r[1] then error(r[2], 0) end
-            return unpack(r, 2, r.n)
-        end
+-- getDocProps() fields CoverBrowser keeps (ZenOS's book sources fill them).
+local DOC_PROPS = { "pages", "title", "authors", "series", "series_index",
+    "language", "keywords", "description" }
+
+-- The title, author and series sorts look up each book's metadata through
+-- FileManagerBookInfo:getDocProps(): for a cloud book that's CoverBrowser's
+-- getDocProps(), which ZenOS answers from its book sources (Athenaeum's
+-- metadata with the user's edits) after querying CoverBrowser's database,
+-- which has no row for a path without a file. While fn lists the cloud
+-- books, ui.bookinfo answers them from the book sources directly, with what
+-- that chain gives: the same fields, and display_title as KOReader sets it.
+-- Only with CoverBrowser (without it, KOReader looks elsewhere).
+local function withCloudDocProps(ui, fn)
+    local bookinfo = type(ui) == "table" and ui.coverbrowser and ui.bookinfo
+    local BookSources = package.loaded["common/book_sources"]
+    if type(bookinfo) ~= "table" or type(bookinfo.getDocProps) ~= "function"
+            or type(BookSources) ~= "table" or type(BookSources.bookInfo) ~= "function" then
+        return fn()
     end
-    -- Swapped in for the listing only, and put back even if it fails.
-    local item_func = collate.item_func
-    local opened = BookList.hasBookBeenOpened
-    local own_mandatory = rawget(fc, "getMenuItemMandatory")
-    if type(item_func) == "function" then collate.item_func = timed("sort", item_func) end
-    BookList.hasBookBeenOpened = timed("opened", opened)
-    fc.getMenuItemMandatory = timed("mandatory", fc.getMenuItemMandatory)
+    local splitFileNameType = require("apps/filemanager/filemanagerutil").splitFileNameType
+    local own, getDocProps = rawget(bookinfo, "getDocProps"), bookinfo.getDocProps
+    bookinfo.getDocProps = function(self, file, ...)
+        local info = Virtual.by_path[file] and BookSources.bookInfo(file, false)
+        if type(info) ~= "table" then return getDocProps(self, file, ...) end
+        local props = {}
+        for _i, key in ipairs(DOC_PROPS) do props[key] = info[key] end
+        props.display_title = props.title or splitFileNameType(file)
+        return props
+    end
     local ok, err = pcall(fn)
-    collate.item_func = item_func
-    BookList.hasBookBeenOpened = opened
-    rawset(fc, "getMenuItemMandatory", own_mandatory)
+    rawset(bookinfo, "getDocProps", own)
     if not ok then error(err, 0) end
-    return spent
 end
+Virtual._withCloudDocProps = withCloudDocProps -- for tests
 
 local function installListing()
     local FileChooser = require("ui/widget/filechooser")
@@ -442,25 +441,24 @@ local function installListing()
                 table.insert(files, true) -- counting only, like FileChooser:getPathList()
             end
         elseif library then
+            -- Timed as a whole: timing each book's parts (wrapping three
+            -- calls per book) cost more than some of the parts it measured.
             local t0 = Timing.start()
-            local spent = Virtual.timeListing(self, collate, function()
+            withCloudDocProps(self.ui, function()
                 for _i, book in ipairs(Virtual.books) do
                     table.insert(files, withProps(self:getListItem(path, book.filename,
                         book.path, attributes(book), collate), book))
                 end
             end)
             local t_decorate = Timing.start()
-            for _i, item in ipairs(files) do decorate(item) end
+            if Virtual.decorateAll then
+                Virtual.decorateAll(files)
+            else
+                for _i, item in ipairs(files) do decorate(item) end
+            end
             local decorate_ms = Timing.since(t_decorate)
-            local total = Timing.since(t0)
-            local n = #Virtual.books .. " books"
-            Timing.record("listing: add cloud books", total, n)
-            -- Where it went (see Virtual.timeListing); "other" is the rest of getListItem.
-            Timing.record("listing: sort lookups", spent.sort, n)
-            Timing.record("listing: opened checks", spent.opened, n)
-            Timing.record("listing: size and collection text", spent.mandatory, n)
+            Timing.record("listing: add cloud books", Timing.since(t0), #Virtual.books .. " books")
             Timing.record("listing: badges", decorate_ms, #files .. " items")
-            Timing.record("listing: other", total - decorate_ms - spent.sort - spent.opened - spent.mandatory, n)
         end
         return dirs, files, readable
     end, "FileChooser:getList")
@@ -552,23 +550,37 @@ end
 -- and realpath() fails on it anyway, so its own path is what collections
 -- are checked with. For 2,000 cloud books that saves 3 to 6 s a listing
 -- on a Kobo, most of it when the disk is cold or busy.
+-- Both are called for every book listed, so they're plain wrappers rather
+-- than Guard.hook (whose pcall per call cost about as much as the checks
+-- left over); the shortcuts are table lookups that can't fail.
 local function installCloudShortcuts()
     local BookList = require("ui/widget/booklist")
-    Guard.hook("library", BookList, "hasBookBeenOpened", function(orig, file, ...)
-        if Virtual.by_path[file] then return false end
-        return orig(file, ...)
-    end, "BookList.hasBookBeenOpened")
+    local opened = BookList.hasBookBeenOpened
+    if type(opened) ~= "function" then
+        Guard.problem("library", "BookList.hasBookBeenOpened is missing")
+    else
+        BookList.hasBookBeenOpened = function(file, ...)
+            if Virtual.by_path[file] and Guard.ok("library") then return false end
+            return opened(file, ...)
+        end
+    end
     local ReadCollection = require("readcollection")
-    Guard.hook("library", ReadCollection, "isFileInCollections", function(orig, self, file, ignore_mark, ...)
-        if not (Virtual.by_path[file] and type(self.coll) == "table") then
-            return orig(self, file, ignore_mark, ...)
+    local in_collections = ReadCollection.isFileInCollections
+    if type(in_collections) ~= "function" then
+        Guard.problem("library", "ReadCollection:isFileInCollections is missing")
+        return
+    end
+    ReadCollection.isFileInCollections = function(self, file, ignore_mark, ...)
+        if not (Virtual.by_path[file] and type(self) == "table" and type(self.coll) == "table"
+                and Guard.ok("library")) then
+            return in_collections(self, file, ignore_mark, ...)
         end
         if not (ignore_mark or G_reader_settings:nilOrTrue("collection_show_mark")) then return false end
         for _name, coll in pairs(self.coll) do
             if type(coll) == "table" and coll[file] then return true end
         end
         return false
-    end, "ReadCollection:isFileInCollections")
+    end
 end
 Virtual._installCloudShortcuts = installCloudShortcuts -- for tests
 

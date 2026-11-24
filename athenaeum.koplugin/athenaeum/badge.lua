@@ -110,9 +110,18 @@ function Badge.plainSize()
     return Screen:scaleBySize(20), Screen:scaleBySize(28)
 end
 
+--- True when a path gets a badge: Badge.kind() without working out which
+-- (a cloud book's state from Concordance isn't needed for that).
+function Badge.has(path)
+    return (Badge.cloud_enabled and Badge.isCloud and Badge.isCloud(path))
+        or (Badge.local_enabled and Badge.isOnDevice and Badge.isOnDevice(path))
+        or (Badge.noncloud_enabled and Badge.isNonCloud and Badge.isNonCloud(path))
+        or false
+end
+
 --- Makes room for the badge in a plain list row (other views ignore indent).
 function Badge.decorate(item)
-    if item.path and Badge.kind(item.path) then
+    if item.path and Badge.has(item.path) then
         local _size, slot = Badge.plainSize()
         item.indent = slot
     end

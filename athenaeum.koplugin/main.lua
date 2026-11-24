@@ -69,6 +69,14 @@ function Athenaeum:init()
             Virtual.decorate = function(item)
                 if Guard.ok("badge") then Guard.call("badge", Badge.decorate, item) end
             end
+            -- One protected call for a listing (2,000 books), not one per item.
+            Virtual.decorateAll = function(items)
+                if Guard.ok("badge") then
+                    Guard.call("badge", function()
+                        for _i, item in ipairs(items) do Badge.decorate(item) end
+                    end)
+                end
+            end
         end
         require("athenaeum/search").install(Virtual)
         Library.installDeleteHooks()
