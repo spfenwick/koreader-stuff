@@ -122,6 +122,46 @@ versus the file's metadata, cover, badge, and whether it opens. So:
 - `Library.unmatch` / `restoreMatched` stay, so the cloud entry is listed
   again at once after a delete. They no longer patch views.
 
+### Delete keeps collections and history (decided 2026-11-25)
+
+Deleting a downloaded catalog book removes the download, not the book. It
+stays in its collections (including ZenOS's To Be Read) and in the
+history, as a cloud entry at the same path.
+
+KOReader's delete (`FileManager:deleteFile`, `deleteSelectedFiles`) takes
+the file out of every collection (`ReadCollection:removeItem(s)`).
+`ReadHistory:fileDeleted` greys its history entry out, or removes it when
+"auto-remove deleted files" is on. Athenæum already wraps both delete
+functions (`installDeleteHooks`). In those wrappers:
+
+- **Before** KOReader's delete, for each file that's a catalog book's file
+  (`idForPath`): save its collection entries (each collection's item table,
+  so the order and the date added are kept) and a copy of its history
+  entry.
+- **After**, for each one whose file is really gone (the existing
+  `restoreMatched` check):
+  - put the collection entries back at the book's path and write once
+    (`ReadCollection:write`)
+  - put the history entry back at its time if KOReader removed it,
+    otherwise un-grey it; `select_enabled` stays false, since there's no
+    file
+  - `ZenSource.changed({ path })`, so To Be Read and Home redraw
+- **If the book's path changes as a result** (one of two copies deleted:
+  the book adopts the other copy's name), the saved entries are put back
+  at the new path, the same as `bookMoved`.
+- **Files not in the catalog** are deleted as KOReader does now.
+- **The sidecar** (progress, highlights) is still deleted with the file,
+  as KOReader does. With Concordance, the status and progress shown for
+  the cloud entry come from other devices' state, and a re-download gets
+  its highlights back from Concordance.
+- Check that ZenOS's own delete actions (group views, Home, To Be Read)
+  go through these two functions.
+
+This replaces today's `History.deleting` and the deleted → cloud swap in
+`History.reconcile`. Today, with auto-remove on, that swap probably finds
+nothing, because KOReader has already removed the entry. Check, and add a
+test for both settings.
+
 ### History before the catalog loads
 
 Today `History.isCloudPath` recognises the `cloud-` prefix. Instead, the
@@ -194,10 +234,11 @@ releases.
    different book with the same "Author - Title"). The listing skips the
    cloud entry (see Listing). On the next load the book gets a new name
    through `bookMoved`.
-4. **KOReader's own delete** removes the file from collections
-   (`ReadCollection:removeItems`). It does that today too. With a stable
-   path we could keep the book in its collections as a cloud entry, but
-   that's out of scope.
+4. **Restoring after KOReader's delete:** KOReader writes the collections
+   file and flushes the history during the delete, and Athenæum writes
+   them again after it. Make sure nothing in between (ZenOS's delete
+   refresh, `refresh_after_delete`) reads the in-between state and caches
+   it. `ZenSource.changed` afterwards should clear it either way.
 5. **Filename limits:** FAT-unsafe characters and long titles (255 bytes).
    `util.getSafeFilename` handles both. Add tests with long CJK titles.
 
@@ -216,12 +257,16 @@ Each step should leave the plugin working, with tests. Run
    includes names. Migration (`paths_version`) in the same release, so no
    release has both schemes.
 4. Download and delete without path swaps; the history `select_enabled`
-   loop; saved history with IDs.
+   loop; saved history with IDs; delete keeps collections and history
+   (unit tests: auto-remove on and off, several collections, a second
+   copy, a file not in the catalog).
 5. Remove dead code. Update the doc comments in `virtual.lua`,
    `history.lua` and `zenos_source.lua`, plus INFORMATION_ARCHITECTURE.md
    and ZENOS_PRS.md.
 6. Emulator e2e: basic list names, download and delete from the folder,
-   Home, Authors/Series (risk 1), History, To Be Read, collections, and
+   Home, Authors/Series (risk 1), History, To Be Read and collections
+   kept after a delete (single and multi-select, from the file browser
+   and ZenOS views), and
    migration from a profile with `cloud-` entries. Then on the Kobo.
 
 ## Decisions (2026-11-25)
@@ -235,6 +280,8 @@ Each step should leave the plugin working, with tests. Run
   Keep the migration until it has run on that user's devices, then remove
   it along with the `cloud-` prefix.
 - **Version:** 0.10.0.
+- **Delete** removes the download, not the book: it keeps the book's
+  collections and history (see "Delete keeps collections and history").
 - The UUID-as-file-name alternative was considered and dropped: files would
   be unreadable outside Athenæum, and too many KOReader views show file
   names.
