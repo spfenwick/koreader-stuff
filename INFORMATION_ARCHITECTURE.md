@@ -146,6 +146,18 @@ book switcher show them meanwhile. Once they're in `ReadHistory`,
 `mergeHistory` skips them. It never lists a book Concordance already put
 in, so an entry removed from the history doesn't come back through it.
 
+**Changed 2026-11-25 (Athenæum 0.10.0): one path per book.** A cloud
+entry used to be at `<folder>/cloud-<id>.epub` and became the file's path
+when the book was downloaded, so every download and delete swapped paths
+in the history, collections and ZenOS's views. Now a book's path is where
+its file is or would be ("Author - Title.epub", kept in the catalog DB as
+`file_stem` / `file_ext`): the history entry stays put and only whether it
+opens a file changes. Paths change only in rare cases, all through
+`Library.booksMoved`. Identity is still the catalog ID and Concordance's
+UUID/MD5 matching, never the path. Collections still lose a deleted book
+(KOReader's collections can't hold a path without a file). See
+STABLE_PATHS_PLAN.md.
+
 ### 5. Athenæum gives ZenOS less than the book-source contract allows
 
 Its `status()` returns only `{status}`.

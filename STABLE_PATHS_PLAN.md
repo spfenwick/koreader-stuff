@@ -1,6 +1,6 @@
 # Plan: one path per book (Athenæum)
 
-Written 2026-11-25. Steps 1-4 done 2026-11-25.
+Written 2026-11-25. Steps 1-5 done 2026-11-25; step 6 (the Kobo) to do.
 
 - Steps 1-3: cloud entries are at their books' names, downloads go there,
   and 0.9's `cloud-<id>` entries are migrated at every load (no
@@ -19,6 +19,11 @@ Written 2026-11-25. Steps 1-4 done 2026-11-25.
   delete; a download at another path relies on the load's `booksMoved`.
   Collections on delete: deferred (see "KOReader's collections only hold
   files").
+- Step 5: doc comments (`virtual.lua`, `history.lua`,
+  `zenos_source.lua`), INFORMATION_ARCHITECTURE.md (#4) and ZENOS_PRS.md
+  (#4: `moved()` now only for rare path changes; the listing half matters
+  more). Little dead code was left after step 4; `book.filename` stays (it's
+  the listing's file name).
 
 ## The problem
 

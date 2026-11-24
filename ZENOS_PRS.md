@@ -147,11 +147,26 @@ Things to watch:
 (856d8434; no PR branch yet): `BookSources.moved(old, new)` swaps the path
 in ZenOS's open views (group pages and their book lists, To Be Read, other
 open lists) and redraws the file browser when it shows either folder.
-Athenæum calls it on download and on delete (back to the cloud entry) and
-assumes a ZenOS with it; its `replaceInViews`, `swapInItem` and
+Athenæum assumes a ZenOS with it; its `replaceInViews`, `swapInItem` and
 `ZenSource.downloaded` are gone. Still to do: updating ZenOS's cached
 listings so a download doesn't rebuild the whole folder. Time a download's
 listing before and after in the emulator.
+
+**Update (2026-11-25, Athenæum 0.10.0, STABLE_PATHS_PLAN.md):** a book's
+path is now where its file is or would be ("Author - Title.epub"), so a
+download or a delete keeps the path. Athenæum tells ZenOS `changed({ path
+})` for those, not `moved()`, and calls `moved()` only when a book's path
+really changes: a file renamed outside KOReader, one of two copies
+deleted, a file taking a cloud book's name, and the one-off move from
+0.9's `cloud-<id>` paths. Both are still worth having:
+- `moved()` for those rare cases (and for other sources that move files);
+  it no longer needs to be fast.
+- The listing half matters more now. A download still rebuilds the whole
+  listing (the folder signature and `listingKey` change as before), but
+  the cached entry needn't be swapped for another path: updating the one
+  entry in place (its metadata, cover and badge) and re-keying the cache
+  is enough. Check whether `changed({ path })` can do it, rather than a
+  new call.
 
 **Plugins lose:** `replaceInViews` and `swapInItem` in
 `athenaeum/zenos_source.lua`, which edit ZenOS's private fields

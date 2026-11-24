@@ -13,7 +13,8 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   ZenOS draws, via badge(): ZenOS paints the icon (athenaeum/badge.lua)
   covers and metadata everywhere, via bookInfo(), answered inside ZenOS's
   own cover caches (changed(paths) drops their entries when a cover
-  arrives)
+  arrives, or a book is downloaded or deleted: its path stays the same,
+  what's behind it doesn't)
   cached folder listings, via listingKey(): a listing is rebuilt when the
   cloud books in it change, and one saved before the plugin was removed
   isn't reused
@@ -202,9 +203,12 @@ local function bookSources()
     return type(BookSources) == "table" and BookSources or nil
 end
 
---- A book's path changed (a cloud book downloaded to a file, or a deleted
--- file back to its cloud entry): ZenOS's open views list it at new_path,
--- and drops what it cached for both paths (Home refreshes).
+--- A book's path changed: ZenOS's open views list it at new_path, and
+-- drop what they cached for both paths (Home refreshes). Rare: a book's
+-- path is where its file is or would be, so a download or a delete keeps
+-- it (changed() then). Library.booksMoved calls this: a file renamed
+-- outside KOReader, one of two copies deleted, a file taking a cloud
+-- book's name, the move from 0.9's cloud-<id> paths.
 function ZenSource.moved(old_path, new_path)
     books_cache = nil
     local BookSources = bookSources()

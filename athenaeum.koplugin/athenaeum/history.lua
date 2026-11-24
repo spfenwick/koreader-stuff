@@ -3,7 +3,7 @@ Cloud books in KOReader's reading history.
 
 Concordance puts books read on other devices into the history. For a book
 that isn't on this device it asks Library.pathForUuids, which gives the
-downloaded file or the book's cloud entry (its virtual path). This module
+downloaded file or the book's cloud entry (where its file would be). This module
 keeps those entries working:
 
   ReadHistory:_read         cloud entries aren't greyed out like missing files
@@ -94,11 +94,6 @@ local function idOf(path)
     return e and e.id or History.legacyId(path)
 end
 
-local function cloudPathFor(id)
-    local book = Virtual.by_id[id]
-    return book and book.path
-end
-
 -- An entry's name, as KOReader gives it: the file's (a cloud entry's path
 -- is its book's file name).
 local function nameOf(file)
@@ -130,8 +125,8 @@ function History.pathForUuids(uuids)
         local id = type(u) == "string" and ids[u:lower()]
         if id then
             if matched[id] then return matched[id] end
-            local path = cloudPathFor(id)
-            if path and Virtual.by_path[path] then return path end
+            local book = Virtual.by_id[id]
+            if book then return book.path end
         end
     end
     return nil

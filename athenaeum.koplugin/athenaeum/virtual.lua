@@ -3,6 +3,13 @@ Virtual entries: books in the online library that aren't on the device are
 listed in the library folder as files that don't exist. Their metadata and
 covers come from the catalog cache instead of the file.
 
+A cloud book's path is where its file would be: the file name the catalog
+gave it ("Author - Title.epub", names.lua, Library.nameBooks), which a
+download uses. So downloading or deleting a book changes what's at its
+path, never the path (STABLE_PATHS_PLAN.md). A real file at that name in
+the listing (a book the matcher didn't recognise) hides the cloud entry
+until the next load names the book again.
+
 The plugin runs under ZenOS only: the cloud books are a ZenOS book source
 (zenos_source.lua), so ZenOS answers CoverBrowser's getBookInfo and
 getDocProps for them (from Virtual.bookInfoFor) and keys its cached
