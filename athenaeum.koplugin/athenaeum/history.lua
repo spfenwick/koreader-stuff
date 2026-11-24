@@ -20,12 +20,15 @@ keeps those entries working:
                             the book's details (long-press adds "Remove
                             from history")
 
-Cloud entries are named like the book in the library folder ("<title>.epub")
-whenever the catalog has it; their paths only carry the catalog ID.
+A book's entry is at its path whether it's downloaded or not: where its
+file is, or would be ("Author - Title.epub", STABLE_PATHS_PLAN.md). So a
+download or a delete changes only whether the entry opens a file.
 
-After each catalog load (History.reconcile): a downloaded book's entry
-becomes its file, a deleted book's entry its cloud entry, and entries for
-books gone from the catalog are greyed out.
+After each catalog load (History.reconcile): entries with a file open it,
+the catalog's cloud entries are shown (not greyed out), and entries for
+books gone from the catalog are greyed out. Deleting a downloaded book
+keeps its entry (History.keep, History.afterDelete): KOReader greys it
+out, or removes it.
 ]]
 
 local logger = require("logger")
@@ -40,7 +43,6 @@ local History = {
     matched = nil,      -- function() -> { [id] = path }
     save = nil,         -- function(key, value)
     saved = nil,        -- function() -> saved cloud entries
-    deleted = {},       -- path -> id: downloaded books being deleted
 }
 
 -- Cloud entries' paths before 0.10.0: "<folder>/cloud-<id>.epub". Only
@@ -97,18 +99,10 @@ local function cloudPathFor(id)
     return book and book.path
 end
 
--- An entry's name: a cloud book's as in the library folder, else the file's.
+-- An entry's name, as KOReader gives it: the file's (a cloud entry's path
+-- is its book's file name).
 local function nameOf(file)
-    local book = Virtual.by_path[file]
-    return book and book.filename or (file:gsub(".*/", ""))
-end
-
--- Names the catalog's cloud entries (KOReader saves only paths and times,
--- so this is redone after every read).
-local function label(rh)
-    for _i, v in ipairs(rh.hist or {}) do
-        if Virtual.by_path[v.file] then v.text = nameOf(v.file) end
-    end
+    return (file:gsub(".*/", ""))
 end
 
 -- Catalog IDs by lowercase UUID, rebuilt when the catalog changes.
@@ -259,7 +253,7 @@ function History.install(opts)
     local ReadHistory = require("readhistory")
     Guard.hook("history", ReadHistory, "_read", function(orig, self, ...)
         local r = orig(self, ...)
-        if r then undim(self); label(self) end
+        if r then undim(self) end
         return r
     end, "ReadHistory:_read")
     Guard.hook("history", ReadHistory, "clearMissing", function(_orig, self)
@@ -289,7 +283,6 @@ function History.install(opts)
     end
     Guard.call("history", function()
         undim(ReadHistory)
-        label(ReadHistory)
         History.restore(ReadHistory)
     end)
 end
@@ -349,83 +342,38 @@ function History.moved(moves)
     return changed
 end
 
--- After a catalog load ------------------------------------------------------------
+-- After a catalog load, and after a delete ---------------------------------------
 
---- A downloaded book is about to be deleted: its entry becomes its cloud
--- entry again (see reconcile).
-function History.deleting(path, id)
-    if type(path) == "string" and type(id) == "string" then History.deleted[path] = id end
-end
-
---- Brings the history in line with the catalog just loaded.
-function History.reconcile()
-    if not History.installed or not Guard.ok("history") then return end
-    local ReadHistory = require("readhistory")
-    local rh = ReadHistory
-    local matched = History.matched and History.matched() or {}
-    local changed = false
-
-    -- Deleted books: back to their cloud entries (at the same path, unless
-    -- the book's name changed meanwhile).
-    for path, id in pairs(History.deleted) do
-        local i = rh:getIndexByFile(path)
-        local cloud = cloudPathFor(id)
-        if i and cloud == path and not isFile(path) then
-            local e = rh.hist[i]
+--- Brings the history in line with the files and the catalog: an entry
+-- with a file opens it (a book downloaded to its cloud entry's path); a
+-- catalog book's cloud entry is shown and doesn't open (a book deleted,
+-- greyed out by KOReader); an entry for a book gone from the catalog is
+-- greyed out. changed: the history was changed already (save it).
+local function reconcile(changed)
+    local rh = require("readhistory")
+    for i, e in ipairs(rh.hist) do
+        local cloud = Virtual.by_path[e.file] ~= nil
+        if cloud then
             if e.dim or e.select_enabled then
                 rh.hist[i] = copy(e)
                 rh.hist[i].dim, rh.hist[i].select_enabled = false, false
                 changed = true
             end
-        elseif i and cloud and Virtual.by_path[cloud] and not isFile(path) then
-            if rh:getIndexByFile(cloud) then
-                table.remove(rh.hist, i)
-            else
-                local e = copy(rh.hist[i])
-                e.file, e.text = cloud, nameOf(cloud)
-                e.dim, e.select_enabled = false, false
-                rh.hist[i] = e
-            end
-            changed = true
-        end
-    end
-    History.deleted = {}
-
-    local downloaded = {}
-    for i, e in ipairs(rh.hist) do
-        if not e.select_enabled and not History.isCloudPath(e.file) and isFile(e.file) then
-            -- Downloaded to its cloud entry's path: the entry opens it now.
+        elseif not e.select_enabled and isFile(e.file) then
             rh.hist[i] = copy(e)
             rh.hist[i].dim, rh.hist[i].select_enabled = false, true
             changed = true
         elseif History.isCloudPath(e.file) then
-            local path = matched[idOf(e.file)]
-            if path and isFile(path) then
-                downloaded[#downloaded + 1] = { cloud = e.file, path = path }
-            else
-                -- Gone from the catalog: greyed out, like a missing file.
-                local gone = Virtual.folder ~= nil and not Virtual.by_path[e.file]
-                if e.dim ~= gone then
-                    e.dim = gone
-                    changed = true
-                end
+            -- Not the catalog's: gone from it, greyed out like a missing
+            -- file (once the catalog is known). (A book on the device under
+            -- another name has its entry moved there by Library.booksMoved.)
+            local matched = History.matched and History.matched() or {}
+            local gone = Virtual.folder ~= nil and not matched[idOf(e.file) or false]
+            if e.dim ~= gone then
+                e.dim = gone
+                changed = true
             end
         end
-    end
-    -- The catalog may name books it didn't before (or differently).
-    label(rh)
-    -- Downloaded: the entry is the file (the newer of the two, if both).
-    for _i, d in ipairs(downloaded) do
-        local i = rh:getIndexByFile(d.cloud)
-        local time = rh.hist[i].time or 0
-        table.remove(rh.hist, i)
-        local j = rh:getIndexByFile(d.path)
-        if j then
-            time = math.max(time, rh.hist[j].time or 0)
-            table.remove(rh.hist, j)
-        end
-        insertAt(rh, d.path, time)
-        changed = true
     end
     if changed then
         rh:_flush()
@@ -438,6 +386,42 @@ function History.reconcile()
         -- entries as they are through the re-read.
         rh:reload(true)
     end
+end
+
+function History.reconcile()
+    if not History.installed or not Guard.ok("history") then return end
+    reconcile(false)
+end
+
+--- Before KOReader deletes catalog books' files: their history entries'
+-- times, { [path] = time }, for afterDelete. (KOReader greys a deleted
+-- file's entry out, or removes it with "auto-remove deleted files" on.)
+function History.keep(paths)
+    local kept = {}
+    if not History.installed or not Guard.ok("history") then return kept end
+    local rh = require("readhistory")
+    for _i, path in ipairs(paths or {}) do
+        local i = rh:getIndexByFile(path)
+        if i then kept[path] = rh.hist[i].time end
+    end
+    return kept
+end
+
+--- After the delete (the books are cloud books again, Library.unmatch):
+-- the entries KOReader removed are put back at their times, and the ones
+-- it greyed out are cloud entries again. Files still there (not deleted
+-- after all) keep their entries as they are.
+function History.afterDelete(kept)
+    if not History.installed or not Guard.ok("history") or next(kept or {}) == nil then return end
+    local rh = require("readhistory")
+    local changed = false
+    for path, time in pairs(kept) do
+        if not isFile(path) and not rh:getIndexByFile(path) then
+            insertAt(rh, path, time)
+            changed = true
+        end
+    end
+    reconcile(changed)
 end
 
 return History

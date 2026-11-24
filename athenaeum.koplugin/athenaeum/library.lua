@@ -424,36 +424,17 @@ local function reloadSoon(after_delete, paths)
     end)
 end
 
--- The deleted files and their books' cloud entries ({ path = id } from
--- unmatch()), for Home to forget.
-local function homePaths(changed)
-    local out = {}
-    for path, id in pairs(changed) do
-        out[#out + 1] = path
-        out[#out + 1] = cloudPathFor(id)
-    end
-    return out
-end
-
--- Open ZenOS views list the deleted files' cloud entries instead. Done
--- before the caller redraws: ZenOS then takes a deleted file out of its
--- open Authors/Series/... lists, which would leave its book out.
-local function showCloudInViews(changed)
-    local same = {}
-    for path, id in pairs(changed) do
-        local cloud = cloudPathFor(id)
-        if cloud == path then
-            -- The usual case: the cloud entry is where the file was.
-            same[#same + 1] = path
-        elseif cloud then
-            local ok, err = pcall(ZenSource.moved, path, cloud)
-            if not ok then logger.warn("Athenaeum: telling ZenOS about a delete:", err) end
-        end
-    end
-    if #same > 0 then
-        local ok, err = pcall(ZenSource.changed, same)
-        if not ok then logger.warn("Athenaeum: telling ZenOS about a delete:", err) end
-    end
+-- After a delete: ZenOS's open views (Home, Authors, Series, ...) show the
+-- deleted files' books as cloud books, at the same paths. Told before the
+-- caller redraws: ZenOS takes a deleted file out of its open group views
+-- otherwise, until it next rebuilds them.
+local function tellDeleted(changed)
+    local paths = {}
+    for path in pairs(changed) do paths[#paths + 1] = path end
+    if #paths == 0 then return paths end
+    local ok, err = pcall(ZenSource.changed, paths)
+    if not ok then logger.warn("Athenaeum: telling ZenOS about a delete:", err) end
+    return paths
 end
 
 --- The catalog ID of a downloaded book's file, or nil.
@@ -698,17 +679,18 @@ function Library.installDeleteHooks()
     local FileManager = require("apps/filemanager/filemanager")
     -- The caller redraws the listing after deleteFile() returns: the book's
     -- cloud entry is back by then.
+    -- The book keeps its history entry: it's a cloud entry again at the
+    -- same path (History.keep, afterDelete), before the caller redraws, so a
+    -- "last read" sort keeps the book in its place.
     Guard.hook("library", FileManager, "deleteFile", function(orig, self, file, ...)
         local path = libraryPath(file)
-        if path then History.deleting(path, idForPath(path)) end
+        local kept = path and idForPath(path) and History.keep({ path }) or {}
         local ok = orig(self, file, ...)
         if ok and path and not Virtual.isVirtual(path) then
             local changed = Library.unmatch({ path })
-            -- The history entry moves to the cloud entry before the caller
-            -- redraws, so a "last read" sort keeps the book in its place.
-            Guard.call("history", History.reconcile)
-            showCloudInViews(changed)
-            reloadSoon(true, next(changed) and homePaths(changed) or { path })
+            Guard.call("history", History.afterDelete, kept)
+            tellDeleted(changed)
+            reloadSoon(true, { path })
         end
         return ok
     end, "FileManager:deleteFile")
@@ -717,11 +699,13 @@ function Library.installDeleteHooks()
     Guard.hook("library", FileManager, "deleteSelectedFiles", function(orig, self, ...)
         local paths = {}
         for path in pairs(self.selected_files or {}) do
-            if inLibrary(path) then
-                paths[#paths + 1] = path
-                History.deleting(path, idForPath(path))
-            end
+            if inLibrary(path) then paths[#paths + 1] = path end
         end
+        local books = {}
+        for _i, path in ipairs(paths) do
+            if idForPath(path) then books[#books + 1] = path end
+        end
+        local kept = History.keep(books)
         local changed = #paths > 0 and Library.unmatch(paths) or {}
         local r = orig(self, ...)
         Library.restoreMatched(changed)
@@ -730,8 +714,8 @@ function Library.installDeleteHooks()
             for path, id in pairs(changed) do
                 if not Library.matched[id] then gone[path] = id end
             end
-            showCloudInViews(gone)
-            reloadSoon(true, homePaths(gone))
+            Guard.call("history", History.afterDelete, kept)
+            reloadSoon(true, tellDeleted(gone))
         end
         return r
     end, "FileManager:deleteSelectedFiles")
@@ -1372,15 +1356,11 @@ function Library.downloaded(book, result, opts)
             break
         end
     end
-    if cloud_path then
+    if cloud_path == result.path then
         -- Other views listing the book (Home, Authors, Series, ...) show the
-        -- file: at the cloud entry's path, usually.
-        local ok, err
-        if cloud_path == result.path then
-            ok, err = pcall(ZenSource.changed, { cloud_path })
-        else
-            ok, err = pcall(ZenSource.moved, cloud_path, result.path)
-        end
+        -- file. (At another path, when a file had the book's name: the load
+        -- gave the book the file's name, and booksMoved told them.)
+        local ok, err = pcall(ZenSource.changed, { cloud_path })
         if not ok then logger.warn("Athenaeum: redrawing views after a download:", err) end
     end
     -- Concordance reads the new file's identity before it's first opened, so

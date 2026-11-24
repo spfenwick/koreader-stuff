@@ -1958,6 +1958,81 @@ do
     check(e and not e.dim, "shown as a cloud book")
     eq(e and e.time, 100, "at its read time")
 
+    -- Every way KOReader deletes: the entry stays, as a cloud entry at its
+    -- time. (KOReader greys it out, or removes it with auto-remove on.)
+    local function saved_has(path)
+        for _i, s in ipairs(Library.settings().history_cloud or {}) do
+            if s.file == path and s.time == 100 then return true end
+        end
+        return false
+    end
+    local selecting = { onToggleSelectMode = function() end }
+    local ways = {
+        { "one file", false, function() return FileManager.deleteFile(FileManager, up, true) end },
+        { "one file, auto-remove on", true, function() return FileManager.deleteFile(FileManager, up, true) end },
+        { "selected files", false, function()
+            selecting.selected_files = { [up] = true }
+            FileManager.deleteSelectedFiles(selecting)
+            return true
+        end },
+        { "selected files, auto-remove on", true, function()
+            selecting.selected_files = { [up] = true }
+            FileManager.deleteSelectedFiles(selecting)
+            return true
+        end },
+    }
+    for _i, way in ipairs(ways) do
+        local name, autoremove, delete = way[1], way[2], way[3]
+        f = io.open(up, "w"); f:write("y"); f:close()
+        Library.load()
+        e = ReadHistory.hist[ReadHistory:getIndexByFile(up) or 0]
+        check(e and e.select_enabled and e.time == 100, name .. ": downloaded, the entry opens it")
+        G_reader_settings:saveSetting("autoremove_deleted_items_from_history", autoremove)
+        check(delete(), name .. ": deleted")
+        check(not lfs.attributes(up), name .. ": no file")
+        e = ReadHistory.hist[ReadHistory:getIndexByFile(up) or 0]
+        check(e and not e.dim and not e.select_enabled and e.time == 100,
+            name .. ": kept as a cloud entry at its time")
+        eq(ReadHistory:getIndexByFile(down), 1, name .. ": in its place")
+        check(saved_has(up), name .. ": remembered as a cloud entry (put back at startup)")
+        ReadHistory:reload(true)
+        e = ReadHistory.hist[ReadHistory:getIndexByFile(up) or 0]
+        check(e and not e.dim and not e.select_enabled, name .. ": the same read back")
+        G_reader_settings:delSetting("autoremove_deleted_items_from_history")
+    end
+
+    -- A file that isn't a catalog book's: as KOReader does.
+    local stranger = folder .. "/stranger.epub"
+    for _i, autoremove in ipairs({ false, true }) do
+        f = io.open(stranger, "w"); f:write("z"); f:close()
+        table.insert(ReadHistory.hist, { time = 5, file = stranger, text = "stranger.epub",
+            dim = false, select_enabled = true })
+        ReadHistory:_flush()
+        Library.load()
+        G_reader_settings:saveSetting("autoremove_deleted_items_from_history", autoremove)
+        check(FileManager.deleteFile(FileManager, stranger, true), "a file not in the catalog: deleted")
+        e = ReadHistory.hist[ReadHistory:getIndexByFile(stranger) or 0]
+        if autoremove then
+            check(not e, "not in the catalog, auto-remove on: removed")
+        else
+            check(e and e.dim, "not in the catalog: greyed out")
+            ReadHistory:removeItemByPath(stranger)
+        end
+        G_reader_settings:delSetting("autoremove_deleted_items_from_history")
+    end
+
+    -- Deleted outside KOReader (over USB): KOReader greys the entry out at
+    -- startup; once the catalog is loaded it's a cloud entry again.
+    f = io.open(up, "w"); f:write("y"); f:close()
+    Library.load()
+    os.remove(up)
+    e = ReadHistory.hist[ReadHistory:getIndexByFile(up) or 0]
+    e.dim, e.select_enabled = true, false
+    Library.load()
+    e = ReadHistory.hist[ReadHistory:getIndexByFile(up) or 0]
+    check(e and not e.dim and not e.select_enabled and e.time == 100,
+        "deleted outside KOReader: a cloud entry after the load")
+
     -- Gone from the catalog: greyed out.
     store = Store.open(Library.dbPath(server), false)
     store:upsertBooks({ { uuid = U2, title = "Down", authors = { "Ann Author" } } }, 2)

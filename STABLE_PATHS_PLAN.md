@@ -1,18 +1,24 @@
 # Plan: one path per book (Athenæum)
 
-Written 2026-11-25. Steps 1-3 done 2026-11-25 (uncommitted; unit tests,
-plus an emulator run under ZenOS `custom`: `tests/athenaeum/e2e_stable_paths.py`,
-15 checks, including risk 1: a book deleted from an open Authors view stays
-listed as a cloud book). The migration runs at every load (no
-`paths_version` flag: one set by a load with an empty history would skip
-entries that turn up later). cloud entries are at their books' names, downloads go there, and
-0.9's `cloud-<id>` entries are migrated. Done in step 3 ahead of step 4,
-since step 3 needs them to keep working: downloads use the stored name
-(`Library.downloadName`), the saved cloud history carries IDs,
-`History.reconcile` handles a delete at the same path, and ZenOS is told
-`changed` (not `moved`) on a same-path download or delete. Still to do in
-step 4: removing the path-swap code, and the history entry KOReader removes
-on delete when "auto-remove deleted files" is on.
+Written 2026-11-25. Steps 1-4 done 2026-11-25.
+
+- Steps 1-3: cloud entries are at their books' names, downloads go there,
+  and 0.9's `cloud-<id>` entries are migrated at every load (no
+  `paths_version` flag: one set by a load with an empty history would skip
+  entries that turn up later). Checked in the emulator under ZenOS
+  `custom` (`tests/athenaeum/e2e_stable_paths.py`, 15 checks, including
+  risk 1: a book deleted from an open Authors view stays listed as a cloud
+  book), and against a copy of the real library (2,160 books, 100 of 101
+  old entries moved; the other's book is gone from the catalog).
+- Step 4: no path swaps. `History.reconcile` only sets whether entries open
+  a file, shows the catalog's cloud entries and greys out books gone from
+  the catalog. A delete keeps the history entry (`History.keep` before
+  KOReader's delete, `History.afterDelete` after), for one file and
+  selected files, auto-remove on and off; a file deleted over USB is a
+  cloud entry again after the next load. ZenOS is told `changed` after a
+  delete; a download at another path relies on the load's `booksMoved`.
+  Collections on delete: deferred (see "KOReader's collections only hold
+  files").
 
 ## The problem
 
