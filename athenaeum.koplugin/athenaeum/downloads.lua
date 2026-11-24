@@ -66,19 +66,39 @@ function Downloads.choices(formats)
     return out
 end
 
---- "Author, Author - Title.ext", safe for the folder, not overwriting a file.
-function Downloads.fileName(book, ext, folder)
+--- What follows a file name's stem for a format's extension ("epub",
+-- "pdf"...): KOReader opens a KEPUB as "….kepub.epub" (".kepub" alone it
+-- doesn't know).
+function Downloads.suffix(ext)
+    if ext == "kepub" then return "kepub.epub" end
+    return ext
+end
+
+--- The suffix of the format a download picks by default from these
+-- formats ("epub" when none is known).
+function Downloads.defaultSuffix(formats)
+    local best = Downloads.choices(formats)[1]
+    return Downloads.suffix(best and best.ext or "epub")
+end
+
+--- "Author, Author - Title" for a book: a file name without its
+-- extension, not checked against other files. As KOReader's OPDS plugin
+-- names downloads, with the characters FAT can't store always replaced.
+-- (So getSafeFilename needn't look up the folder's filesystem, which reads
+-- the mount table each time.)
+function Downloads.baseStem(book)
     local name = book.title or book.id
     if book.authors and #book.authors > 0 then
         name = table.concat(book.authors, ", ") .. " - " .. name
     end
-    -- As KOReader's OPDS plugin: replace characters FAT can't store, always.
-    -- KOReader opens a KEPUB as "….kepub.epub"; ".kepub" alone it doesn't know.
-    if ext == "kepub" then ext = "kepub.epub" end
-    name = util.getSafeFilename(util.replaceAllInvalidChars(name) .. "." .. ext, folder)
-    local base, suffix = name:match("^(.*)(%.kepub%.epub)$")
-    if not base then base, suffix = name:match("^(.*)(%.[^.]+)$") end
-    local candidate, n = name, 1
+    local safe = util.getSafeFilename(util.replaceAllInvalidChars(name) .. ".epub")
+    return (safe:gsub("%.epub$", ""))
+end
+
+--- "Author, Author - Title.ext", not overwriting a file.
+function Downloads.fileName(book, ext, folder)
+    local base, suffix = Downloads.baseStem(book), "." .. Downloads.suffix(ext)
+    local candidate, n = base .. suffix, 1
     while lfs.attributes(folder .. "/" .. candidate) do
         n = n + 1
         candidate = string.format("%s (%d)%s", base, n, suffix)

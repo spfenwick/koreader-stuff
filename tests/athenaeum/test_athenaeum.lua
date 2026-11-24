@@ -692,6 +692,112 @@ do
     eq(store8:localFiles()["/k.epub"].md5, "abc", "7 -> 8: MD5 column added")
     eq(store8:count(), 1, "7 -> 8 keeps books")
     store8:close()
+
+    -- 8 -> 9 adds books' file names, given by the next load.
+    local conn8 = SQ3.open(path)
+    conn8:exec([[DROP TABLE books;
+        CREATE TABLE books (uuid TEXT PRIMARY KEY, calibre_id INTEGER, title TEXT, authors TEXT,
+            tags TEXT, language TEXT, publisher TEXT, published INTEGER, added INTEGER, pages INTEGER,
+            summary TEXT, formats TEXT, cover TEXT, size INTEGER, series TEXT, series_index REAL,
+            seen INTEGER, series_seen INTEGER, cover_file TEXT, cover_w INTEGER, cover_h INTEGER,
+            cover_failed INTEGER, match_title TEXT, match_author TEXT, cover_stale INTEGER,
+            cover_etag TEXT, cover_modified TEXT, cover_checked INTEGER);
+        INSERT INTO books (uuid, title) VALUES ('old-1', 'Kept');
+        UPDATE books SET formats = 'application/pdf' || char(9) || '5' || char(9) || '/d/1/pdf/';
+        PRAGMA user_version=8;]])
+    conn8:close()
+    local store9 = Store.open(path, false)
+    eq(store9:count(), 1, "8 -> 9 keeps books")
+    eq(store9:listing()[1].file_stem, nil, "8 -> 9: no file name yet")
+    local unnamed = store9:unnamedFormats()
+    eq(unnamed["old-1"] and unnamed["old-1"][1].type, "application/pdf", "unnamed books with their formats")
+    store9:setFileNames({ { id = "old-1", stem = "A - Kept", ext = "pdf" } })
+    local named = store9:listing()[1]
+    eq(named.file_stem, "A - Kept", "file stem stored")
+    eq(named.file_ext, "pdf", "file suffix stored")
+    eq(next(store9:unnamedFormats()), nil, "no unnamed books left")
+    -- A new title from the catalog keeps the name.
+    store9:upsertBooks({ { uuid = "old-1", title = "Renamed", authors = { "A" } } }, 2)
+    eq(store9:listing()[1].file_stem, "A - Kept", "title change keeps the file name")
+    store9:close()
+end
+
+-- File names -------------------------------------------------------------------------
+
+do
+    local Names = require("athenaeum/names")
+    local function split(name) return table.concat({ Names.split(name) }, "|") end
+    eq(split("A - T.epub"), "A - T|epub", "split: epub")
+    eq(split("A - T.kepub.epub"), "A - T|kepub.epub", "split: kepub")
+    eq(split("A - T.KEPUB.EPUB"), "A - T|KEPUB.EPUB", "split: suffix case kept")
+    eq(split("A. B - T.pdf"), "A. B - T|pdf", "split: dots in the stem")
+    eq(split("noext"), "noext|", "split: no suffix")
+    eq(Names.join("A - T", "pdf"), "A - T.pdf", "join")
+
+    local function base(b) return Downloads.baseStem(b) end
+    local function suffix(b) return b.pdf_only and "pdf" or "epub" end
+    local opts = { base = base, suffix = suffix }
+    local books = {
+        { id = "a", title = "Same", authors = { "Ann" } },
+        { id = "b", title = "Same", authors = { "Ann" } },             -- same author and title
+        { id = "c", title = "Taken", authors = { "Ann" } },            -- an unrelated file has the name
+        { id = "d", title = "Here", authors = { "Bo" } },              -- on the device as a PDF
+        { id = "e", title = "Paper", authors = { "Cy" }, pdf_only = true },
+        { id = "f", title = "Case", authors = { "Di" } },              -- a file differs only in case
+    }
+    local matched = { d = "/lib/Bo - Here.pdf" }
+    local files = { "Ann - Taken.epub", "Bo - Here.pdf", "di - case.EPUB" }
+    local changes = Names.assign(books, matched, files, opts)
+    eq(#changes, 6, "every book named")
+    eq(Names.join(books[1].file_stem, books[1].file_ext), "Ann - Same.epub", "named like a download")
+    eq(books[2].file_stem, "Ann - Same (2)", "same name: numbered")
+    eq(books[3].file_stem, "Ann - Taken (2)", "a file's name: numbered")
+    eq(Names.join(books[4].file_stem, books[4].file_ext), "Bo - Here.pdf", "on the device: the file's name")
+    eq(Names.join(books[5].file_stem, books[5].file_ext), "Cy - Paper.pdf", "PDF-only: pdf")
+    eq(books[6].file_stem, "Di - Case (2)", "clashes ignore case (FAT)")
+    eq(changes[1].old_stem, nil, "new name: no old one")
+
+    -- Loaded again: nothing changes.
+    eq(#Names.assign(books, matched, files, opts), 0, "names kept")
+    -- A new title keeps the name.
+    books[1].title = "Different"
+    eq(#Names.assign(books, matched, files, opts), 0, "title change keeps the name")
+    eq(books[1].file_stem, "Ann - Same", "old stem kept")
+    -- A stored suffix is kept (it follows the format downloaded).
+    books[5].file_ext = "epub"
+    eq(#Names.assign(books, matched, files, opts), 0, "stored suffix kept")
+    books[5].file_ext = "pdf"
+
+    -- Downloaded under another name (renamed, or from before names): the
+    -- book takes the file's name; its old stem is free again.
+    local moved = Names.assign(books, { d = "/lib/Bo - Here.pdf", a = "/lib/Mine.kepub.epub" },
+        { "Ann - Taken.epub", "Bo - Here.pdf", "di - case.EPUB", "Mine.kepub.epub" }, opts)
+    eq(#moved, 1, "one book renamed")
+    eq(moved[1].id, "a", "the downloaded book")
+    eq(moved[1].old_stem, "Ann - Same", "old stem reported")
+    eq(Names.join(books[1].file_stem, books[1].file_ext), "Mine.kepub.epub", "file's name taken")
+
+    -- A file turns up with a cloud book's name: the book is renamed.
+    local bumped = Names.assign(books, { d = "/lib/Bo - Here.pdf", a = "/lib/Mine.kepub.epub" },
+        { "Ann - Taken.epub", "Bo - Here.pdf", "di - case.EPUB", "Mine.kepub.epub", "Cy - Paper.epub" }, opts)
+    eq(#bumped, 1, "one book bumped")
+    eq(Names.join(books[5].file_stem, books[5].file_ext), "Cy - Paper (2).pdf", "bumped, suffix kept")
+
+    -- Two books stored with the same stem (an older catalog): the first keeps it.
+    local twins = { { id = "x", file_stem = "Z", file_ext = "epub" }, { id = "y", title = "Z", file_stem = "Z", file_ext = "epub" } }
+    Names.assign(twins, {}, {}, opts)
+    eq(twins[1].file_stem, "Z", "first keeps a shared stem")
+    eq(twins[2].file_stem, "Z (2)", "second renamed")
+
+    -- Matcher.match reports the book files it saw.
+    local nf = TMP .. "/names"
+    rmrf(nf); mkdir(nf)
+    for _i, name in ipairs({ "A - T.epub", "notes.txt.bak", "B.pdf" }) do
+        local f = io.open(nf .. "/" .. name, "w"); f:write("x"); f:close()
+    end
+    local names = select(5, Matcher.match(nf, {}, {}))
+    table.sort(names)
+    eq(table.concat(names, "|"), "A - T.epub|B.pdf", "book files' names")
 end
 
 -- Covers ------------------------------------------------------------------------------
@@ -1061,6 +1167,19 @@ do
     local kf = io.open(folder .. "/K.kepub.epub", "w"); kf:write("x"); kf:close()
     eq(Downloads.fileName({ id = "x", title = "K" }, "kepub", folder), "K (2).kepub.epub", "second kepub name")
     os.remove(folder .. "/K.kepub.epub")
+
+    -- Stems and suffixes for books' file names.
+    eq(Downloads.baseStem(book), "Ann One, Bob Two - Why_ A _Question__", "stem: as a download's name")
+    eq(Downloads.baseStem({ id = "x" }), "x", "stem: no title")
+    eq(Downloads.baseStem({ id = "x", title = "Dots..." }), "Dots", "stem: no trailing dots")
+    local long = Downloads.baseStem({ id = "x", title = string.rep("\u{6F22}", 200) })
+    check(#long <= 240, "stem: long titles shortened (" .. #long .. " bytes)")
+    check(require("util").fixUtf8(long, "?") == long, "stem: shortened on a character boundary")
+    eq(Downloads.suffix("kepub"), "kepub.epub", "kepub suffix")
+    eq(Downloads.defaultSuffix({ { type = "application/pdf", href = "/d/1/pdf/" } }), "pdf", "PDF-only book: pdf")
+    eq(Downloads.defaultSuffix({ { type = "application/pdf", href = "/d/1/pdf/" },
+        { type = "application/epub+zip", href = "/d/1/epub/" } }), "epub", "EPUB preferred")
+    eq(Downloads.defaultSuffix(nil), "epub", "no formats: epub")
     do
         local Http = require("athenaeum/http")
         eq(Http.auth({ username = "ann", password = "p%41ss" }), "Basic " .. require("mime").b64("ann:p%41ss"),
@@ -1546,6 +1665,14 @@ do
     Library.load()
     check(not Virtual.isVirtual(cloud_path), "downloaded book isn't a cloud book")
     eq(#Virtual.books, 1, "one cloud book before deleting")
+    do
+        local st = Store.open(Library.dbPath(server), false)
+        local names = {}
+        for _i, b in ipairs(st:listing()) do names[b.id] = b.file_stem .. "." .. b.file_ext end
+        st:close()
+        eq(names["del-1"], "Ann Author - Kept Book.epub", "load: downloaded book named after its file")
+        eq(names["del-2"], "Bo Writer - Other Book.epub", "load: cloud book named like a download")
+    end
 
     -- Status: headed sections, as Concordance's.
     do

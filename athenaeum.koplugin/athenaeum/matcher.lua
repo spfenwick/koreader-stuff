@@ -12,8 +12,10 @@ Matcher.match(folder, files, books)
                                 { [uuid] = path }, a list of local files
                                 that matched nothing, { [uuid] = true }
                                 for books matched by title (2 and 3 below),
-                                and { [path] = uuid } for further files of
-                                a book already matched (a second copy).
+                                { [path] = uuid } for further files of
+                                a book already matched (a second copy), and
+                                the names of all the book files in the
+                                folder.
 
 How a file matches a book, in order:
 1. a UUID in the EPUB's identifiers equals the book's ID (Calibre writes
@@ -140,7 +142,8 @@ function Matcher.partialMD5(path)
 end
 
 --- Returns { [uuid] = path }, { unmatched local paths }, { [uuid] = true }
--- for those matched by title, { [path] = uuid } for second copies.
+-- for those matched by title, { [path] = uuid } for second copies, and
+-- { book file names }.
 function Matcher.match(folder, files, books)
     local by_uuid, by_title_author, by_title, first_author = {}, {}, {}, {}
     for _i, b in ipairs(books) do
@@ -154,8 +157,9 @@ function Matcher.match(folder, files, books)
             if by_title[t] == nil then by_title[t] = b.id else by_title[t] = false end
         end
     end
-    local matched, unmatched, titled_ids, copies = {}, {}, {}, {}
+    local matched, unmatched, titled_ids, copies, names = {}, {}, {}, {}, {}
     eachBookFile(folder, function(path, name, _ext, attr)
+        names[#names + 1] = name
         local info = files and files[path]
         if not (info and info.mtime == attr.modification and info.size == attr.size) then
             info = Matcher.fromFilename(name)
@@ -198,7 +202,7 @@ function Matcher.match(folder, files, books)
             table.insert(unmatched, path)
         end
     end)
-    return matched, unmatched, titled_ids, copies
+    return matched, unmatched, titled_ids, copies, names
 end
 
 return Matcher

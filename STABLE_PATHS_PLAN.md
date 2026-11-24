@@ -1,6 +1,7 @@
 # Plan: one path per book (Athenæum)
 
-Written 2026-11-25. Not started.
+Written 2026-11-25. Step 1 done 2026-11-25 (uncommitted): names are given and
+stored, not used for paths yet.
 
 ## The problem
 

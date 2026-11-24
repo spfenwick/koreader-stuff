@@ -9,13 +9,15 @@ local_files  what's known about files in the library folder (see matcher),
 Lists are stored as text joined with "\n" (authors, tags), as CoverBrowser
 does. formats is "type\tsize\thref" lines. match_title and match_author
 are the title and first author normalised for matching (see matcher.lua),
-so loading doesn't redo it for every book.
+so loading doesn't redo it for every book. file_stem and file_ext are the
+book's file name in the library folder, without and with its suffix (see
+names.lua): kept when the catalog's title changes.
 ]]
 
 local SQ3 = require("lua-ljsqlite3/init")
 local logger = require("logger")
 
-local SCHEMA_VERSION = 8
+local SCHEMA_VERSION = 9
 
 local SCHEMA = [[
 CREATE TABLE IF NOT EXISTS books (
@@ -46,7 +48,9 @@ CREATE TABLE IF NOT EXISTS books (
     cover_stale INTEGER,
     cover_etag TEXT,
     cover_modified TEXT,
-    cover_checked INTEGER
+    cover_checked INTEGER,
+    file_stem TEXT,
+    file_ext TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -114,12 +118,14 @@ function Store.open(path, wal)
         -- for conditionally), and when it was last checked against the server.
         -- 7 -> 8: local files' partial MD5 (for Concordance; files without
         -- one are read again by the next scan).
+        -- 8 -> 9: each book's file name (given by the next load).
         local have = {}
         local stmt = conn:prepare("PRAGMA table_info(books);")
         for row in stmt:rows() do have[row[2]] = true end
         stmt:close()
         for _i, col in ipairs({ { "match_title", "TEXT" }, { "match_author", "TEXT" }, { "cover_stale", "INTEGER" },
-                { "cover_etag", "TEXT" }, { "cover_modified", "TEXT" }, { "cover_checked", "INTEGER" } }) do
+                { "cover_etag", "TEXT" }, { "cover_modified", "TEXT" }, { "cover_checked", "INTEGER" },
+                { "file_stem", "TEXT" }, { "file_ext", "TEXT" } }) do
             if not have[col[1]] then conn:exec("ALTER TABLE books ADD COLUMN " .. col[1] .. " " .. col[2] .. ";") end
         end
         have = {}
@@ -282,7 +288,7 @@ function Store:listing()
     local stmt = self.conn:prepare([[SELECT uuid, title, authors, tags, language,
         CAST(added AS REAL), CAST(size AS REAL), series, series_index, CAST(pages AS REAL),
         cover, cover_file, CAST(cover_w AS REAL), CAST(cover_h AS REAL), CAST(cover_failed AS REAL),
-        match_title, match_author, cover_stale FROM books;]])
+        match_title, match_author, cover_stale, file_stem, file_ext FROM books;]])
     local row = {}
     while stmt:step(row) do
         local book = setmetatable({
@@ -292,6 +298,7 @@ function Store:listing()
             cover_href = row[11], cover_file = row[12], cover_w = row[13],
             cover_h = row[14], cover_failed = row[15],
             match_title = row[16], match_author = row[17], cover_stale = row[18] ~= nil or nil,
+            file_stem = row[19], file_ext = row[20],
         }, ListingRow)
         out[#out + 1] = book
         if row[11] ~= nil then with_cover = with_cover + 1 end
@@ -324,6 +331,42 @@ function Store:fillMatchKeys()
     return #rows
 end
 
+local function parseFormats(text)
+    local out = {}
+    for _i, line in ipairs(split(text)) do
+        local t, size, href = line:match("^([^\t]*)\t([^\t]*)\t(.*)$")
+        if t then table.insert(out, { type = t, size = tonumber(size), href = href }) end
+    end
+    return out
+end
+
+--- { [uuid] = formats } of the books without a file name yet (see
+-- names.lua: their suffix is that of the format downloaded by default).
+function Store:unnamedFormats()
+    local out = {}
+    local stmt = self.conn:prepare("SELECT uuid, formats FROM books WHERE file_stem IS NULL;")
+    for row in stmt:rows() do out[row[1]] = parseFormats(row[2]) end
+    stmt:close()
+    return out
+end
+
+--- Stores books' file names: { { id, stem, ext }, … } (Names.assign), in
+-- one transaction.
+function Store:setFileNames(changes)
+    if #changes == 0 then return end
+    local stmt = self.conn:prepare("UPDATE books SET file_stem = ?, file_ext = ? WHERE uuid = ?;")
+    self:begin()
+    local ok, err = pcall(function()
+        for _i, c in ipairs(changes) do
+            stmt:reset():bind(c.stem, c.ext, c.id):step()
+            stmt:clearbind()
+        end
+    end)
+    if ok then self:commit() else self:rollback() end
+    stmt:close()
+    if not ok then error(err, 0) end
+end
+
 --- One book with everything, for the details sheet.
 function Store:getBook(uuid)
     local stmt = self.conn:prepare([[SELECT uuid, calibre_id, title, authors, tags,
@@ -336,13 +379,10 @@ function Store:getBook(uuid)
             id = row[1], calibre_id = num(row[2]), title = row[3], authors = split(row[4]),
             tags = split(row[5]), language = row[6], publisher = row[7],
             published = num(row[8]), added = num(row[9]), pages = num(row[10]),
-            summary = row[11], formats = {}, cover_href = row[13], size = num(row[14]),
+            summary = row[11], cover_href = row[13], size = num(row[14]),
             series = row[15], series_index = num(row[16]),
         }
-        for _i, line in ipairs(split(row[12])) do
-            local t, size, href = line:match("^([^\t]*)\t([^\t]*)\t(.*)$")
-            if t then table.insert(book.formats, { type = t, size = tonumber(size), href = href }) end
-        end
+        book.formats = parseFormats(row[12])
     end
     stmt:close()
     return book

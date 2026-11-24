@@ -40,6 +40,7 @@ local ZenSource = require("athenaeum/zenos_source")
 local Guard = require("athenaeum/guard")
 local History = require("athenaeum/history")
 local Matcher = require("athenaeum/matcher")
+local Names = require("athenaeum/names")
 local Search = require("athenaeum/search")
 local Settings = require("athenaeum/settings")
 local Store = require("athenaeum/store")
@@ -235,11 +236,13 @@ function Library.load()
         if b.cover_file then b.cover = covers_dir .. "/" .. b.cover_file end
     end
     local files = store:localFiles()
+    local unnamed = store:unnamedFormats()
     store:close()
     Timing.record("catalog: read database", Timing.since(t0), #books .. " books")
     t0 = Timing.start()
-    local matched, unmatched, by_title, copies = Matcher.match(folder, files, books)
+    local matched, unmatched, by_title, copies, file_names = Matcher.match(folder, files, books)
     Timing.record("catalog: match local files", Timing.since(t0))
+    Library.nameBooks(server, books, matched, file_names, unnamed)
     local cloud = {}
     for _i, b in ipairs(books) do
         if not matched[b.id] then table.insert(cloud, b) end
@@ -271,6 +274,27 @@ function Library.load()
     -- Downloaded books shown with the catalog's metadata (cached rows made
     -- before it was loaded, or before it changed).
     if not Library.fixture then Guard.call("metadata", Library.refreshCatalogMetadata) end
+end
+
+--- Gives catalog books their file names (names.lua) and stores the ones
+-- that changed: new books, books on the device under another name, and
+-- books whose name a file took. unnamed: { [id] = formats } of the books
+-- without one. Returns the changes.
+function Library.nameBooks(server, books, matched, file_names, unnamed)
+    local t0 = Timing.start()
+    local changes = Names.assign(books, matched, file_names, {
+        base = Downloads.baseStem,
+        suffix = function(book) return Downloads.defaultSuffix(unnamed[book.id]) end,
+    })
+    if #changes > 0 then
+        local store = openStore(server)
+        local ok, err = pcall(store.setFileNames, store, changes)
+        store:close()
+        if not ok then logger.warn("Athenaeum: storing file names:", err) end
+        logger.info("Athenaeum: named", #changes, "books")
+    end
+    Timing.record("catalog: name books", Timing.since(t0), #changes .. " changed")
+    return changes
 end
 
 -- Deleting a downloaded book makes it a cloud book again. KOReader sends no
