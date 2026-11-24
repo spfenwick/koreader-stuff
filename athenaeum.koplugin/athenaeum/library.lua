@@ -105,6 +105,7 @@ end
 --- Redraws the file browser after a badge setting changed (the listing is
 -- rebuilt: plain list rows make room for the badge).
 function Library.repaint()
+    ZenSource.badgesChanged()
     Virtual.refresh()
     local FileManager = require("apps/filemanager/filemanager")
     if FileManager.instance then UIManager:setDirty(FileManager.instance, "ui") end

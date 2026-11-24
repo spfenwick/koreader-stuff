@@ -202,10 +202,14 @@ function Guard.check()
     Guard.zenos_missing = not ok_zen or type(zen) ~= "table"
     if Guard.zenos_missing then
         Guard.problem("library", "needs ZenOS with book sources")
-    else requires("library", "common/book_sources", {
-        register = 2, changed = true, bookInfo = true, listingKey = true,
-        installMetadataIntegration = true,
-    }) end
+    else
+        requires("library", "common/book_sources", {
+            register = 2, changed = true, bookInfo = true, listingKey = true,
+            installMetadataIntegration = true,
+        })
+        -- Cover badges are ZenOS's to paint (athenaeum/badge.lua).
+        requires("badge", "common/book_sources", { badge = true })
+    end
     requires("library", "ffi/util", {
         runInSubProcess = 2, isSubProcessDone = 1, readAllFromFD = 1, writeToFD = 2,
     })

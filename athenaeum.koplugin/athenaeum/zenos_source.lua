@@ -9,6 +9,8 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   suggestions), via open() and showContextMenu(): ZenOS asks the sources
   in its filemanagerutil.openFile and FileChooser:showFileDialog wrappers,
   and cancels its opening banner when a source opens a book
+  cover badges (cloud, on this device, not in the catalog) on every cover
+  ZenOS draws, via badge(): ZenOS paints the icon (athenaeum/badge.lua)
   covers and metadata everywhere, via bookInfo(), answered inside ZenOS's
   own cover caches (changed(paths) drops their entries when a cover
   arrives)
@@ -136,6 +138,13 @@ local function status(path)
         and { status = state.status, rating = state.rating, finished_at = state.finished_at } or nil
 end
 
+-- The cover badge's icon (athenaeum/badge.lua decides which badge a path gets).
+local function badge(path)
+    local Badge = require("athenaeum/badge")
+    local kind = Badge.kind(path)
+    return kind and { icon = Badge.icon(kind) } or nil
+end
+
 -- Books read elsewhere waiting to go into the history (see ZenSource.history).
 local function history()
     local list = ZenSource.history and ZenSource.history()
@@ -168,6 +177,7 @@ function ZenSource.install(virtual)
         listingKey = protect("library", "listingKey", listingKey),
         status = protect("library", "status", status),
         history = protect("zenos", "history", history),
+        badge = protect("badge", "badge", badge),
     }
     if not BookSources.register(ID, source) then
         Guard.problem("library", "ZenOS refused the book source")
@@ -181,6 +191,8 @@ function ZenSource.install(virtual)
     if not (ok_meta and res) then logger.warn("Athenaeum: ZenOS metadata integration unavailable", res) end
     -- Turned off after an error: ZenOS rebuilds its groupings without them.
     Guard.on_failure.zenos = function() ZenSource.changed() end
+    -- Badges turned off after an error: ZenOS repaints without them.
+    Guard.on_failure.badge = function() ZenSource.badgesChanged() end
     logger.info("Athenaeum: registered as a ZenOS book source")
     return true
 end
@@ -230,6 +242,16 @@ function ZenSource.statesChanged()
         if not ok then logger.warn("Athenaeum: ZenOS book sources statusChanged():", err) end
     end
     Virtual.refresh()
+end
+
+--- Which books get a badge, or which badge, changed (a badge setting):
+-- ZenOS repaints its covers.
+function ZenSource.badgesChanged()
+    if not ZenSource.registered then return end
+    local BookSources = bookSources()
+    if not (BookSources and type(BookSources.statusChanged) == "function") then return end
+    local ok, err = pcall(BookSources.statusChanged)
+    if not ok then logger.warn("Athenaeum: ZenOS book sources statusChanged():", err) end
 end
 
 --- Tells ZenOS the cloud books changed; with paths, also that their covers,

@@ -27,6 +27,7 @@ package.loaded["common/book_sources"] = {
     isHomeOnTop = function() return ZenOS.home_on_top end,
     bookInfo = function() end,
     listingKey = function() end,
+    badge = function() end,
     installMetadataIntegration = function() ZenOS.integrated = ZenOS.integrated + 1 return true end,
 }
 
@@ -1149,19 +1150,6 @@ do
     local Blitbuffer = require("ffi/blitbuffer")
     local Geom = require("ui/geometry")
     local bb = Blitbuffer.new(400, 300, Blitbuffer.TYPE_BB8)
-    bb:fill(Blitbuffer.COLOR_GRAY)
-    local cover = { image = true, dimen = Geom:new{ x = 20, y = 10, w = 120, h = 180 } }
-    local menu = { item_group = {
-        { entry = { path = "/lib/local.epub" }, dimen = Geom:new{ x = 0, y = 0, w = 160, h = 200 }, { { cover } } },
-        { entry = { path = "/lib/other.epub" }, dimen = Geom:new{ x = 200, y = 0, w = 160, h = 200 } },
-    } }
-    Badge.isOnDevice = function(path) return path == "/lib/local.epub" end
-    Badge.isCloud = function(path) return path == "/lib/cloud-x.epub" end
-    check(Badge.cloud_enabled and not Badge.local_enabled, "defaults: cloud badge on, local badge off")
-    Badge.local_enabled = true
-    Badge.paintOn(menu, bb)
-    local x, y, size = Badge.place(cover.dimen)
-    check(x + size <= 140 and y + size <= 190 and x > 20, "badge inside the cover's corner")
     local function changed(x0, y0, w, h)
         for yy = y0, y0 + h - 1 do
             for xx = x0, x0 + w - 1 do
@@ -1170,31 +1158,22 @@ do
         end
         return false
     end
-    check(changed(x, y, size, size), "badge drawn on the local book")
-    check(not changed(200, 0, 160, 200), "no badge on a book not on the device")
-    bb:fill(Blitbuffer.COLOR_GRAY)
-    Badge.local_enabled = false
-    Badge.paintOn(menu, bb)
-    check(not changed(x, y, size, size), "local badge can be turned off")
+    Badge.isOnDevice = function(path) return path == "/lib/local.epub" end
+    Badge.isCloud = function(path) return path == "/lib/cloud-x.epub" end
+    check(Badge.cloud_enabled and not Badge.local_enabled, "defaults: cloud badge on, local badge off")
 
-    -- Cloud badge: drawn on cloud-only books, with the plugin's icon.
-    menu.item_group[2].entry.path = "/lib/cloud-x.epub"
+    -- Kinds, and their icons (ZenOS paints them on covers).
     check(Badge.kind("/lib/cloud-x.epub") == "cloud" and Badge.kind("/lib/local.epub") == nil, "badge kinds")
-    Badge.paintOn(menu, bb)
-    local cx, cy, csize = Badge.place(menu.item_group[2].dimen)
-    check(changed(cx, cy, csize, csize), "cloud badge drawn on the cloud book")
-    check(not changed(x, y, size, size), "no cloud badge on the local book")
-    local inner = {}
-    for yy = cy + math.floor(csize / 4), cy + math.floor(csize * 3 / 4) do
-        for xx = cx + math.floor(csize / 4), cx + math.floor(csize * 3 / 4) do
-            if bb:getPixel(xx, yy):getColor8().a < 128 then table.insert(inner, 1) end
-        end
+    Badge.local_enabled = true
+    check(Badge.kind("/lib/local.epub") == "local", "local badge kind")
+    Badge.local_enabled = false
+    for _i, kind in ipairs({ "cloud", "local", "noncloud", "cloud-complete", "cloud-reading", "cloud-abandoned" }) do
+        local icon = Badge.icon(kind)
+        check(icon:match("%.svg$") and lfs.attributes(icon, "mode") == "file", "icon file for " .. kind)
     end
-    check(#inner > 10, "cloud icon loaded (dark pixels inside the badge)")
-    bb:fill(Blitbuffer.COLOR_GRAY)
+    check(Badge.icon("cloud") ~= Badge.icon("local"), "own icon for each kind")
     Badge.cloud_enabled = false
-    Badge.paintOn(menu, bb)
-    check(not changed(cx, cy, csize, csize), "cloud badge can be turned off")
+    check(Badge.kind("/lib/cloud-x.epub") == nil, "cloud badge can be turned off")
     Badge.cloud_enabled = true
 
     -- Plain list rows (no cover): room is made before the name, and the
@@ -1219,94 +1198,55 @@ do
     Badge.paintOn({ item_group = { row } }, bb)
     check(changed(50, 230, 40, 40), "plain row: badge drawn before the name")
     check(not changed(300, 220, 100, 60), "plain row: nothing on the row's right")
+    local dark = 0
+    for yy = 235, 265 do
+        for xx = 50, 80 do
+            if bb:getPixel(xx, yy):getColor8().a < 128 then dark = dark + 1 end
+        end
+    end
+    check(dark > 10, "cloud icon loaded (dark pixels inside the badge)")
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    Badge.cloud_enabled = false
+    Badge.paintOn({ item_group = { row } }, bb)
+    check(not changed(0, 220, 400, 60), "plain row: badge follows the setting")
+    Badge.cloud_enabled = true
+
+    -- Covers are ZenOS's to badge: nothing painted over CoverBrowser items.
+    bb:fill(Blitbuffer.COLOR_GRAY)
+    local cover = { image = true, dimen = Geom:new{ x = 20, y = 10, w = 120, h = 180 } }
+    Badge.paintOn({ item_group = {
+        { entry = { path = "/lib/cloud-x.epub", indent = slot }, do_cover_image = true,
+          dimen = Geom:new{ x = 0, y = 0, w = 160, h = 200 }, { { cover } },
+          _underline_container = { dimen = Geom:new{ x = 0, y = 0, w = 160, h = 200 } } },
+    } }, bb)
+    check(not changed(0, 0, 400, 220), "cover items left to ZenOS")
+
     bb:fill(Blitbuffer.COLOR_GRAY)
     item.indent = nil
     Badge.paintOn({ item_group = { row } }, bb)
     check(not changed(0, 220, 400, 60), "plain row without room: no badge")
 
-    -- Not-in-catalog badge: off by default, its own icon.
+    -- Not-in-catalog badge: off by default.
     check(not Badge.noncloud_enabled, "default: not-in-catalog badge off")
     Badge.isNonCloud = function(path) return path == "/lib/mine.epub" end
     check(Badge.kind("/lib/mine.epub") == nil, "no not-in-catalog badge while off")
     Badge.noncloud_enabled = true
     check(Badge.kind("/lib/mine.epub") == "noncloud", "not-in-catalog badge kind")
-    bb:fill(Blitbuffer.COLOR_GRAY)
-    menu.item_group[2].entry.path = "/lib/mine.epub"
-    Badge.paintOn(menu, bb)
-    local dark = 0
-    for yy = cy + math.floor(csize / 4), cy + math.floor(csize * 3 / 4) do
-        for xx = cx + math.floor(csize / 4), cx + math.floor(csize * 3 / 4) do
-            if bb:getPixel(xx, yy):getColor8().a < 128 then dark = dark + 1 end
-        end
-    end
-    check(dark > 10, "crossed-out cloud icon drawn")
+    Badge.noncloud_enabled = false
 
     -- Cloud books Concordance knows a status for: the cloud with a mark cut out.
-    Badge.noncloud_enabled = false
-    menu.item_group[2].entry.path = "/lib/cloud-x.epub"
     local state
     local real_cloud_state = Badge.cloudState
     Badge.cloudState = function(path) return path == "/lib/cloud-x.epub" and state or nil end
-    local function light()
-        bb:fill(Blitbuffer.COLOR_GRAY)
-        Badge.paintOn(menu, bb)
-        local n = 0
-        for yy = cy + math.floor(csize * 0.4), cy + math.floor(csize * 0.75) do
-            for xx = cx + math.floor(csize * 0.35), cx + math.floor(csize * 0.65) do
-                if bb:getPixel(xx, yy):getColor8().a > 200 then n = n + 1 end
-            end
-        end
-        return n
-    end
-    local plain = light()
     for status, kind in pairs({ complete = "cloud-complete", reading = "cloud-reading", abandoned = "cloud-abandoned" }) do
         state = status
         check(Badge.kind("/lib/cloud-x.epub") == kind, "badge kind for " .. status)
-        check(light() > plain + 3, "mark cut out of the cloud for " .. status)
     end
     state = "something else"
     check(Badge.kind("/lib/cloud-x.epub") == "cloud", "unknown status: plain cloud")
     Badge.cloudState = real_cloud_state
 
-    -- ZenOS Home covers (cover_common.make_cover_widget): badged when built
-    -- for Home, painted after the cover.
-    Badge.noncloud_enabled = false
-    local painted = 0
-    local covers = { make_cover_widget = function(book, w, h)
-        local frame = { getSize = function() return { w = w, h = h } end }
-        function frame:paintTo(target) painted = painted + 1 target:paintRect(0, 0, 1, 1, Blitbuffer.COLOR_GRAY) end
-        return frame, w, h, false
-    end }
-    package.loaded["modules/filebrowser/patches/home/widgets/cover_common"] = covers
-    check(Badge.installHome(), "Home badges installed")
-    local function build(chunkname, path)
-        return assert(loadstring("local covers, book = ... local f, w, h, n = covers.make_cover_widget(book, 120, 180)"
-            .. " return f, w, h, n",
-            chunkname))(covers, { path = path })
-    end
-    local home_frame, fw, fh, hyd = build("@/zen/modules/filebrowser/patches/home/widgets/strip_common.lua",
-        "/lib/cloud-x.epub")
-    check(fw == 120 and fh == 180 and hyd == false, "ZenOS's results passed on")
-    bb:fill(Blitbuffer.COLOR_GRAY)
-    home_frame:paintTo(bb, 20, 10)
-    check(painted == 1, "cover painted first")
-    check(changed(x, y, size, size), "cloud badge on a Home cover")
-    local browser_frame = build("@/zen/modules/filebrowser/patches/zen_renderer.lua", "/lib/cloud-x.epub")
-    bb:fill(Blitbuffer.COLOR_GRAY)
-    browser_frame:paintTo(bb, 20, 10)
-    check(not changed(x, y, size, size), "file browser covers left to the list badges (no double badge)")
-    local other_frame = build("@/zen/modules/filebrowser/patches/home/widgets/featured_common.lua", "/lib/other.epub")
-    bb:fill(Blitbuffer.COLOR_GRAY)
-    other_frame:paintTo(bb, 20, 10)
-    check(not changed(x, y, size, size), "no badge on a Home book without one")
-    Badge.cloud_enabled = false
-    bb:fill(Blitbuffer.COLOR_GRAY)
-    home_frame:paintTo(bb, 20, 10)
-    check(not changed(x, y, size, size), "Home badge follows the setting at paint time")
-    Badge.cloud_enabled = true
-    package.loaded["modules/filebrowser/patches/home/widgets/cover_common"] = nil
     Badge.noncloud_enabled, Badge.isNonCloud = false, nil
-
     Badge.cloud_enabled, Badge.local_enabled = true, false
     Badge.isOnDevice, Badge.isCloud = nil, nil
     bb:free()
@@ -2062,6 +2002,23 @@ do
     Settings.save("zenos_groups", true)
 
     check(source.owns("/lib/cloud-c1.epub") and not source.owns("/lib/a.epub"), "owns cloud books only")
+
+    -- Cover badges: the icon of the badge the book gets (ZenOS paints it).
+    local Badge = require("athenaeum/badge")
+    local real_is_cloud = Badge.isCloud
+    Badge.isCloud = function(path) return path == "/lib/cloud-c1.epub" end
+    local given = source.badge("/lib/cloud-c1.epub")
+    check(type(given) == "table" and given.icon == Badge.icon("cloud"), "cloud book: cloud badge")
+    eq(source.badge("/lib/a.epub"), nil, "other books: no badge")
+    Badge.cloud_enabled = false
+    eq(source.badge("/lib/cloud-c1.epub"), nil, "badge setting off: no badge")
+    Badge.cloud_enabled = true
+    Badge.isCloud = real_is_cloud
+    local repaints = 0
+    package.loaded["common/book_sources"].statusChanged = function() repaints = repaints + 1 end
+    ZenSource.badgesChanged()
+    eq(repaints, 1, "badge settings changed: ZenOS repaints")
+    package.loaded["common/book_sources"].statusChanged = nil
     local shown, shown_opts
     local real_show = Virtual.showDetails
     Virtual.showDetails = function(path, opts) shown, shown_opts = path, opts end

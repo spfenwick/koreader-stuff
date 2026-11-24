@@ -8,7 +8,7 @@ upstream as #892 on 2026-11-17). Base each PR on upstream's `dev`.
 Each entry: what's wrong in ZenOS, the fix, and what goes away in the
 plugins. When one merges, remove the plugin code and update this file.
 
-Suggested order: 1, 2, 3, 4. The first two are small.
+Suggested order: 1, 2, 3, 4, 5. The first two are small.
 
 ## 1. Opens and long-presses ask the book sources everywhere
 
@@ -158,6 +158,38 @@ listing before and after in the emulator.
 (`_zen_files`, `series_items`, `_zen_tbr_refresh`), and the full listing
 rebuild after every download. Kindle and any other source that moves files
 get the same.
+
+## 5. Book sources give cover badges
+
+**In ZenOS:** a source can't mark its books' covers. Athenæum paints its
+badges after ZenOS does: it wraps `BookList`/`Menu:paintTo` and searches
+the widget tree for each item's cover, and for Home it wraps
+`cover_common.make_cover_widget` and walks `debug.getinfo` up the call
+stack, looking for `/patches/home/widgets/` in the callers' file names.
+Both break without an error when ZenOS reorganises its files or widgets.
+Painting after ZenOS also lands on ZenOS's own badges: Athenæum's goes in
+the bottom-right corner, where ZenOS puts the series number.
+
+**Fix:** an optional source function `badge(path)` → `{ icon = svg path }`
+and `BookSources.badge(path)`. A new `common/source_badge.lua` paints the
+icon's dark shapes in ZenOS's badge colours and size (`getBadgeColor`,
+`getBadgeTextColor`, `getBadgeScale`), in a circle in the cover's
+bottom-right corner. The series number moves left of it. Painted on library
+mosaic items (`zen_renderer.lua`), list covers
+(`browser_list_item_layout.lua`), Home strips (`strip_common.lua`: with or
+without the strip's own badges) and the featured book
+(`featured_common.lua`, through `make_cover_widget`'s `decorate`).
+`statusChanged()` repaints after a source's badges change.
+
+**Status (2026-11-24):** written on ZenOS `custom`, uncommitted
+(`common/source_badge.lua`, spec `spec/lua/unit/source_badge_spec.lua`).
+Athenæum 0.9.20 gives `badge()`, assumes a ZenOS with it (Guard's startup
+check turns badges off without it), and has dropped its Home badge hook,
+the stack walk and its cover painting; it paints only KOReader's plain list
+rows (no covers) itself. Not yet checked in the emulator with cloud books.
+
+**Plugins lose:** `Badge.installHome`, `forHome`, `badgeHomeCover`,
+`coverRect` and `Badge.place` in `athenaeum/badge.lua`.
 
 ## Not worth a PR
 
