@@ -641,12 +641,6 @@ local function stateForPath(path)
     if not ok then logger.warn("Athenaeum: reading the book's state from Concordance:", st) end
     return ok and type(st) == "table" and st or nil
 end
--- A cloud book's status on other devices, for its badge.
-Badge.cloudState = function(path)
-    if not Virtual.by_path[path] then return nil end
-    local st = stateForPath(path)
-    return st and st.status or nil
-end
 -- For ZenOS: cloud books, and the library's files (ZenOS asks only about
 -- books without a sidecar, so a book opened here keeps its own).
 ZenSource.state = function(path)

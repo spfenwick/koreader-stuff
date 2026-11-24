@@ -1,8 +1,8 @@
 --[[
 Cover badges, in a white circle on the bottom-right corner of the cover:
-- cloud: a cloud on books that are only in the online library (default on),
-  with a check mark, play or pause mark cut out when Concordance says the
-  book is finished, being read or on hold on another device;
+- cloud: a cloud on books that are only in the online library (default on);
+  it shows only that the book is in the cloud, not its reading status (ZenOS
+  shows that in its own status badge);
 - local: a check mark on local books that are in the catalog (default off);
 - noncloud: a crossed-out cloud on books in the library folder that aren't
   in the catalog (default off).
@@ -31,7 +31,6 @@ local Badge = {
     isOnDevice = nil, -- function(path) -> true for local books in the catalog
     isCloud = nil,    -- function(path) -> true for cloud-only books
     isNonCloud = nil, -- function(path) -> true for local books not in the catalog
-    cloudState = nil, -- function(path) -> "complete", "reading", "abandoned" or nil
     installed = false,
 }
 
@@ -43,9 +42,6 @@ local KIND_ICONS = {
     ["local"] = ICONS .. "check.svg",
     cloud = CLOUD_ICON,
     noncloud = CLOUD_OFF_ICON,
-    ["cloud-complete"] = ICONS .. "cloud-finished.svg",
-    ["cloud-reading"] = ICONS .. "cloud-reading.svg",
-    ["cloud-abandoned"] = ICONS .. "cloud-on-hold.svg",
 }
 
 local widgets = {} -- kind .. size -> widget
@@ -93,8 +89,7 @@ function Badge.plainSize()
     return Screen:scaleBySize(20), Screen:scaleBySize(28)
 end
 
---- True when a path gets a badge: Badge.kind() without working out which
--- (a cloud book's state from Concordance isn't needed for that).
+--- True when a path gets a badge: Badge.kind() without working out which.
 function Badge.has(path)
     return (Badge.cloud_enabled and Badge.isCloud and Badge.isCloud(path))
         or (Badge.local_enabled and Badge.isOnDevice and Badge.isOnDevice(path))
@@ -118,15 +113,9 @@ local function plainText(item)
     end
 end
 
-local CLOUD_STATES = { complete = "cloud-complete", reading = "cloud-reading", abandoned = "cloud-abandoned" }
-
---- Which badge a path gets: "cloud" (or "cloud-<status>"), "local",
--- "noncloud" or nil.
+--- Which badge a path gets: "cloud", "local", "noncloud" or nil.
 function Badge.kind(path)
-    if Badge.cloud_enabled and Badge.isCloud and Badge.isCloud(path) then
-        local status = Badge.cloudState and Badge.cloudState(path)
-        return CLOUD_STATES[status] or "cloud"
-    end
+    if Badge.cloud_enabled and Badge.isCloud and Badge.isCloud(path) then return "cloud" end
     if Badge.local_enabled and Badge.isOnDevice and Badge.isOnDevice(path) then return "local" end
     if Badge.noncloud_enabled and Badge.isNonCloud and Badge.isNonCloud(path) then return "noncloud" end
 end

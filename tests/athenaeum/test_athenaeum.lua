@@ -1286,7 +1286,7 @@ do
     Badge.local_enabled = true
     check(Badge.kind("/lib/local.epub") == "local", "local badge kind")
     Badge.local_enabled = false
-    for _i, kind in ipairs({ "cloud", "local", "noncloud", "cloud-complete", "cloud-reading", "cloud-abandoned" }) do
+    for _i, kind in ipairs({ "cloud", "local", "noncloud" }) do
         local icon = Badge.icon(kind)
         check(icon:match("%.svg$") and lfs.attributes(icon, "mode") == "file", "icon file for " .. kind)
     end
@@ -1304,13 +1304,6 @@ do
     local other = { path = "/lib/local.epub" }
     Badge.decorate(other)
     check(other.indent == nil, "plain row: no room for a book without a badge")
-    local real_state, states_asked = Badge.cloudState, 0
-    Badge.cloudState = function() states_asked = states_asked + 1 return "complete" end
-    local stated = { path = "/lib/cloud-x.epub" }
-    Badge.decorate(stated)
-    check(stated.indent == slot and states_asked == 0,
-        "plain row: room made without asking the book's state")
-    Badge.cloudState = real_state
     bb:fill(Blitbuffer.COLOR_GRAY)
     local row = { entry = item, dimen = Geom:new{ x = 0, y = 220, w = 400, h = 60 },
         _underline_container = { dimen = Geom:new{ x = 50, y = 220, w = 300, h = 60 } } }
@@ -1353,17 +1346,10 @@ do
     check(Badge.kind("/lib/mine.epub") == "noncloud", "not-in-catalog badge kind")
     Badge.noncloud_enabled = false
 
-    -- Cloud books Concordance knows a status for: the cloud with a mark cut out.
-    local state
-    local real_cloud_state = Badge.cloudState
-    Badge.cloudState = function(path) return path == "/lib/cloud-x.epub" and state or nil end
-    for status, kind in pairs({ complete = "cloud-complete", reading = "cloud-reading", abandoned = "cloud-abandoned" }) do
-        state = status
-        check(Badge.kind("/lib/cloud-x.epub") == kind, "badge kind for " .. status)
-    end
-    state = "something else"
-    check(Badge.kind("/lib/cloud-x.epub") == "cloud", "unknown status: plain cloud")
-    Badge.cloudState = real_cloud_state
+    -- The cloud badge shows only that the book is in the cloud, whatever
+    -- its reading status.
+    check(Badge.cloudState == nil, "no reading status for the cloud badge")
+    check(Badge.icon(Badge.kind("/lib/cloud-x.epub")) == Badge.icon("cloud"), "plain cloud icon")
 
     Badge.noncloud_enabled, Badge.isNonCloud = false, nil
     Badge.cloud_enabled, Badge.local_enabled = true, false
@@ -2621,8 +2607,8 @@ do
     local Badge = require("athenaeum/badge")
     local real_by_path = Virtual.by_path
     Virtual.by_path = { ["/lib/cloud-a.epub"] = { id = A_ID } }
-    eq(ZenSource.state("/lib/cloud-a.epub").status, "reading", "ZenOS gets the state the badge shows")
-    eq(Badge.cloudState("/lib/cloud-a.epub"), "reading", "the badge's state")
+    eq(ZenSource.state("/lib/cloud-a.epub").status, "reading", "ZenOS gets the cloud book's state")
+    eq(Badge.kind("/lib/cloud-a.epub"), "cloud", "the badge shows no state")
     eq(ZenSource.state("/lib/elsewhere.epub"), nil, "no state for books not in the catalog")
     -- The library's downloaded books (ZenOS asks only while they have no
     -- sidecar here): their catalog book's state, with the rating.
@@ -2633,7 +2619,6 @@ do
     states[A_ID] = { status = "reading", status_at = 1700000000 }
     eq(ZenSource.state("/lib/a.epub").finished_at, nil, "not finished: no date")
     states[A_ID] = { status = "complete", rating = 5 }
-    eq(Badge.cloudState("/lib/a.epub"), nil, "no cloud badge for a downloaded book")
     Library.copies = { ["/lib/a copy.epub"] = A_ID }
     Library.on_device["/lib/a copy.epub"] = true
     eq(ZenSource.state("/lib/a copy.epub").status, "complete", "a second copy too")

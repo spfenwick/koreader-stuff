@@ -195,7 +195,6 @@ With both installed, Athenæum knows what you've read on every device, and a boo
 
 ### What you see
 
-- **Cloud badges show reading state.** A cloud-only book's badge gets a check (finished), play (reading) or pause (on hold) mark from your other devices.
 - **Downloaded books show it too, before you open them.** In ZenOS, a book downloaded into the library but not opened here yet shows its status and rating from your other devices. Once you open it, it has its own, kept in step by Concordance.
 - **Details show your history.** A cloud book's details sheet adds a line such as "Finished · ★★★★☆ · Last read 12 Oct 2026 on Kobo Forma".
 - **Mark cloud books from their details.** A cloud book's details sheet has a **Read status** menu, as in ZenOS's book menu (Unread, Reading, On hold or Finished), so you can mark a book you've read elsewhere (on paper, say) without downloading it. It syncs like any other status. Unread removes the book's status on every device, so it shows as new; opening it again marks it as reading.
