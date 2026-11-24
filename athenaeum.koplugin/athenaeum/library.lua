@@ -242,7 +242,7 @@ function Library.load()
     t0 = Timing.start()
     local matched, unmatched, by_title, copies, file_names = Matcher.match(folder, files, books)
     Timing.record("catalog: match local files", Timing.since(t0))
-    Library.nameBooks(server, books, matched, file_names, unnamed)
+    local renamed = Library.nameBooks(server, books, matched, file_names, unnamed)
     local cloud = {}
     for _i, b in ipairs(books) do
         if not matched[b.id] then table.insert(cloud, b) end
@@ -266,6 +266,8 @@ function Library.load()
     logger.info("Athenaeum: loaded", Library.stats)
     t0 = Timing.start()
     showCatalog(folder, cloud)
+    Library.followRenames(folder, renamed)
+    Library.migratePaths()
     Guard.call("history", History.reconcile)
     Timing.record("catalog: show in folder", Timing.since(t0))
     Timing.record("catalog: load", Timing.since(t_load),
@@ -297,21 +299,78 @@ function Library.nameBooks(server, books, matched, file_names, unnamed)
     return changes
 end
 
---- A catalog book's path changed (STABLE_PATHS_PLAN.md: another format
--- downloaded, its file renamed outside KOReader, one of two copies
--- deleted, a file taking its name...): its history and collection entries
--- and ZenOS's views follow it. Collections move only to a file: KOReader's
--- collections can't hold a path without one (they drop it when read).
-function Library.bookMoved(old, new)
-    if type(old) ~= "string" or type(new) ~= "string" or old == new then return end
-    Guard.call("history", History.moved, old, new)
-    if require("libs/libkoreader-lfs").attributes(new, "mode") == "file" then
-        local ReadCollection = require("readcollection")
-        local ok, err = pcall(ReadCollection.updateItem, ReadCollection, old, new)
-        if not ok then logger.warn("Athenaeum: moving collection entries:", err) end
+--- Catalog books' paths changed (STABLE_PATHS_PLAN.md: another format
+-- downloaded, a file renamed outside KOReader, one of two copies deleted,
+-- a file taking a cloud book's name, the move from 0.9's paths): { { old,
+-- new }, … }. Their history and collection entries and ZenOS's views follow
+-- them. Collections move only to a file: KOReader's collections can't hold
+-- a path without one (they drop it when read).
+function Library.booksMoved(moves)
+    if type(moves) ~= "table" or #moves == 0 then return end
+    Guard.call("history", History.moved, moves)
+    local lfs = require("libs/libkoreader-lfs")
+    local ReadCollection = require("readcollection")
+    for _i, m in ipairs(moves) do
+        local old, new = m[1], m[2]
+        if type(old) == "string" and type(new) == "string" and old ~= new then
+            if lfs.attributes(new, "mode") == "file" then
+                local ok, err = pcall(ReadCollection.updateItem, ReadCollection, old, new)
+                if not ok then logger.warn("Athenaeum: moving collection entries:", err) end
+            end
+            local ok, err = pcall(ZenSource.moved, old, new)
+            if not ok then logger.warn("Athenaeum: telling ZenOS a book moved:", err) end
+        end
     end
-    local ok, err = pcall(ZenSource.moved, old, new)
-    if not ok then logger.warn("Athenaeum: telling ZenOS a book moved:", err) end
+end
+
+--- One book's path changed: see booksMoved.
+function Library.bookMoved(old, new)
+    Library.booksMoved({ { old, new } })
+end
+
+--- A cloud book's path, or nil.
+local function cloudPathFor(id)
+    local book = Virtual.by_id[id]
+    return book and book.path
+end
+
+--- The books nameBooks() gave another name (a file took a cloud book's
+-- name, or a book's file has a new one): their entries follow them.
+function Library.followRenames(folder, changes)
+    local moves = {}
+    for _i, c in ipairs(changes or {}) do
+        if c.old_stem and c.old_ext then
+            local old = folder .. "/" .. Names.join(c.old_stem, c.old_ext)
+            local new = Library.matched[c.id] or folder .. "/" .. Names.join(c.stem, c.ext)
+            if old ~= new then moves[#moves + 1] = { old, new } end
+        end
+    end
+    Library.booksMoved(moves)
+end
+
+--- Entries under the cloud paths from before 0.10.0 ("<folder>/cloud-<id>.epub",
+-- in the history and the saved cloud entries; collections can't hold
+-- them) move to their books' paths. At every load, not once: it's a scan of
+-- the history's paths, and an old entry may turn up later (a history file
+-- copied from another device). Needs the catalog loaded; entries for books
+-- gone from it stay as they are (greyed out).
+function Library.migratePaths()
+    if not History.installed or not (Library.catalog and #Library.catalog > 0) then return end
+    local moves, seen = {}, {}
+    local function consider(path)
+        if type(path) ~= "string" or seen[path] then return end
+        seen[path] = true
+        local id = History.legacyId(path)
+        local new = id and (Library.matched[id] or cloudPathFor(id))
+        if new then moves[#moves + 1] = { path, new } end
+    end
+    for _i, e in ipairs(require("readhistory").hist or {}) do consider(e.file) end
+    for _i, e in ipairs(Library.settings().history_cloud or {}) do
+        if type(e) == "table" then consider(e.file) end
+    end
+    if #moves == 0 then return end
+    Library.booksMoved(moves)
+    logger.info("Athenaeum: moved", #moves, "entries from cloud-<id> paths")
 end
 
 -- Deleting a downloaded book makes it a cloud book again. KOReader sends no
@@ -365,12 +424,6 @@ local function reloadSoon(after_delete, paths)
     end)
 end
 
-local function cloudPathFor(id)
-    for _i, b in ipairs(Virtual.books) do
-        if b.id == id then return b.path end
-    end
-end
-
 -- The deleted files and their books' cloud entries ({ path = id } from
 -- unmatch()), for Home to forget.
 local function homePaths(changed)
@@ -386,12 +439,20 @@ end
 -- before the caller redraws: ZenOS then takes a deleted file out of its
 -- open Authors/Series/... lists, which would leave its book out.
 local function showCloudInViews(changed)
+    local same = {}
     for path, id in pairs(changed) do
         local cloud = cloudPathFor(id)
-        if cloud then
+        if cloud == path then
+            -- The usual case: the cloud entry is where the file was.
+            same[#same + 1] = path
+        elseif cloud then
             local ok, err = pcall(ZenSource.moved, path, cloud)
             if not ok then logger.warn("Athenaeum: telling ZenOS about a delete:", err) end
         end
+    end
+    if #same > 0 then
+        local ok, err = pcall(ZenSource.changed, same)
+        if not ok then logger.warn("Athenaeum: telling ZenOS about a delete:", err) end
     end
 end
 
@@ -1248,7 +1309,7 @@ function Library.download(id, opts)
     end
     local url = require("athenaeum/sync").resolve(server.url, format.href)
     local function go()
-        local name = Downloads.fileName(book, format.ext, folder)
+        local name = Library.downloadName(id, book, format.ext, folder)
         local path = folder .. "/" .. name
         notify(T(_("Downloading %1…"), book.title or name))
         Downloads.start{
@@ -1259,6 +1320,20 @@ function Library.download(id, opts)
     local NetworkMgr = require("ui/network/manager")
     NetworkMgr:runWhenConnected(go)
     return true
+end
+
+--- Where a download goes: the cloud entry's path, with the format's suffix
+-- if it isn't the one the book's name has; else (a file there meanwhile,
+-- or no name) a new name, as before 0.10.0.
+function Library.downloadName(id, book, ext, folder)
+    local named = Virtual.by_id[id]
+    if named and named.file_stem then
+        local suffix = Downloads.suffix(ext)
+        if named.file_ext and named.file_ext:lower() == suffix then suffix = named.file_ext end
+        local name = Names.join(named.file_stem, suffix)
+        if not require("libs/libkoreader-lfs").attributes(folder .. "/" .. name) then return name end
+    end
+    return Downloads.fileName(book, ext, folder)
 end
 
 function Library.downloaded(book, result, opts)
@@ -1298,8 +1373,14 @@ function Library.downloaded(book, result, opts)
         end
     end
     if cloud_path then
-        -- Other views listing the book (Home, Authors, Series, ...) show the file.
-        local ok, err = pcall(ZenSource.moved, cloud_path, result.path)
+        -- Other views listing the book (Home, Authors, Series, ...) show the
+        -- file: at the cloud entry's path, usually.
+        local ok, err
+        if cloud_path == result.path then
+            ok, err = pcall(ZenSource.changed, { cloud_path })
+        else
+            ok, err = pcall(ZenSource.moved, cloud_path, result.path)
+        end
         if not ok then logger.warn("Athenaeum: redrawing views after a download:", err) end
     end
     -- Concordance reads the new file's identity before it's first opened, so

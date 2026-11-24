@@ -32,19 +32,19 @@ local util = require("util")
 local _ = require("gettext")
 local Timing = require("athenaeum/timing")
 local Guard = require("athenaeum/guard")
+local Names = require("athenaeum/names")
 local ZenSource = require("athenaeum/zenos_source")
 
 local Virtual = {
     folder = nil, -- library folder, no trailing slash
     books = {},
     by_path = {},
+    by_id = {},
     installed = false,
     generation = 0, -- changes with every setCatalog()
     catalog_sig = "", -- the books listed and what their list items show
     listingExtra = nil, -- function() -> string: other settings list items show
 }
-
-local PREFIX = "cloud-"
 
 local function normalize(path)
     if type(path) ~= "string" then return nil end
@@ -62,7 +62,7 @@ end
 local function signature(folder, books)
     local parts = { folder or "" }
     for i, b in ipairs(books) do
-        parts[i + 1] = table.concat({ b.id, b.title or "",
+        parts[i + 1] = table.concat({ b.id, b.filename or "", b.title or "",
             type(b.authors) == "table" and table.concat(b.authors, "\31") or "",
             b.series or "", tostring(b.series_index or "") }, "\t")
     end
@@ -82,7 +82,7 @@ function Virtual.setCatalog(folder, books)
     local old = Virtual.books
     local before = Virtual.catalog_sig
     Virtual.folder = normalize(folder)
-    Virtual.books, Virtual.by_path = {}, {}
+    Virtual.books, Virtual.by_path, Virtual.by_id = {}, {}, {}
     Virtual.generation = Virtual.generation + 1
     -- Turned off (startup check or an error): no cloud books.
     if not Virtual.folder or not Guard.ok("library") then
@@ -91,16 +91,26 @@ function Virtual.setCatalog(folder, books)
         Virtual.notifyChanged(old)
         return
     end
+    -- A book's entry is where its file would be: the file name the catalog
+    -- gave it (Library.nameBooks). Books given without one (tests) are
+    -- named here, like a download.
+    local listed = {}
     for _i, book in ipairs(books or {}) do
-        local path = type(book.id) == "string" and book.id ~= ""
-            and Virtual.folder .. "/" .. PREFIX .. book.id .. ".epub"
         -- One entry per catalog book, however often the catalog lists it.
-        if path and not Virtual.by_path[path] then
-            book.path = path
-            book.filename = (book.title or book.id) .. ".epub"
-            table.insert(Virtual.books, book)
-            Virtual.by_path[book.path] = book
+        if type(book.id) == "string" and book.id ~= "" and not Virtual.by_id[book.id] then
+            listed[#listed + 1] = book
+            Virtual.by_id[book.id] = book
         end
+    end
+    Names.assign(listed, {}, {}, {
+        base = function(book) return require("athenaeum/downloads").baseStem(book) end,
+        suffix = function() return "epub" end,
+    })
+    for _i, book in ipairs(listed) do
+        book.filename = Names.join(book.file_stem, book.file_ext)
+        book.path = Virtual.folder .. "/" .. book.filename
+        table.insert(Virtual.books, book)
+        Virtual.by_path[book.path] = book
     end
     Virtual.catalog_sig = signature(Virtual.folder, Virtual.books)
     noteChange(before)
@@ -439,6 +449,25 @@ local function withCloudDocProps(ui, fn)
 end
 Virtual._withCloudDocProps = withCloudDocProps -- for tests
 
+-- Adds the cloud books' items to a listing of the library folder (files:
+-- the folder's own). A file that turned up at a cloud book's name since the
+-- catalog was loaded is listed as itself (the next load renames the book).
+local function addCloudItems(fc, path, files, collate)
+    local present = {}
+    for _i, item in ipairs(files) do
+        if type(item) == "table" and type(item.path) == "string" then
+            present[item.path:match("[^/]*$")] = true
+        end
+    end
+    for _i, book in ipairs(Virtual.books) do
+        if not present[book.filename] then
+            table.insert(files, withProps(fc:getListItem(path, book.filename,
+                book.path, attributes(book), collate), book))
+        end
+    end
+end
+Virtual._addCloudItems = addCloudItems -- for tests
+
 local function installListing()
     local FileChooser = require("ui/widget/filechooser")
     Guard.hook("library", FileChooser, "getList", function(orig, self, path, collate)
@@ -458,12 +487,7 @@ local function installListing()
             -- Timed as a whole: timing each book's parts (wrapping three
             -- calls per book) cost more than some of the parts it measured.
             local t0 = Timing.start()
-            withCloudDocProps(self.ui, function()
-                for _i, book in ipairs(Virtual.books) do
-                    table.insert(files, withProps(self:getListItem(path, book.filename,
-                        book.path, attributes(book), collate), book))
-                end
-            end)
+            withCloudDocProps(self.ui, function() addCloudItems(self, path, files, collate) end)
             local t_decorate = Timing.start()
             if Virtual.decorateAll then
                 Virtual.decorateAll(files)

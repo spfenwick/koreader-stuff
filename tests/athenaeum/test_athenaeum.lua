@@ -1658,7 +1658,8 @@ do
     store:close()
     local path = folder .. "/Ann Author - Kept Book.epub"
     local f = io.open(path, "w"); f:write("x"); f:close()
-    local cloud_path = folder .. "/cloud-del-1.epub"
+    -- A cloud entry is where its book's file is or would be.
+    local cloud_path = path
 
     Search.install(Virtual)
     Library.installDeleteHooks()
@@ -1756,10 +1757,10 @@ do
     UIManager.nextTick = function(_self, fn) table.insert(ticks, fn) end
     FileManager.deleteSelectedFiles({ selected_files = { [path] = true, [stuck] = true } })
     check(seen_during, "deleted book's cloud entry there when the list is redrawn")
-    check(not Virtual.isVirtual(folder .. "/cloud-del-2.epub"), "file not deleted: no cloud entry for it")
+    check(not Virtual.isVirtual(stuck), "file not deleted: no cloud entry for it")
     i = 1
     while ticks[i] do ticks[i]() i = i + 1 end
-    check(Virtual.isVirtual(cloud_path) and not Virtual.isVirtual(folder .. "/cloud-del-2.epub"),
+    check(Virtual.isVirtual(cloud_path) and not Virtual.isVirtual(stuck),
         "reload agrees")
     FileManager.deleteSelectedFiles, FileManager.deleteFile = saved_delete, saved_delete_file
     os.remove(stuck)
@@ -1772,7 +1773,7 @@ do
     Library.save("folder", link)
     f = io.open(path, "w"); f:write("x"); f:close()
     Library.load()
-    local link_cloud = link .. "/cloud-del-1.epub"
+    local link_cloud = link .. "/Ann Author - Kept Book.epub"
     check(not Virtual.isVirtual(link_cloud), "symlinked folder: downloaded")
     local real_file = require("ffi/util").realpath(path)
     check(real_file and real_file:sub(1, #link) ~= link, "deleted by its real path")
@@ -1821,7 +1822,8 @@ do
     store:close()
     local down = folder .. "/Ann Author - Down.epub"
     local f = io.open(down, "w"); f:write("x"); f:close()
-    local cloud1 = folder .. "/cloud-" .. U1 .. ".epub"
+    -- Where the book's file would be.
+    local cloud1 = folder .. "/Bo Writer - Up.epub"
 
     eq(Library.pathForUuids({ U1 }), nil, "before installing: nothing")
     Library.installHistory()
@@ -1842,7 +1844,7 @@ do
     ReadHistory:reload(true)
     local e = ReadHistory.hist[ReadHistory:getIndexByFile(cloud1) or 0]
     check(e and not e.dim and not e.select_enabled, "read back: shown, never reopened")
-    eq(e and e.text, "Up.epub", "read back: named like the book in the library folder")
+    eq(e and e.text, "Bo Writer - Up.epub", "read back: named like the book in the library folder")
     ReadHistory.hist[1].time = 50 -- the cloud entry newest
     table.sort(ReadHistory.hist, function(a, b) return a.time > b.time end)
     ReadHistory:ensureLastFile()
@@ -1870,7 +1872,7 @@ do
     ReadHistory:_flush()
 
     ReadHistory:reload(true)
-    eq(ReadHistory.hist[1].text, "Up.epub", "a cloud entry put in by hand is named too")
+    eq(ReadHistory.hist[1].text, "Bo Writer - Up.epub", "a cloud entry put in by hand is named too")
 
     -- Tapping or long-pressing it in the History view shows its details;
     -- long-press adds "Remove from history".
@@ -1899,12 +1901,14 @@ do
     }
     ReadHistory:_flush()
 
-    -- Downloaded: the entry becomes the file.
-    local up = folder .. "/Bo Writer - Up.epub"
+    -- Downloaded: the file is at the cloud entry's path, and the entry opens it.
+    local up = cloud1
     f = io.open(up, "w"); f:write("y"); f:close()
     Library.load()
-    check(ReadHistory:getIndexByFile(up) and not ReadHistory:getIndexByFile(cloud1), "downloaded: the file's entry")
-    eq(ReadHistory.hist[ReadHistory:getIndexByFile(up) or 0].time, 100, "at the same time")
+    e = ReadHistory.hist[ReadHistory:getIndexByFile(up) or 0]
+    check(e and e.select_enabled and not e.dim, "downloaded: the same entry opens the file")
+    eq(e and e.time, 100, "at the same time")
+    eq(#ReadHistory.hist, 1, "no second entry")
     eq(Library.pathForUuids({ U1 }), up, "and Concordance gets the file")
 
     -- Deleted: back to the cloud entry, before the caller redraws (the
@@ -1920,15 +1924,19 @@ do
     Library.installDeleteHooks()
     local ticks = {}
     UIManager.nextTick = function(_self, fn) table.insert(ticks, fn) end
-    -- ZenOS's open views are told the book is its cloud entry again.
-    ZenOS.moves = {}
+    -- ZenOS's open views are told the book changed (it's at the same path).
+    local ZenSourceMod = require("athenaeum/zenos_source")
+    local was_registered = ZenSourceMod.registered
+    ZenSourceMod.registered = true
+    ZenOS.moves, ZenOS.changes = {}, {}
     check(FileManager.deleteFile(FileManager, up, true), "file deleted")
-    check(#ZenOS.moves == 1 and ZenOS.moves[1][1] == up and ZenOS.moves[1][2] == cloud1,
-        "ZenOS told the book moved to its cloud entry, before the caller redraws")
+    local told_now = {}
+    for _i, paths in ipairs(ZenOS.changes) do
+        for _j, p in ipairs(paths or {}) do told_now[p] = true end
+    end
+    check(#ZenOS.moves == 0 and told_now[up], "ZenOS told the book changed, before the caller redraws")
     check(#ticks > 0, "the reload waits for the caller's redraw")
-    check(ReadHistory:getIndexByFile(cloud1) and not ReadHistory:getIndexByFile(up),
-        "deleted: the cloud entry again, before the reload")
-    eq(ReadHistory:getIndexByFile(cloud1), 2, "in the same place")
+    eq(ReadHistory:getIndexByFile(cloud1), 2, "deleted: the cloud entry, in the same place")
     check(ReadHistory.hist[2] ~= moved, "moved entry is a new table")
     check(not ReadHistory.hist[2].dim and not ReadHistory.hist[2].select_enabled,
         "the cloud entry kept as one through the re-read")
@@ -1937,9 +1945,6 @@ do
     check(#ReadHistory.hist == len and ReadHistory.hist[#ReadHistory.hist] ~= last
         and ReadHistory.hist[#ReadHistory.hist].file == last.file, "same length and entries, new tables")
     -- ZenOS is told the file and the cloud entry changed (Home forgets them).
-    local ZenSourceMod = require("athenaeum/zenos_source")
-    local was_registered = ZenSourceMod.registered
-    ZenSourceMod.registered = true
     ZenOS.changes = {}
     UIManager.nextTick = function(_self, fn) fn() end
     for _i, fn in ipairs(ticks) do fn() end
@@ -1947,7 +1952,7 @@ do
     for _i, paths in ipairs(ZenOS.changes) do
         for _j, p in ipairs(paths or {}) do told[p] = true end
     end
-    check(told[up] and told[cloud1], "ZenOS told of the deleted file and the cloud entry")
+    check(told[up], "ZenOS told of the deleted book after the reload")
     ZenSourceMod.registered = was_registered
     e = ReadHistory.hist[ReadHistory:getIndexByFile(cloud1) or 0]
     check(e and not e.dim, "shown as a cloud book")
@@ -2055,6 +2060,104 @@ do
     ZenSourceMod.moved = real_moved
 end
 
+-- One path per book: downloads, renames, and the move from cloud-<id> paths -------------
+
+do
+    local Library = require("athenaeum/library")
+    local History = require("athenaeum/history")
+    local ReadHistory = require("readhistory")
+    local UIManager = require("ui/uimanager")
+    local folder = TMP .. "/stablelib"
+    rmrf(folder); mkdir(folder)
+    local server = { url = "http://stable.invalid/opds", username = "u" }
+    local real_server, real_tick = Library.server, UIManager.nextTick
+    Library.server = function() return server end
+    UIManager.nextTick = function(_self, fn) fn() end
+    Library.save("folder", folder)
+    Library.save("history_cloud", nil)
+    local S1 = "bbbbbbbb-0000-4000-8000-000000000001"
+    local S2 = "bbbbbbbb-0000-4000-8000-000000000002"
+    local GONE = "bbbbbbbb-0000-4000-8000-000000000009"
+    local store = Store.open(Library.dbPath(server), false)
+    store:upsertBooks({
+        { uuid = S1, title = "Cloud", authors = { "Ann" },
+          formats = { { type = "application/epub+zip", href = "/d/1/epub/" } } },
+        { uuid = S2, title = "Held", authors = { "Bo" } },
+    }, 1)
+    store:close()
+    local held = folder .. "/Bo - Held.epub"
+    local f = io.open(held, "w"); f:write("x"); f:close()
+    local function legacy(id) return folder .. "/cloud-" .. id .. ".epub" end
+    local function entry(path) return ReadHistory.hist[ReadHistory:getIndexByFile(path) or 0] end
+    Library.installHistory()
+
+    -- 0.9's entries: a cloud book, one downloaded since, one gone from the catalog.
+    ReadHistory.hist = {
+        { time = 300, file = legacy(S1), text = "x", dim = false, select_enabled = false },
+        { time = 200, file = legacy(S2), text = "x", dim = false, select_enabled = false },
+        { time = 100, file = legacy(GONE), text = "x", dim = false, select_enabled = false },
+    }
+    ReadHistory:_flush()
+    eq(#(Library.settings().history_cloud or {}), 3, "0.9's cloud entries saved")
+    Library.load()
+    local cloud = folder .. "/Ann - Cloud.epub"
+    local e = entry(cloud)
+    check(e and e.time == 300 and not e.select_enabled and not e.dim, "migrated: cloud book at its new path")
+    e = entry(held)
+    check(e and e.time == 200 and e.select_enabled, "migrated: downloaded book at its file")
+    check(not entry(legacy(S1)) and not entry(legacy(S2)), "old paths gone")
+    e = entry(legacy(GONE))
+    check(e and e.dim, "book gone from the catalog: left, greyed out")
+    local saved = {}
+    for _i, se in ipairs(Library.settings().history_cloud or {}) do saved[se.file] = se end
+    check(saved[cloud] and saved[cloud].id == S1 and saved[cloud].time == 300, "saved cloud entry with its ID")
+    check(not saved[legacy(S1)] and not saved[held], "saved list follows")
+    -- An old entry turning up later (a history from another device) moves too.
+    table.insert(ReadHistory.hist, { time = 50, file = legacy(S1), text = "x", dim = false, select_enabled = false })
+    ReadHistory:_flush()
+    Library.load()
+    check(not entry(legacy(S1)), "a later old entry: moved")
+    e = entry(cloud)
+    check(e and e.time == 300, "merged with the book's entry, the newer time kept")
+
+    -- A cloud entry before the catalog is loaded: known by the saved list.
+    Virtual.setCatalog(nil, {})
+    check(History.isCloudPath(cloud), "before loading: a saved cloud entry")
+    check(not History.isCloudPath(held), "a file isn't")
+    check(not History.isCloudPath(folder .. "/Unknown.epub"), "an unknown path isn't")
+    Library.load()
+
+    -- Downloads go to the cloud entry's path.
+    local book = { id = S1, title = "Cloud", authors = { "Ann" } }
+    eq(Library.downloadName(S1, book, "epub", folder), "Ann - Cloud.epub", "download: the cloud entry's name")
+    eq(Library.downloadName(S1, book, "pdf", folder), "Ann - Cloud.pdf", "another format: same stem")
+    eq(Library.downloadName("nope", book, "epub", folder), "Ann - Cloud.epub", "no name: as before")
+
+    -- A different book's file turns up with the cloud book's name: the
+    -- book is renamed, and its history entry follows.
+    local intruder = folder .. "/Ann - Cloud.epub"
+    f = io.open(intruder, "w"); f:write("other"); f:close()
+    local attr = lfs.attributes(intruder)
+    store = Store.open(Library.dbPath(server), false)
+    store:setLocalFile(intruder, { mtime = attr.modification, size = attr.size, uuids = {},
+        title = "Something Else", authors = { "Zed" } })
+    store:close()
+    eq(Library.downloadName(S1, book, "epub", folder), "Ann - Cloud (2).epub", "download: the name is taken")
+    Library.load()
+    local bumped = folder .. "/Ann - Cloud (2).epub"
+    eq(Virtual.by_id[S1] and Virtual.by_id[S1].path, bumped, "renamed past the file")
+    e = entry(bumped)
+    check(e and e.time == 300 and not e.select_enabled, "history entry followed")
+    eq(Library.downloadName(S1, book, "epub", folder), "Ann - Cloud (2).epub", "downloads follow")
+
+    ReadHistory.hist = {}
+    ReadHistory:_flush()
+    Library.save("history_cloud", nil)
+    Library.server, UIManager.nextTick = real_server, real_tick
+    Library.save("folder", nil)
+    Virtual.setCatalog(nil, {})
+end
+
 -- Virtual entries ---------------------------------------------------------------------
 
 do
@@ -2064,7 +2167,26 @@ do
     })
     eq(#Virtual.books, 2, "one entry per catalog book")
     eq(Virtual.folder, "/lib", "folder normalised")
-    check(Virtual.isVirtual("/lib/cloud-x2.epub"), "virtual path")
+    check(Virtual.isVirtual("/lib/Two.epub"), "virtual path: named like a download")
+
+    -- The names the catalog gave (Library.nameBooks); two books with one
+    -- name (shouldn't happen) still get an entry each.
+    Virtual.setCatalog("/lib", {
+        { id = "n1", title = "T", file_stem = "Ann - T", file_ext = "pdf" },
+        { id = "n2", title = "U", file_stem = "Ann - T", file_ext = "pdf" },
+    })
+    eq(Virtual.by_id.n1.path, "/lib/Ann - T.pdf", "path from the stored name")
+    eq(Virtual.by_id.n2.path, "/lib/U.pdf", "a clashing name: renamed (from its title), suffix kept")
+    -- A file turned up at a cloud book's name: listed as itself.
+    local lfc = { getListItem = function(_self, _dir, name, item_path) return { path = item_path, text = name } end }
+    local listed = { { path = "/lib/Ann - T.pdf", text = "Ann - T.pdf" } }
+    Virtual._addCloudItems(lfc, "/lib", listed, {})
+    eq(#listed, 2, "one cloud book added")
+    eq(listed[2].path, "/lib/U.pdf", "the other cloud book")
+    Virtual.setCatalog("/lib/", {
+        { id = "x1", title = "One" }, { id = "x1", title = "One again" }, { id = "x2", title = "Two" },
+        { title = "no id" },
+    })
 
     -- List items carry the book's metadata (ZenOS's series grouping reads
     -- CoverBrowser's database for items without it, where cloud books aren't).
@@ -2108,7 +2230,7 @@ do
         and bookinfo.getDocProps(bookinfo, cloud).title == "db " .. cloud, "put back after a failed listing too")
     zen.bookInfo = function() return { authors = "A" } end
     Virtual._withCloudDocProps(ui, function() got = ui.bookinfo:getDocProps(cloud) end)
-    eq(got.display_title, "cloud-m1", "no title: the file name, as KOReader shows it")
+    eq(got.display_title, "Meta", "no title: the file name, as KOReader shows it")
     local plain = { bookinfo = bookinfo } -- no CoverBrowser: KOReader's own lookup
     Virtual._withCloudDocProps(plain, function() got = plain.bookinfo:getDocProps(cloud) end)
     eq(got.title, "db " .. cloud, "without CoverBrowser: not answered")
@@ -2209,7 +2331,7 @@ do
 
     local books = source.books()
     eq(#books, 1, "cloud books listed")
-    eq(books[1].file, "/lib/cloud-c1.epub", "book path")
+    eq(books[1].file, "/lib/Ann, Bo - Cloud One.epub", "book path")
     local info = books[1].info
     eq(info.authors, "Ann\nBo", "authors joined as in bookinfo")
     eq(info.series_index, 2, "series number")
@@ -2220,17 +2342,17 @@ do
     eq(#source.books(), 0, "groups setting off: none")
     Settings.save("zenos_groups", true)
 
-    check(source.owns("/lib/cloud-c1.epub") and not source.owns("/lib/a.epub"), "owns cloud books only")
+    check(source.owns("/lib/Ann, Bo - Cloud One.epub") and not source.owns("/lib/a.epub"), "owns cloud books only")
 
     -- Cover badges: the icon of the badge the book gets (ZenOS paints it).
     local Badge = require("athenaeum/badge")
     local real_is_cloud = Badge.isCloud
-    Badge.isCloud = function(path) return path == "/lib/cloud-c1.epub" end
-    local given = source.badge("/lib/cloud-c1.epub")
+    Badge.isCloud = function(path) return path == "/lib/Ann, Bo - Cloud One.epub" end
+    local given = source.badge("/lib/Ann, Bo - Cloud One.epub")
     check(type(given) == "table" and given.icon == Badge.icon("cloud"), "cloud book: cloud badge")
     eq(source.badge("/lib/a.epub"), nil, "other books: no badge")
     Badge.cloud_enabled = false
-    eq(source.badge("/lib/cloud-c1.epub"), nil, "badge setting off: no badge")
+    eq(source.badge("/lib/Ann, Bo - Cloud One.epub"), nil, "badge setting off: no badge")
     Badge.cloud_enabled = true
     Badge.isCloud = real_is_cloud
     local repaints = 0
@@ -2241,13 +2363,13 @@ do
     local shown, shown_opts
     local real_show = Virtual.showDetails
     Virtual.showDetails = function(path, opts) shown, shown_opts = path, opts end
-    check(source.open("/lib/cloud-c1.epub") == true and shown == "/lib/cloud-c1.epub", "open shows details")
+    check(source.open("/lib/Ann, Bo - Cloud One.epub") == true and shown == "/lib/Ann, Bo - Cloud One.epub", "open shows details")
     shown = nil
     check(not source.open("/lib/a.epub") and shown == nil, "other books not handled")
-    check(source.showContextMenu(nil, { path = "/lib/cloud-c1.epub" }) == true, "long-press shows details")
+    check(source.showContextMenu(nil, { path = "/lib/Ann, Bo - Cloud One.epub" }) == true, "long-press shows details")
     check(shown_opts == nil, "long-press elsewhere: no history row")
-    check(source.showContextMenu(nil, { path = "/lib/cloud-c1.epub", _zen_is_history = true,
-        _zen_history_path = "/lib/cloud-c1.epub" }) == true and type(shown_opts) == "table"
+    check(source.showContextMenu(nil, { path = "/lib/Ann, Bo - Cloud One.epub", _zen_is_history = true,
+        _zen_history_path = "/lib/Ann, Bo - Cloud One.epub" }) == true and type(shown_opts) == "table"
         and type(shown_opts.extra_rows) == "function", "long-press on Home's Recently read: history row")
     local history_rows = shown_opts and shown_opts.extra_rows(function() end) or {}
     check(history_rows[1] and history_rows[1][1].text:find("Remove from history", 1, true),
@@ -2258,7 +2380,7 @@ do
     -- Athenaeum doesn't hook either itself.
     check(fmu.openFile == real_openFile, "openFile not hooked")
 
-    local bi = source.bookInfo("/lib/cloud-c1.epub", false)
+    local bi = source.bookInfo("/lib/Ann, Bo - Cloud One.epub", false)
     check(bi and bi.title == "Cloud One" and bi.cover_fetched == "Y", "bookInfo for a cloud book")
     check(source.bookInfo("/lib/a.epub", false) == nil, "bookInfo: nil for other books")
 
@@ -2272,23 +2394,23 @@ do
     -- library gives them (ZenSource.state, tested with Concordance below).
     local real_state = ZenSource.state
     ZenSource.state = function(path)
-        return path == "/lib/cloud-c1.epub" and { status = "complete", rating = 4, finished_at = 1700000000 } or nil
+        return path == "/lib/Ann, Bo - Cloud One.epub" and { status = "complete", rating = 4, finished_at = 1700000000 } or nil
     end
-    local st = source.status("/lib/cloud-c1.epub")
+    local st = source.status("/lib/Ann, Bo - Cloud One.epub")
     eq(st.status .. " " .. st.rating, "complete 4", "status and rating of a cloud book")
     eq(st.finished_at, 1700000000, "when it was finished")
     eq(source.status("/lib/a.epub"), nil, "nothing known: nothing given")
     -- Books read elsewhere waiting to go into the history (Concordance).
     local real_history = ZenSource.history
-    ZenSource.history = function() return { { file = "/lib/cloud-c1.epub", time = 1700000000 } } end
+    ZenSource.history = function() return { { file = "/lib/Ann, Bo - Cloud One.epub", time = 1700000000 } } end
     local waiting = source.history()
-    eq(#waiting .. " " .. waiting[1].file .. " " .. waiting[1].time, "1 /lib/cloud-c1.epub 1700000000",
+    eq(#waiting .. " " .. waiting[1].file .. " " .. waiting[1].time, "1 /lib/Ann, Bo - Cloud One.epub 1700000000",
         "history: the books waiting")
     ZenSource.history = function() return nil end
     eq(#source.history(), 0, "history: none known, an empty list")
     ZenSource.history = real_history
     ZenSource.state = function() return nil end
-    eq(source.status("/lib/cloud-c1.epub"), nil, "no state: no status")
+    eq(source.status("/lib/Ann, Bo - Cloud One.epub"), nil, "no state: no status")
     ZenSource.state = real_state
     ZenOS.changes = {}
     local status_changes = 0
@@ -2304,9 +2426,9 @@ do
     Virtual.setCatalog("/lib", { { id = "c2", title = "Cloud Two" } })
     check(source.listingKey("/lib") ~= key, "key changes with the catalog")
     local paths = ZenOS.changes[#ZenOS.changes]
-    check(type(paths) == "table" and table.concat(paths, " ") == "/lib/cloud-c1.epub /lib/cloud-c2.epub",
+    check(type(paths) == "table" and table.concat(paths, " ") == "/lib/Ann, Bo - Cloud One.epub /lib/Cloud Two.epub",
         "ZenOS told of old and new books")
-    eq(source.books()[1].file, "/lib/cloud-c2.epub", "books rebuilt after a catalog change")
+    eq(source.books()[1].file, "/lib/Cloud Two.epub", "books rebuilt after a catalog change")
     local key2 = source.listingKey("/lib")
     ZenOS.changes = {}
     Virtual.setCatalog("/lib", { { id = "c2", title = "Cloud Two" } })
@@ -2316,7 +2438,7 @@ do
         { id = "c3", title = "Cloud Three" } })
     paths = ZenOS.changes[#ZenOS.changes]
     check(#ZenOS.changes == 1 and type(paths) == "table"
-        and table.concat(paths, " ") == "/lib/cloud-c2.epub /lib/cloud-c3.epub",
+        and table.concat(paths, " ") == "/lib/Cloud Two.epub /lib/Cloud Three.epub",
         "ZenOS told of a book whose metadata changed (not in the signature) and a new one")
     -- A stored row's lists are split when first read (tags when the book
     -- is drawn): that isn't a change.
@@ -2344,14 +2466,14 @@ do
     -- Covers arriving: ZenOS drops its cached covers.
     ZenOS.changes = {}
     Covers.on_arrived({ Virtual.books[1] })
-    check(ZenOS.changes[1] and ZenOS.changes[1][1] == "/lib/cloud-c2.epub", "cover arrival reported")
+    check(ZenOS.changes[1] and ZenOS.changes[1][1] == "/lib/Cloud Two.epub", "cover arrival reported")
 
     -- ZenOS's tag groups are left alone.
     check(db.getGroupedByTags == orig_tags, "tags not hooked")
 
     -- A download: ZenOS is told the book moved to its file (its views and
     -- Home show the file).
-    local cloud, file = "/lib/cloud-c2.epub", "/lib/Ann - Cloud Two.epub"
+    local cloud, file = "/lib/Cloud Two.epub", "/lib/Ann - Cloud Two.epub"
     ZenOS.moves = {}
     ZenSource.moved(cloud, file)
     check(#ZenOS.moves == 1 and ZenOS.moves[1][1] == cloud and ZenOS.moves[1][2] == file,

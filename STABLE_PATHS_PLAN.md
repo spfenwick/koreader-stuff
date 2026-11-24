@@ -1,8 +1,18 @@
 # Plan: one path per book (Athenæum)
 
-Written 2026-11-25. Steps 1 and 2 done 2026-11-25 (uncommitted): names are
-given and stored, and `Library.bookMoved` exists; neither is used for paths
-yet.
+Written 2026-11-25. Steps 1-3 done 2026-11-25 (uncommitted; unit tests,
+plus an emulator run under ZenOS `custom`: `tests/athenaeum/e2e_stable_paths.py`,
+15 checks, including risk 1: a book deleted from an open Authors view stays
+listed as a cloud book). The migration runs at every load (no
+`paths_version` flag: one set by a load with an empty history would skip
+entries that turn up later). cloud entries are at their books' names, downloads go there, and
+0.9's `cloud-<id>` entries are migrated. Done in step 3 ahead of step 4,
+since step 3 needs them to keep working: downloads use the stored name
+(`Library.downloadName`), the saved cloud history carries IDs,
+`History.reconcile` handles a delete at the same path, and ZenOS is told
+`changed` (not `moved`) on a same-path download or delete. Still to do in
+step 4: removing the path-swap code, and the history entry KOReader removes
+on delete when "auto-remove deleted files" is on.
 
 ## The problem
 
@@ -207,9 +217,9 @@ and a path counts as a cloud entry if it's listed there and isn't a file.
 
 ### Migration from `cloud-<id>.epub`
 
-This runs once, after the first load that has names (setting
-`paths_version = 2`). For each catalog book, call
-`Library.bookMoved(old_cloud_path, its path)`. This covers:
+This runs at every load that has the catalog (`Library.migratePaths`): each
+history or saved cloud entry at a `cloud-<id>.epub` path moves to its
+book's path, in one `Library.booksMoved` call. This covers:
 
 - KOReader's history (`history.lua` in settings)
 - `history_cloud`
@@ -280,8 +290,8 @@ Each step should leave the plugin working, with tests. Run
 2. `Library.bookMoved`, with unit tests for history, collections and
    `history_cloud`.
 3. Virtual and listing use stored names; skip real files; signature
-   includes names. Migration (`paths_version`) in the same release, so no
-   release has both schemes.
+   includes names. Migration in the same release, so no release has both
+   schemes.
 4. Download and delete without path swaps; the history `select_enabled`
    loop; saved history with IDs; delete keeps collections and history
    (unit tests: auto-remove on and off, several collections, a second
@@ -304,7 +314,8 @@ Each step should leave the plugin working, with tests. Run
   a different format is downloaded (see above).
 - **Migration:** Athenæum has one user, so there's no compatibility window.
   Keep the migration until it has run on that user's devices, then remove
-  it along with the `cloud-` prefix.
+  it along with the `cloud-` prefix. It runs at every load (a scan of the
+  history's paths), not once behind a flag.
 - **Version:** 0.10.0.
 - **Delete** removes the download, not the book: it keeps the book's
   collections and history (see "Delete keeps collections and history").

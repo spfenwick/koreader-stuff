@@ -43,32 +43,58 @@ local History = {
     deleted = {},       -- path -> id: downloaded books being deleted
 }
 
-local PREFIX = "cloud-"
+-- Cloud entries' paths before 0.10.0: "<folder>/cloud-<id>.epub". Only
+-- Library.migratePaths still meets them.
+local LEGACY_PREFIX = "cloud-"
 
 local function isFile(path)
     return lfs.attributes(path, "mode") == "file"
 end
 
---- Is this a cloud entry's path (whether or not the catalog is loaded)?
+--- The catalog ID in a path from before 0.10.0, or nil.
+function History.legacyId(path)
+    if type(path) ~= "string" then return nil end
+    local folder = History.folder and History.folder()
+    if not folder then return nil end
+    local dir, name = path:match("^(.*)/([^/]+)$")
+    if dir ~= folder:gsub("/+$", "") then return nil end
+    if name:sub(1, #LEGACY_PREFIX) ~= LEGACY_PREFIX then return nil end
+    return name:sub(#LEGACY_PREFIX + 1):match("^(.+)%.epub$")
+end
+
+-- The saved cloud entries by path, rebuilt when the saved list changes.
+local saved_by_path, saved_of
+local function savedEntry(path)
+    local saved = History.saved and History.saved() or {}
+    if saved ~= saved_of then
+        saved_by_path, saved_of = {}, saved
+        for _i, e in ipairs(saved) do
+            if type(e) == "table" and type(e.file) == "string" then saved_by_path[e.file] = e end
+        end
+    end
+    return saved_by_path[path]
+end
+
+--- Is this a cloud entry's path (whether or not the catalog is loaded)? A
+-- catalog book's entry, else one saved as a cloud entry (with its catalog
+-- ID) that still has no file, else one from before 0.10.0.
 function History.isCloudPath(path)
     if type(path) ~= "string" then return false end
     if Virtual.by_path[path] then return true end
-    local folder = History.folder and History.folder()
-    if not folder then return false end
-    folder = folder:gsub("/+$", "")
-    local dir, name = path:match("^(.*)/([^/]+)$")
-    return dir == folder and name:sub(1, #PREFIX) == PREFIX and name:match("%.epub$") ~= nil
-        and not isFile(path)
+    if not (savedEntry(path) or History.legacyId(path)) then return false end
+    return not isFile(path)
 end
 
 local function idOf(path)
-    local name = path:match("([^/]+)$") or ""
-    return name:sub(#PREFIX + 1):gsub("%.epub$", "")
+    local book = Virtual.by_path[path]
+    if book then return book.id end
+    local e = savedEntry(path)
+    return e and e.id or History.legacyId(path)
 end
 
 local function cloudPathFor(id)
-    local folder = Virtual.folder or (History.folder and History.folder())
-    return folder and (folder:gsub("/+$", "") .. "/" .. PREFIX .. id .. ".epub")
+    local book = Virtual.by_id[id]
+    return book and book.path
 end
 
 -- An entry's name: a cloud book's as in the library folder, else the file's.
@@ -134,14 +160,14 @@ end
 local function cloudEntries(rh)
     local out = {}
     for _i, v in ipairs(rh.hist or {}) do
-        if History.isCloudPath(v.file) then out[#out + 1] = { file = v.file, time = v.time } end
+        if History.isCloudPath(v.file) then out[#out + 1] = { file = v.file, time = v.time, id = idOf(v.file) } end
     end
     return out
 end
 
 local function signature(list)
     local parts = {}
-    for i, e in ipairs(list) do parts[i] = tostring(e.time) .. "\t" .. e.file end
+    for i, e in ipairs(list) do parts[i] = tostring(e.time) .. "\t" .. e.file .. "\t" .. tostring(e.id) end
     return table.concat(parts, "\n")
 end
 
@@ -270,48 +296,56 @@ end
 
 -- A book moved ------------------------------------------------------------------
 
---- A catalog book's path changed (Library.bookMoved): its history entry
--- moves with it, keeping its place by time (the newer time if both paths
--- had an entry), and so does its saved cloud entry. Returns true if the
--- history changed.
-function History.moved(old, new)
-    if type(old) ~= "string" or type(new) ~= "string" or old == new or not Guard.ok("history") then
-        return false
-    end
+--- Catalog books' paths changed (Library.booksMoved): { { old, new }, … }.
+-- Each history entry moves with its book, keeping its place by time (the
+-- newer time if both paths had an entry), and so does its saved cloud
+-- entry. One save for them all. Returns true if the history changed.
+function History.moved(moves)
+    if type(moves) ~= "table" or not Guard.ok("history") then return false end
     local rh = require("readhistory")
     -- The saved list as it was: saving the history below rewrites it from
     -- the entries it can tell are cloud ones.
-    local saved = History.saved and History.saved() or {}
-    local changed = false
-    local i = rh:getIndexByFile(old)
-    if i then
-        local time = rh.hist[i].time or 0
-        table.remove(rh.hist, i)
-        local j = rh:getIndexByFile(new)
-        if j then
-            time = math.max(time, rh.hist[j].time or 0)
-            table.remove(rh.hist, j)
+    local list = {}
+    for _i, e in ipairs(History.saved and History.saved() or {}) do list[#list + 1] = e end
+    local changed, saved_changed = false, false
+    for _i, m in ipairs(moves) do
+        local old, new = m[1], m[2]
+        if type(old) == "string" and type(new) == "string" and old ~= new then
+            local i = rh:getIndexByFile(old)
+            if i then
+                local time = rh.hist[i].time or 0
+                table.remove(rh.hist, i)
+                local j = rh:getIndexByFile(new)
+                if j then
+                    time = math.max(time, rh.hist[j].time or 0)
+                    table.remove(rh.hist, j)
+                end
+                insertAt(rh, new, time)
+                changed = true
+            end
+            local kept, time, id, moved = {}, nil, nil, false
+            for _j, e in ipairs(list) do
+                if type(e) == "table" and (e.file == old or e.file == new) then
+                    moved = moved or e.file == old
+                    time = math.max(time or 0, tonumber(e.time) or 0)
+                    id = id or e.id
+                else
+                    kept[#kept + 1] = e
+                end
+            end
+            if moved then
+                -- A file now: KOReader keeps its entry itself.
+                if not isFile(new) then table.insert(kept, { file = new, time = time, id = id }) end
+                list, saved_changed = kept, true
+            end
         end
-        insertAt(rh, new, time)
-        changed = true
     end
-    local list, time, moved = {}, nil, false
-    for _i, e in ipairs(saved) do
-        if type(e) == "table" and (e.file == old or e.file == new) then
-            moved = moved or e.file == old
-            time = math.max(time or 0, tonumber(e.time) or 0)
-        else
-            list[#list + 1] = e
-        end
-    end
-    -- A file now: KOReader keeps its entry itself.
-    if moved and not isFile(new) then table.insert(list, { file = new, time = time }) end
     if changed then
         rh:_flush()
         -- New entry tables throughout (see reconcile).
         rh:reload(true)
     end
-    if moved and History.save then History.save("history_cloud", list) end
+    if saved_changed and History.save then History.save("history_cloud", list) end
     return changed
 end
 
@@ -331,11 +365,19 @@ function History.reconcile()
     local matched = History.matched and History.matched() or {}
     local changed = false
 
-    -- Deleted books: back to their cloud entries.
+    -- Deleted books: back to their cloud entries (at the same path, unless
+    -- the book's name changed meanwhile).
     for path, id in pairs(History.deleted) do
         local i = rh:getIndexByFile(path)
         local cloud = cloudPathFor(id)
-        if i and cloud and Virtual.by_path[cloud] and not isFile(path) then
+        if i and cloud == path and not isFile(path) then
+            local e = rh.hist[i]
+            if e.dim or e.select_enabled then
+                rh.hist[i] = copy(e)
+                rh.hist[i].dim, rh.hist[i].select_enabled = false, false
+                changed = true
+            end
+        elseif i and cloud and Virtual.by_path[cloud] and not isFile(path) then
             if rh:getIndexByFile(cloud) then
                 table.remove(rh.hist, i)
             else
@@ -350,8 +392,13 @@ function History.reconcile()
     History.deleted = {}
 
     local downloaded = {}
-    for _i, e in ipairs(rh.hist) do
-        if History.isCloudPath(e.file) then
+    for i, e in ipairs(rh.hist) do
+        if not e.select_enabled and not History.isCloudPath(e.file) and isFile(e.file) then
+            -- Downloaded to its cloud entry's path: the entry opens it now.
+            rh.hist[i] = copy(e)
+            rh.hist[i].dim, rh.hist[i].select_enabled = false, true
+            changed = true
+        elseif History.isCloudPath(e.file) then
             local path = matched[idOf(e.file)]
             if path and isFile(path) then
                 downloaded[#downloaded + 1] = { cloud = e.file, path = path }
