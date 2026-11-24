@@ -1046,8 +1046,8 @@ local function pollJob()
     end
     local more = covers and covers.more and not result.error and Covers.canFetch()
     local quiet = job.quiet and not job.opts.manual
-    -- An automatic sync that couldn't reach the server (Wi-Fi still coming
-    -- back after waking up) says nothing: it runs again once Wi-Fi connects.
+    -- An automatic sync that couldn't reach the server (even after the
+    -- retry in Http.retrying) says nothing: the next automatic one tries again.
     local offline = quiet and result.error and require("athenaeum/http").isNetworkError(result.error)
     if offline then
         logger.info("Athenaeum: automatic sync couldn't reach the server:", result.error)
@@ -1066,11 +1066,7 @@ local function pollJob()
     elseif result.sync and not result.error and Covers.canFetch() and coversWanted(result) then
         -- After a sync, download some missing covers (newest books first).
         Library.sync("prefetch", true)
-    elseif offline and Library.connected_while_running then
-        -- Wi-Fi connected while this one was failing: try again now.
-        Library.syncIfDue()
     end
-    Library.connected_while_running = nil
 end
 
 --- Marks every downloaded cover out of date and downloads them all again
@@ -1445,9 +1441,6 @@ function Library.onNetworkConnected()
         Timing.record("network: redraw library", 0, "after Wi-Fi connected", true)
         fc:updateItems(1, true)
     end))
-    -- A sync that started before the network was really up (just after
-    -- waking) may still be failing: run again once it's done.
-    if Library.job then Library.connected_while_running = true end
     Library.syncIfDue()
 end
 

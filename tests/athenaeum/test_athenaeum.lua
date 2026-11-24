@@ -1534,9 +1534,8 @@ do
         UIManager.scheduleIn, UIManager.unschedule = real_schedule, real_unschedule
     end
 
-    -- An automatic sync that couldn't reach the server (just after waking,
-    -- before Wi-Fi is really back) says nothing; Wi-Fi connecting meanwhile
-    -- runs it again. One asked for still reports it.
+    -- An automatic sync that couldn't reach the server says nothing; one
+    -- asked for still reports it.
     do
         local ffiutil = require("ffi/util")
         local NetworkMgr = require("ui/network/manager")
@@ -1544,7 +1543,7 @@ do
         local real = { ffiutil.isSubProcessDone, ffiutil.readAllFromFD, Library.syncIfDue,
             package.loaded["ui/widget/notification"], UIManager.scheduleIn, NetworkMgr.isConnected,
             Library.last_result }
-        local notified, retried = {}, 0
+        local notified = {}
         package.loaded["ui/widget/notification"] = {
             SOURCE_ALWAYS_SHOW = 1, notify = function(_self, text) notified[#notified + 1] = text end,
         }
@@ -1554,19 +1553,10 @@ do
         local function finish(job, err)
             ffiutil.readAllFromFD = function() return require("dump")({ mode = job.mode, error = err }) end
             Library.job = job
-            Library.syncIfDue = function() retried = retried + 1 end
             Library.poll()
-            Library.syncIfDue = real[3]
         end
         finish({ mode = "quick", quiet = true, opts = {}, t0 = 0 }, "Network error: timeout")
         eq(#notified, 0, "automatic, network error: no notification")
-        eq(retried, 0, "and no retry without Wi-Fi connecting")
-        Library.job = { mode = "quick" }
-        Library.onNetworkConnected()
-        check(Library.connected_while_running, "Wi-Fi connected while it ran: noted")
-        finish({ mode = "quick", quiet = true, opts = {}, t0 = 0 }, "Network error: timeout")
-        eq(retried, 1, "then run again when it's done")
-        check(not Library.connected_while_running, "once")
         finish({ mode = "quick", quiet = true, opts = {}, t0 = 0 }, "The server refused the user name or password (401).")
         eq(#notified, 1, "automatic, another error: still reported")
         finish({ mode = "quick", quiet = false, opts = {}, t0 = 0 }, "Network error: timeout")
