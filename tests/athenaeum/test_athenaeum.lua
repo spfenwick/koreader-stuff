@@ -1969,6 +1969,92 @@ do
     Virtual.setCatalog(nil, {})
 end
 
+-- A book moved (Library.bookMoved) ----------------------------------------------------
+
+do
+    local Library = require("athenaeum/library")
+    local ReadHistory = require("readhistory")
+    local ReadCollection = require("readcollection")
+    local ZenSourceMod = require("athenaeum/zenos_source")
+    local folder = TMP .. "/movedlib"
+    rmrf(folder); mkdir(folder)
+    local zen_moves, real_moved = {}, ZenSourceMod.moved
+    ZenSourceMod.moved = function(old, new) table.insert(zen_moves, old .. ">" .. new) end
+    local function entry(path) return ReadHistory.hist[ReadHistory:getIndexByFile(path) or 0] end
+    local function saved()
+        local out = {}
+        for _i, e in ipairs(Library.settings().history_cloud or {}) do out[e.file] = e.time end
+        return out
+    end
+    local function touch(path) local f = io.open(path, "w"); f:write("x"); f:close() end
+
+    -- A cloud entry moved to another cloud path (a file took its name).
+    local cloud_old, cloud_new = folder .. "/Ann - Cloud.epub", folder .. "/Ann - Cloud (2).epub"
+    local other = folder .. "/Other.epub"
+    touch(other)
+    ReadHistory.hist = {
+        { time = 500, file = other, text = "Other.epub", dim = false, select_enabled = true },
+        { time = 300, file = cloud_old, text = "Ann - Cloud.epub", dim = false, select_enabled = false },
+    }
+    ReadHistory:_flush()
+    Library.save("history_cloud", { { file = cloud_old, time = 300 } })
+    Library.bookMoved(cloud_old, cloud_new)
+    check(not entry(cloud_old), "moved: no entry at the old path")
+    local e = entry(cloud_new)
+    check(e and e.time == 300 and not e.select_enabled, "moved: cloud entry at the new path, same time")
+    eq(ReadHistory:getIndexByFile(cloud_new), 2, "moved: keeps its place by time")
+    eq(saved()[cloud_new], 300, "moved: saved cloud entry follows")
+    eq(saved()[cloud_old], nil, "moved: old saved entry gone")
+    eq(zen_moves[1], cloud_old .. ">" .. cloud_new, "moved: ZenOS told")
+
+    -- A cloud entry moved to a file (another format downloaded).
+    local pdf = folder .. "/Ann - Cloud (2).pdf"
+    touch(pdf)
+    Library.bookMoved(cloud_new, pdf)
+    e = entry(pdf)
+    check(e and e.time == 300 and e.select_enabled, "to a file: opens")
+    eq(saved()[pdf], nil, "to a file: no longer a saved cloud entry")
+    eq(next(saved()), nil, "to a file: saved list empty")
+
+    -- A file renamed outside KOReader, both paths in the history and the
+    -- old one in a collection: one entry at the newer time, collection moved.
+    local renamed = folder .. "/Bo - Renamed.epub"
+    ReadHistory.hist = {
+        { time = 700, file = renamed, text = "Bo - Renamed.epub", dim = false, select_enabled = true },
+        { time = 600, file = other, text = "Other.epub", dim = false, select_enabled = true },
+    }
+    ReadHistory:_flush()
+    ReadCollection:addCollection("athenaeum-test")
+    ReadCollection:addItem(other, "athenaeum-test")
+    ReadCollection:write({ ["athenaeum-test"] = true })
+    os.rename(other, renamed)
+    Library.bookMoved(other, renamed)
+    eq(#ReadHistory.hist, 1, "renamed: one entry")
+    eq(entry(renamed) and entry(renamed).time, 700, "renamed: the newer time")
+    check(ReadCollection:isFileInCollection(renamed, "athenaeum-test"), "renamed: collection entry moved")
+    check(not ReadCollection:isFileInCollection(other, "athenaeum-test"), "renamed: old collection entry gone")
+
+    -- To a path without a file, collections are left alone (KOReader's
+    -- collections can't hold one).
+    os.remove(renamed)
+    Library.bookMoved(renamed, folder .. "/Bo - Gone.epub")
+    check(ReadCollection:isFileInCollection(renamed, "athenaeum-test"), "no file: collections untouched")
+    check(entry(folder .. "/Bo - Gone.epub"), "no file: the history entry still moves")
+
+    -- Nothing to do.
+    local n = #zen_moves
+    Library.bookMoved(pdf, pdf)
+    Library.bookMoved(nil, pdf)
+    eq(#zen_moves, n, "same path or no path: nothing")
+
+    ReadCollection:removeCollection("athenaeum-test")
+    ReadCollection:write()
+    ReadHistory.hist = {}
+    ReadHistory:_flush()
+    Library.save("history_cloud", nil)
+    ZenSourceMod.moved = real_moved
+end
+
 -- Virtual entries ---------------------------------------------------------------------
 
 do

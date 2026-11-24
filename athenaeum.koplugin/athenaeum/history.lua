@@ -268,6 +268,53 @@ function History.install(opts)
     end)
 end
 
+-- A book moved ------------------------------------------------------------------
+
+--- A catalog book's path changed (Library.bookMoved): its history entry
+-- moves with it, keeping its place by time (the newer time if both paths
+-- had an entry), and so does its saved cloud entry. Returns true if the
+-- history changed.
+function History.moved(old, new)
+    if type(old) ~= "string" or type(new) ~= "string" or old == new or not Guard.ok("history") then
+        return false
+    end
+    local rh = require("readhistory")
+    -- The saved list as it was: saving the history below rewrites it from
+    -- the entries it can tell are cloud ones.
+    local saved = History.saved and History.saved() or {}
+    local changed = false
+    local i = rh:getIndexByFile(old)
+    if i then
+        local time = rh.hist[i].time or 0
+        table.remove(rh.hist, i)
+        local j = rh:getIndexByFile(new)
+        if j then
+            time = math.max(time, rh.hist[j].time or 0)
+            table.remove(rh.hist, j)
+        end
+        insertAt(rh, new, time)
+        changed = true
+    end
+    local list, time, moved = {}, nil, false
+    for _i, e in ipairs(saved) do
+        if type(e) == "table" and (e.file == old or e.file == new) then
+            moved = moved or e.file == old
+            time = math.max(time or 0, tonumber(e.time) or 0)
+        else
+            list[#list + 1] = e
+        end
+    end
+    -- A file now: KOReader keeps its entry itself.
+    if moved and not isFile(new) then table.insert(list, { file = new, time = time }) end
+    if changed then
+        rh:_flush()
+        -- New entry tables throughout (see reconcile).
+        rh:reload(true)
+    end
+    if moved and History.save then History.save("history_cloud", list) end
+    return changed
+end
+
 -- After a catalog load ------------------------------------------------------------
 
 --- A downloaded book is about to be deleted: its entry becomes its cloud

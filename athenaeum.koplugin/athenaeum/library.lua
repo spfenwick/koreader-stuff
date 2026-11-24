@@ -297,6 +297,23 @@ function Library.nameBooks(server, books, matched, file_names, unnamed)
     return changes
 end
 
+--- A catalog book's path changed (STABLE_PATHS_PLAN.md: another format
+-- downloaded, its file renamed outside KOReader, one of two copies
+-- deleted, a file taking its name...): its history and collection entries
+-- and ZenOS's views follow it. Collections move only to a file: KOReader's
+-- collections can't hold a path without one (they drop it when read).
+function Library.bookMoved(old, new)
+    if type(old) ~= "string" or type(new) ~= "string" or old == new then return end
+    Guard.call("history", History.moved, old, new)
+    if require("libs/libkoreader-lfs").attributes(new, "mode") == "file" then
+        local ReadCollection = require("readcollection")
+        local ok, err = pcall(ReadCollection.updateItem, ReadCollection, old, new)
+        if not ok then logger.warn("Athenaeum: moving collection entries:", err) end
+    end
+    local ok, err = pcall(ZenSource.moved, old, new)
+    if not ok then logger.warn("Athenaeum: telling ZenOS a book moved:", err) end
+end
+
 -- Deleting a downloaded book makes it a cloud book again. KOReader sends no
 -- event for deletions, so its two delete functions are wrapped; the catalog
 -- is reloaded (matching looks at the files actually in the folder) after

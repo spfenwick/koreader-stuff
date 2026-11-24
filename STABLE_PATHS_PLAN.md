@@ -1,7 +1,8 @@
 # Plan: one path per book (Athenæum)
 
-Written 2026-11-25. Step 1 done 2026-11-25 (uncommitted): names are given and
-stored, not used for paths yet.
+Written 2026-11-25. Steps 1 and 2 done 2026-11-25 (uncommitted): names are
+given and stored, and `Library.bookMoved` exists; neither is used for paths
+yet.
 
 ## The problem
 
@@ -105,7 +106,8 @@ today. That's out of scope.
 `Library.bookMoved(old, new)` handles all of them:
 
 - `ReadHistory:updateItem(old, new)`
-- `ReadCollection:updateItem(old, new)`
+- `ReadCollection:updateItem(old, new)`, only when `new` is a file (see
+  "KOReader's collections only hold files" below)
 - the saved `history_cloud` list
 - `ZenSource.moved(old, new)`
 
@@ -162,6 +164,29 @@ This replaces today's `History.deleting` and the deleted → cloud swap in
 `History.reconcile`. Today, with auto-remove on, that swap probably finds
 nothing, because KOReader has already removed the entry. Check, and add a
 test for both settings.
+
+### KOReader's collections only hold files (found in step 2)
+
+`ReadCollection` can't keep a path that has no file:
+- `_read` drops entries whose file is missing ("exclude deleted files")
+  every time it re-reads the collections file.
+- `addItem` and `_updateItem` build entries with a local `buildEntry`, which
+  returns nil for a missing file, so they crash on a cloud path.
+
+So a cloud book can't be in a collection today. Nothing offers to add one
+(a cloud book's long-press shows Athenæum's details sheet), so nothing
+crashes. `bookMoved` therefore moves collection entries only to a file.
+
+"Delete keeps collections" needs Athenæum to keep fileless entries itself,
+as it already does for the history:
+- save the catalog books' collection entries (`collections_cloud`: name,
+  path, order, catalog ID)
+- after each `ReadCollection:_read`, put back the saved entries KOReader
+  dropped, as `History.restore` does after KOReader's startup clean-up
+- write them only through Athenæum, never through `buildEntry` (`addItem`
+  and `updateItem` would crash)
+
+Decision needed: do this, or keep only the history on delete.
 
 ### History before the catalog loads
 
@@ -283,6 +308,8 @@ Each step should leave the plugin working, with tests. Run
 - **Version:** 0.10.0.
 - **Delete** removes the download, not the book: it keeps the book's
   collections and history (see "Delete keeps collections and history").
+  The collections half is reopened: see "KOReader's collections only hold
+  files".
 - The UUID-as-file-name alternative was considered and dropped: files would
   be unreadable outside Athenæum, and too many KOReader views show file
   names.
