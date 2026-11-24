@@ -87,7 +87,7 @@ local function historyOpts(item, path)
     if not item._zen_is_history then return nil end
     local history_path = item._zen_history_path or path
     return { extra_rows = require("athenaeum/history").removeRows(history_path, function()
-        ZenSource.refreshHome({ history_path })
+        ZenSource.historyChanged({ history_path })
     end) }
 end
 
@@ -243,63 +243,53 @@ end
 --- A cloud book was downloaded: open views and Home show the file.
 function ZenSource.downloaded(old_path, new_path)
     ZenSource.replaceInViews(old_path, new_path)
-    ZenSource.refreshHome({ old_path, new_path })
+    ZenSource.changed({ old_path, new_path })
 end
 
---- A book's file came or went (downloaded, or deleted and back to its
--- cloud entry): ZenOS's Home forgets what it cached for these paths and
--- rebuilds now if it's on top, else when it's next shown.
-function ZenSource.refreshHome(paths)
-    local FileManager = require("apps/filemanager/filemanager")
-    local plugin = FileManager.instance and FileManager.instance.zenos
-    local home = plugin and require("common/shared_state").get(plugin, "home")
-    if type(home) ~= "table" then return end
-    if type(home.invalidateBookCache) == "function" then
-        for _i, path in ipairs(paths or {}) do home.invalidateBookCache(path, true) end
-    end
-    if type(home.rebuildActive) == "function" then home.rebuildActive() end
+local function bookSources()
+    local BookSources = package.loaded[MODULE]
+    return type(BookSources) == "table" and BookSources or nil
 end
 
---- True when ZenOS's Home is on top of the file browser, or the file
--- browser is hidden behind it (ZenOS can start on Home with the file
--- browser not shown yet).
+--- True when ZenOS's Home is shown, or about to be (ZenOS can start on
+-- Home with the file browser hidden behind it).
 function ZenSource.homeOnTop()
-    local FileManager = require("apps/filemanager/filemanager")
-    local fm = FileManager.instance
-    if not fm then return false end
-    if fm.invisible == true then return true end
-    local ok, home = pcall(function()
-        return fm.zenos and require("common/shared_state").get(fm.zenos, "home")
-    end)
-    if not ok or type(home) ~= "table" or type(home.isActiveOnTop) ~= "function" then return false end
-    local ok_top, top = pcall(home.isActiveOnTop)
-    return ok_top and top == true
+    local BookSources = bookSources()
+    if not (BookSources and type(BookSources.isHomeOnTop) == "function") then return false end
+    local ok, top = pcall(BookSources.isHomeOnTop)
+    return ok and top == true
+end
+
+--- This device's reading history changed (an entry was removed): ZenOS's
+-- Home reads it again and forgets what it cached for these paths.
+function ZenSource.historyChanged(paths)
+    local BookSources = bookSources()
+    if not (BookSources and type(BookSources.historyChanged) == "function") then return end
+    local ok, err = pcall(BookSources.historyChanged, paths)
+    if not ok then logger.warn("Athenaeum: ZenOS book sources historyChanged():", err) end
 end
 
 --- Cloud books' states (from Concordance) may have changed: ZenOS reads
--- their statuses again (keeping its groupings; a ZenOS without
--- statusChanged rebuilds those too), and the library folder and Home are
--- redrawn.
+-- their statuses again (keeping its groupings) and refreshes Home, and the
+-- library folder is redrawn.
 function ZenSource.statesChanged()
     if not ZenSource.registered then return end
-    local BookSources = package.loaded[MODULE]
-    if type(BookSources) == "table" and type(BookSources.statusChanged) == "function" then
+    local BookSources = bookSources()
+    if BookSources and type(BookSources.statusChanged) == "function" then
         local ok, err = pcall(BookSources.statusChanged)
         if not ok then logger.warn("Athenaeum: ZenOS book sources statusChanged():", err) end
-    else
-        ZenSource.changed()
     end
     Virtual.refresh()
-    ZenSource.refreshHome()
 end
 
---- Tells ZenOS the cloud books changed; with paths, also that their covers
--- or metadata did (ZenOS drops its cached covers for them).
+--- Tells ZenOS the cloud books changed; with paths, also that their covers,
+-- metadata or files did (ZenOS drops its cached covers and Home's details
+-- for them). Home is refreshed.
 function ZenSource.changed(paths)
     if not ZenSource.registered then return end
     books_cache = nil
-    local BookSources = package.loaded[MODULE]
-    if type(BookSources) == "table" and type(BookSources.changed) == "function" then
+    local BookSources = bookSources()
+    if BookSources and type(BookSources.changed) == "function" then
         local ok, err = pcall(BookSources.changed, paths)
         if not ok then logger.warn("Athenaeum: ZenOS book sources changed():", err) end
     end

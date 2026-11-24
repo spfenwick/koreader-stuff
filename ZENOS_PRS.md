@@ -75,6 +75,16 @@ cache for those paths and rebuild it (now if it's on top, else when it's
 next shown). Add `BookSources.historyChanged(paths)` and a public
 `isHomeOnTop()`. The Kindle source gets Home refreshes for free.
 
+**Status (2026-11-24):** committed on ZenOS `custom` (9b4bf684; no PR
+branch yet). Athenæum and Concordance now use `BookSources.changed`,
+`statusChanged`, `historyChanged` and `isHomeOnTop` and assume a ZenOS with
+this change (no feature detection). Removed: Athenæum's `refreshHome`
+(downloads and deletes call `ZenSource.changed(paths)`, "Remove from
+history" calls `historyChanged`) and the "older ZenOS" fallback in
+`statesChanged`; `homeOnTop` is now a wrapper over `isHomeOnTop`.
+Concordance's `zenHome()`, its Home part of `refreshAfterHistory` (now
+`historyChanged(paths)`) and the four `zenos:*` problem reports are gone.
+
 **Plugins lose:** `refreshHome` and `homeOnTop` in
 `athenaeum/zenos_source.lua`. In `concordance/plugin.lua`, `zenHome()`,
 Home's part of `refreshAfterHistory`, and the `zenos:home`,

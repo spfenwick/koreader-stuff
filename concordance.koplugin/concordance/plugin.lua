@@ -414,57 +414,21 @@ end
 local coll_sync
 
 --- The process-wide collections and favorites sync (synced with book data).
---- ZenOS's Home page module, when ZenOS is installed and the file browser
--- is running.
-local function zenHome()
-    local FileManager = package.loaded["apps/filemanager/filemanager"]
-    local fm = type(FileManager) == "table" and FileManager.instance
-    if not fm then return nil end
-    local SharedState = package.loaded["common/shared_state"]
-    -- ZenOS is there (its plugin or its shared state), but Home can't be found.
-    local zen = fm.zenos ~= nil or SharedState ~= nil
-    if not zen then return nil end
-    local why
-    -- (ZenOS always has Home: there's no setting that turns it off.)
-    if fm.zenos == nil then
-        why = "the file browser has no zenos field"
-    elseif type(SharedState) ~= "table" or type(SharedState.get) ~= "function" then
-        why = "common/shared_state.get is missing"
-    else
-        local ok, home = pcall(SharedState.get, fm.zenos, "home")
-        if not ok then
-            why = tostring(home)
-        elseif type(home) ~= "table" then
-            why = "no \"home\" in its shared state"
-        else
-            for _i, name in ipairs({ "isActiveOnTop", "rebuildActive", "invalidateBookCache" }) do
-                if type(home[name]) ~= "function" then
-                    why = "home." .. name .. " is missing"
-                    break
-                end
-            end
-            if not why then return home end
-            -- Still use what's there.
-            Problems.report("zenos:home", "ZenOS's Home may not update after a sync: ZenOS has changed", why)
-            return home
-        end
-    end
-    Problems.report("zenos:home", "ZenOS's Home may not update after a sync: ZenOS has changed", why)
-    return nil
+--- ZenOS's book sources module, when ZenOS is installed.
+local function zenSources()
+    local BookSources = package.loaded["common/book_sources"]
+    return type(BookSources) == "table" and BookSources or nil
 end
 
 --- No menu or dialog is open, so collections and the history can be
 -- changed. ZenOS's Home is a page of its own over the file browser, not a
 -- menu: it counts as idle too, or nothing would arrive while it's shown.
 local function uiIdle()
-    local home = zenHome()
-    if home and type(home.isActiveOnTop) == "function" then
-        local ok, on_top = pcall(home.isActiveOnTop)
+    local BookSources = zenSources()
+    if BookSources and type(BookSources.isHomeOnTop) == "function" then
+        local ok, on_top = pcall(BookSources.isHomeOnTop)
         if ok and on_top == true then return true end
-        if not ok then
-            logger.warn("Concordance: asking ZenOS's Home whether it's shown failed:", on_top)
-            Problems.report("zenos:isActiveOnTop", "Syncs may wait while ZenOS's Home is shown", on_top)
-        end
+        if not ok then logger.warn("Concordance: asking ZenOS whether Home is shown failed:", on_top) end
     end
     return CollSync.uiIdle()
 end
@@ -512,8 +476,8 @@ local function cloudPath(uuids)
 end
 
 --- After books read elsewhere went into the history: the file browser, an
--- open History list and, under ZenOS, Home show the new order (Home rebuilds
--- now if it's shown, else when it's next opened).
+-- open History list and, under ZenOS, Home show the new order (ZenOS
+-- refreshes Home now if it's shown, else when it's next shown).
 local function refreshAfterHistory(paths)
     local FileManager = package.loaded["apps/filemanager/filemanager"]
     local fm = type(FileManager) == "table" and FileManager.instance
@@ -544,23 +508,10 @@ local function refreshAfterHistory(paths)
                 "FileManagerHistory:updateItemTable is missing")
         end
     end
-    local home = zenHome()
-    if home and type(home.rebuildActive) == "function" then
-        if type(home.invalidateBookCache) == "function" then
-            for _, path in ipairs(paths or {}) do
-                local iok, ierr = pcall(home.invalidateBookCache, path, true)
-                if not iok then
-                    logger.warn("Concordance: telling ZenOS's Home about a book failed:", ierr)
-                    Problems.report("zenos:invalidate", "ZenOS's Home may show old details of a book", ierr)
-                    break
-                end
-            end
-        end
-        local ok, err = pcall(home.rebuildActive)
-        if not ok then
-            logger.warn("Concordance: rebuilding ZenOS Home failed:", err)
-            Problems.report("zenos:rebuild", "Redrawing ZenOS's Home after a sync failed", err)
-        end
+    local BookSources = zenSources()
+    if BookSources and type(BookSources.historyChanged) == "function" then
+        local ok, err = pcall(BookSources.historyChanged, paths)
+        if not ok then logger.warn("Concordance: telling ZenOS's Home about the history failed:", err) end
     end
 end
 

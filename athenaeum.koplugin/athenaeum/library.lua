@@ -305,7 +305,7 @@ end
 -- redraw of whoever deleted the file (scheduled before this runs): on a
 -- Kobo that one could still show the folder without the book's cloud
 -- entry, which only came back on leaving and reopening the folder.
--- ZenOS's Home is rebuilt too: its rows show the deleted file until then.
+-- ZenOS's Home is told too: its rows show the deleted file until then.
 local reload_scheduled = false
 local deleted_paths = {}
 local function reloadSoon(after_delete, paths)
@@ -324,8 +324,8 @@ local function reloadSoon(after_delete, paths)
         if after_delete then
             local home_paths = deleted_paths
             deleted_paths = {}
-            local ok, err = pcall(ZenSource.refreshHome, home_paths)
-            if not ok then logger.warn("Athenaeum: rebuilding Home after a delete:", err) end
+            local ok, err = pcall(ZenSource.changed, home_paths)
+            if not ok then logger.warn("Athenaeum: telling ZenOS about a delete:", err) end
         end
     end)
 end

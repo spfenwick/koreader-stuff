@@ -18,10 +18,12 @@ package.path = REPO .. "/athenaeum.koplugin/?.lua;" .. package.path
 
 -- ZenOS's book sources (common/book_sources.lua), which the plugin needs:
 -- records what the plugin registers and reports.
-local ZenOS = { sources = {}, changes = {}, integrated = 0 }
+local ZenOS = { sources = {}, changes = {}, history_changes = {}, integrated = 0, home_on_top = false }
 package.loaded["common/book_sources"] = {
     register = function(id, source) ZenOS.sources[id] = source return true end,
     changed = function(paths) table.insert(ZenOS.changes, paths or false) end,
+    historyChanged = function(paths) table.insert(ZenOS.history_changes, paths or false) end,
+    isHomeOnTop = function() return ZenOS.home_on_top end,
     bookInfo = function() end,
     listingKey = function() end,
     installMetadataIntegration = function() ZenOS.integrated = ZenOS.integrated + 1 return true end,
@@ -1873,20 +1875,19 @@ do
         "history read back after saving: a new first entry")
     check(#ReadHistory.hist == len and ReadHistory.hist[#ReadHistory.hist] ~= last
         and ReadHistory.hist[#ReadHistory.hist].file == last.file, "same length and entries, new tables")
-    -- ZenOS's Home forgets the file and the cloud entry and is rebuilt.
-    local forgot, rebuilt = {}, 0
-    local real_fm = FileManager.instance
-    FileManager.instance = { zenos = { _zen_shared = { home = {
-        invalidateBookCache = function(p, history_changed) if history_changed then forgot[p] = true end end,
-        rebuildActive = function() rebuilt = rebuilt + 1 end,
-    } } } }
-    package.loaded["common/shared_state"] = { get = function(p, key) return p._zen_shared[key] end }
+    -- ZenOS is told the file and the cloud entry changed (Home forgets them).
+    local ZenSourceMod = require("athenaeum/zenos_source")
+    local was_registered = ZenSourceMod.registered
+    ZenSourceMod.registered = true
+    ZenOS.changes = {}
     UIManager.nextTick = function(_self, fn) fn() end
     for _i, fn in ipairs(ticks) do fn() end
-    check(forgot[up] and forgot[cloud1], "Home forgets the deleted file and the cloud entry")
-    eq(rebuilt, 1, "Home rebuilt after the delete")
-    FileManager.instance = real_fm
-    package.loaded["common/shared_state"] = nil
+    local told = {}
+    for _i, paths in ipairs(ZenOS.changes) do
+        for _j, p in ipairs(paths or {}) do told[p] = true end
+    end
+    check(told[up] and told[cloud1], "ZenOS told of the deleted file and the cloud entry")
+    ZenSourceMod.registered = was_registered
     e = ReadHistory.hist[ReadHistory:getIndexByFile(cloud1) or 0]
     check(e and not e.dim, "shown as a cloud book")
     eq(e and e.time, 100, "at its read time")
@@ -2026,20 +2027,14 @@ do
 
     -- ZenOS's Home on top, or the file browser hidden behind it: the
     -- listing is rebuilt out of sight, with no message, and that counts.
-    package.loaded["common/shared_state"] = { get = function(p, key) return p._zen_shared[key] end }
-    FileManager.instance = { zenos = { _zen_shared = { home = { isActiveOnTop = function() return true end } } } }
+    ZenOS.home_on_top = true
     Virtual.setCatalog("/lib", { { id = "r1", title = "One" } })
     check(not Virtual.listingRebuilding(), "Home on top: no message")
     check(not Virtual.listingRebuilding(), "the hidden rebuild counts as the rebuild")
-    FileManager.instance = { invisible = true }
+    ZenOS.home_on_top = false
     Virtual.setCatalog("/lib", { { id = "r3", title = "Three" } })
-    check(not Virtual.listingRebuilding(), "file browser hidden: no message")
-    FileManager.instance = { zenos = { _zen_shared = { home = { isActiveOnTop = function() return false end } } } }
-    Virtual.setCatalog("/lib", { { id = "r1", title = "One" } })
     check(Virtual.listingRebuilding(), "Home not on top: message")
     eq(#shown, 2, "two messages in all")
-
-    package.loaded["common/shared_state"] = nil
     FileManager.instance = real_fm
     for k, fn in pairs(saved) do UIManager[k] = fn end
     Virtual.setCatalog(nil, {})
@@ -2132,14 +2127,12 @@ do
     eq(source.status("/lib/cloud-c1.epub"), nil, "no state: no status")
     ZenSource.state = real_state
     ZenOS.changes = {}
-    ZenSource.statesChanged()
-    eq(#ZenOS.changes, 1, "new states, older ZenOS: everything rebuilt")
     local status_changes = 0
     package.loaded["common/book_sources"].statusChanged = function() status_changes = status_changes + 1 end
     local cached_books = source.books()
     ZenSource.statesChanged()
     eq(status_changes, 1, "new states: ZenOS reads the statuses again")
-    eq(#ZenOS.changes, 1, "groupings kept")
+    eq(#ZenOS.changes, 0, "groupings kept")
     check(source.books() == cached_books, "cloud books list kept")
     package.loaded["common/book_sources"].statusChanged = nil
 
@@ -2171,7 +2164,7 @@ do
     local real_stack = UIManager._window_stack
     local cloud, file = "/lib/cloud-c2.epub", "/lib/Ann - Cloud Two.epub"
     local shared_files = { "/lib/a.epub", cloud }
-    local updates, tbr_reloads, home_rebuilds = 0, 0, 0
+    local updates, tbr_reloads = 0, 0
     local groups = { item_table = {
         { text = "Ann", _zen_files = shared_files },
         { text = "Saga", series_items = { { text = "cloud-c2", path = cloud, filepath = cloud } } },
@@ -2185,12 +2178,7 @@ do
     local tbr = { item_table = {}, _zen_tbr_refresh = function() tbr_reloads = tbr_reloads + 1 end }
     UIManager._window_stack = { { widget = groups }, { widget = detail }, { widget = history },
         { widget = unrelated }, { widget = tbr } }
-    local FileManager = require("apps/filemanager/filemanager")
-    local real_fm = FileManager.instance
-    local plugin = { _zen_shared = { home = { rebuildActive = function() home_rebuilds = home_rebuilds + 1 end } },
-        _zen_shared_registry = { home = true } }
-    FileManager.instance = { zenos = plugin }
-    package.loaded["common/shared_state"] = { get = function(p, key) return p._zen_shared[key] end }
+    ZenOS.changes = {}
     ZenSource.downloaded(cloud, file)
     eq(shared_files[2], file, "group's file list (shared with its book list) has the file")
     eq(groups.item_table[2].series_items[1].path, file, "series group's book has the file")
@@ -2200,10 +2188,10 @@ do
     eq(history.item_table[1].text, "Cloud Two", "other titles kept")
     eq(updates, 3, "views listing the book redrawn")
     eq(tbr_reloads, 1, "To Be Read reloaded")
-    eq(home_rebuilds, 1, "Home rebuilt")
+    local told = ZenOS.changes[1]
+    check(#ZenOS.changes == 1 and told[1] == cloud and told[2] == file,
+        "ZenOS told of the cloud entry and the file (Home refreshes)")
     UIManager._window_stack = real_stack
-    FileManager.instance = real_fm
-    package.loaded["common/shared_state"] = nil
 
     package.loaded["common/db_bookinfo"] = nil
     Virtual.setCatalog(nil, {})

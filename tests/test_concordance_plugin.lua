@@ -548,13 +548,12 @@ package.loaded["athenaeum/library"] = nil
 do
     local um = package.loaded["ui/uimanager"]
     local old_top, old_fm = um.getTopmostVisibleWidget, package.loaded["apps/filemanager/filemanager"]
-    local old_shared = package.loaded["common/shared_state"]
+    local old_sources = package.loaded["common/book_sources"]
     -- ZenOS's real config: a features table, with no home_page in it (Home
     -- can't be turned off).
     local fm = { zenos = { config = { features = { history = true, navbar = true } } } }
     local home_widget, menu = {}, {}
     local top = menu
-    local home = { isActiveOnTop = function() return top == home_widget end }
     um.getTopmostVisibleWidget = function() return top end
     package.loaded["apps/filemanager/filemanager"] = { instance = fm }
     check(not P._uiIdle(), "busy under a menu")
@@ -562,13 +561,13 @@ do
     check(P._uiIdle(), "idle in the file browser")
     top = home_widget
     check(not P._uiIdle(), "busy under an unknown page without ZenOS")
-    package.loaded["common/shared_state"] = { get = function(plugin, key) return plugin == fm.zenos and key == "home" and home end }
+    package.loaded["common/book_sources"] = { isHomeOnTop = function() return top == home_widget end }
     check(P._uiIdle(), "idle on ZenOS's Home")
     top = menu
     check(not P._uiIdle(), "busy under a menu over ZenOS's Home")
     um.getTopmostVisibleWidget = old_top
     package.loaded["apps/filemanager/filemanager"] = old_fm
-    package.loaded["common/shared_state"] = old_shared
+    package.loaded["common/book_sources"] = old_sources
 end
 
 -- ZenOS's incognito mode: its shared config, or its plugin in the file browser or reader.
