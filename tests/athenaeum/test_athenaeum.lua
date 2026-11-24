@@ -1592,13 +1592,20 @@ do
     check(Virtual.isVirtual(cloud_path), "cloud entry back before the reload")
     eq(#ticks, 1, "reload still scheduled")
     local sig = Virtual.catalog_sig
-    local refreshed, real_refresh = 0, Virtual.refresh
-    Virtual.refresh = function() refreshed = refreshed + 1 end
+    local ZenSourceDel = require("athenaeum/zenos_source")
+    local was_registered_del = ZenSourceDel.registered
+    ZenSourceDel.registered = true
+    ZenOS.changes = {}
     local i = 1
     while ticks[i] do ticks[i]() i = i + 1 end -- runs ticks they schedule too
     eq(Virtual.catalog_sig, sig, "reload finds the same cloud books")
-    eq(refreshed, 1, "folder redrawn once more after the delete's own redraw")
-    eq(#ticks, 2, "that redraw comes after the reload")
+    -- ZenOS redraws the folder (on its next tick, after the delete's own
+    -- redraw) when told of the deleted file.
+    eq(#ZenOS.changes, 1, "ZenOS told once, after the reload")
+    local told_del = {}
+    for _j, p in ipairs(ZenOS.changes[1] or {}) do told_del[p] = true end
+    check(told_del[path], "ZenOS told of the deleted file")
+    ZenSourceDel.registered = was_registered_del
 
     -- Several at once: entries back before deleteSelectedFiles redraws;
     -- files it couldn't delete keep their own entry.
@@ -1629,7 +1636,6 @@ do
         "reload agrees")
     FileManager.deleteSelectedFiles, FileManager.deleteFile = saved_delete, saved_delete_file
     os.remove(stuck)
-    Virtual.refresh = real_refresh
     UIManager.nextTick = function(_self, fn) fn() end
 
     -- The library folder setting is a symlink: KOReader's delete dialog
@@ -2089,8 +2095,34 @@ do
         "ZenOS told of old and new books")
     eq(source.books()[1].file, "/lib/cloud-c2.epub", "books rebuilt after a catalog change")
     local key2 = source.listingKey("/lib")
+    ZenOS.changes = {}
     Virtual.setCatalog("/lib", { { id = "c2", title = "Cloud Two" } })
     eq(source.listingKey("/lib"), key2, "same catalog, same key (stable across restarts)")
+    eq(#ZenOS.changes, 0, "same catalog: ZenOS not told (nothing to redraw)")
+    Virtual.setCatalog("/lib", { { id = "c2", title = "Cloud Two", language = "fr" },
+        { id = "c3", title = "Cloud Three" } })
+    paths = ZenOS.changes[#ZenOS.changes]
+    check(#ZenOS.changes == 1 and type(paths) == "table"
+        and table.concat(paths, " ") == "/lib/cloud-c2.epub /lib/cloud-c3.epub",
+        "ZenOS told of a book whose metadata changed (not in the signature) and a new one")
+    -- A stored row's lists are split when first read (tags when the book
+    -- is drawn): that isn't a change.
+    local row_mt = { __index = function(book, key)
+        if key == "tags" then
+            local list = { rawget(book, "_tags") }
+            rawset(book, key, list)
+            return list
+        end
+    end }
+    local function rows()
+        return { setmetatable({ id = "c2", title = "Cloud Two", _tags = "Fantasy" }, row_mt) }
+    end
+    Virtual.setCatalog("/lib", rows())
+    local _tags = Virtual.books[1].tags
+    ZenOS.changes = {}
+    Virtual.setCatalog("/lib", rows())
+    eq(#ZenOS.changes, 0, "tags read on the old row: no change")
+    Virtual.setCatalog("/lib", { { id = "c2", title = "Cloud Two" } })
     local real_extra = Virtual.listingExtra
     Virtual.listingExtra = function() return "badges" end
     check(source.listingKey("/lib") ~= key2, "key changes with badge settings")

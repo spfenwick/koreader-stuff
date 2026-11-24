@@ -232,20 +232,19 @@ function ZenSource.historyChanged(paths)
 end
 
 --- Cloud books' states (from Concordance) may have changed: ZenOS reads
--- their statuses again (keeping its groupings) and refreshes Home, and the
--- library folder is redrawn.
+-- their statuses again (keeping its groupings) and refreshes its open
+-- views (the file browser when it lists cloud books).
 function ZenSource.statesChanged()
     if not ZenSource.registered then return end
     local BookSources = bookSources()
-    if BookSources and type(BookSources.statusChanged) == "function" then
-        local ok, err = pcall(BookSources.statusChanged)
-        if not ok then logger.warn("Athenaeum: ZenOS book sources statusChanged():", err) end
-    end
-    Virtual.refresh()
+    if not (BookSources and type(BookSources.statusChanged) == "function") then return end
+    local ok, err = pcall(BookSources.statusChanged)
+    if not ok then logger.warn("Athenaeum: ZenOS book sources statusChanged():", err) end
 end
 
 --- Which books get a badge, or which badge, changed (a badge setting):
--- ZenOS repaints its covers.
+-- ZenOS repaints its covers (and redraws the file browser when it lists
+-- cloud books).
 function ZenSource.badgesChanged()
     if not ZenSource.registered then return end
     local BookSources = bookSources()
@@ -256,7 +255,7 @@ end
 
 --- Tells ZenOS the cloud books changed; with paths, also that their covers,
 -- metadata or files did (ZenOS drops its cached covers and Home's details
--- for them). Home is refreshed.
+-- for them). ZenOS's open views are refreshed.
 function ZenSource.changed(paths)
     if not ZenSource.registered then return end
     books_cache = nil

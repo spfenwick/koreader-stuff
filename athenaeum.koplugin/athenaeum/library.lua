@@ -106,7 +106,6 @@ end
 -- rebuilt: plain list rows make room for the badge).
 function Library.repaint()
     ZenSource.badgesChanged()
-    Virtual.refresh()
     local FileManager = require("apps/filemanager/filemanager")
     if FileManager.instance then UIManager:setDirty(FileManager.instance, "ui") end
 end
@@ -161,14 +160,12 @@ end
 
 -- Loading into the file browser --------------------------------------------------
 
--- The folder is redrawn only when the cloud books shown changed (ZenOS's
--- cached listing is keyed on the same signature, Virtual.listingKey()).
+-- ZenOS redraws the folder only when cloud books shown in it changed
+-- (Virtual.notifyChanged tells it which).
 local function showCatalog(folder, cloud)
-    local before = Virtual.catalog_sig
     Virtual.setCatalog(folder, cloud)
     -- A refetched cover keeps its file name: don't show the old image.
     Virtual.forgetDecodedCovers()
-    if Virtual.catalog_sig ~= before then Virtual.refresh() end
 end
 
 --- Library.load() with a message up, for when it's slow (many cloud books
@@ -302,11 +299,12 @@ local function libraryPath(path)
     end
 end
 
--- After a delete, the library folder is also redrawn once more, after the
--- redraw of whoever deleted the file (scheduled before this runs): on a
--- Kobo that one could still show the folder without the book's cloud
--- entry, which only came back on leaving and reopening the folder.
--- ZenOS's Home is told too: its rows show the deleted file until then.
+-- After a delete, ZenOS is told of the deleted files once the catalog is
+-- reloaded. It redraws the library folder once more, after the redraw of
+-- whoever deleted the file (scheduled before this runs): on a Kobo that
+-- one could still show the folder without the book's cloud entry, which
+-- only came back on leaving and reopening the folder. Home forgets them
+-- too: its rows show the deleted file until then.
 local reload_scheduled = false
 local deleted_paths = {}
 local function reloadSoon(after_delete, paths)
@@ -316,12 +314,7 @@ local function reloadSoon(after_delete, paths)
     reload_scheduled = true
     UIManager:nextTick(function()
         reload_scheduled = false
-        local before = Virtual.catalog_sig
         Guard.call("jobs", Library.load)
-        -- Library.load() redraws when the cloud books changed.
-        if after_delete and Virtual.catalog_sig == before then
-            UIManager:nextTick(function() Guard.call("jobs", Virtual.refresh) end)
-        end
         if after_delete then
             local home_paths = deleted_paths
             deleted_paths = {}

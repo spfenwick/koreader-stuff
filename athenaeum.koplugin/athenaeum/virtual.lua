@@ -107,16 +107,43 @@ function Virtual.setCatalog(folder, books)
     Virtual.notifyChanged(old)
 end
 
---- Tells ZenOS the cloud books changed: groupings are rebuilt, and its
--- cached covers and metadata for these books (and the current ones)
--- dropped. A refetched cover keeps its file name.
+-- What ZenOS shows of a cloud book (the stored columns, as loaded): when
+-- it differs, ZenOS drops what it cached for the book. A refetched cover
+-- keeps its file name, but not its download state.
+local SHOWN_FIELDS = { "title", "authors", "tags", "language", "added", "size",
+    "series", "series_index", "pages", "cover_href", "cover_file", "cover_w",
+    "cover_h", "cover_failed", "cover_stale" }
+
+local function shown(book)
+    local parts = {}
+    for i, key in ipairs(SHOWN_FIELDS) do
+        -- A stored row keeps lists as text ("_authors"), split when first read.
+        local value = rawget(book, "_" .. key)
+        if value == nil then value = rawget(book, key) end
+        if type(value) == "table" then value = table.concat(value, "\31") end
+        parts[i] = tostring(value)
+    end
+    return table.concat(parts, "\t")
+end
+
+--- Tells ZenOS which cloud books changed since old_books (gone, changed,
+-- then new ones), if any: groupings are rebuilt, its cached covers and
+-- metadata for them dropped, and its open views refreshed (the file
+-- browser when it shows the library folder or one above it).
 function Virtual.notifyChanged(old_books)
     if not ZenSource.registered then return end
-    local paths = {}
-    for _i, list in ipairs({ old_books or {}, Virtual.books }) do
-        for _j, book in ipairs(list) do paths[#paths + 1] = book.path end
+    local now = {}
+    for _i, book in ipairs(Virtual.books) do now[book.path] = book end
+    local paths, before = {}, {}
+    for _i, book in ipairs(old_books or {}) do
+        before[book.path] = true
+        local current = now[book.path]
+        if not current or shown(current) ~= shown(book) then paths[#paths + 1] = book.path end
     end
-    ZenSource.changed(paths)
+    for _i, book in ipairs(Virtual.books) do
+        if not before[book.path] then paths[#paths + 1] = book.path end
+    end
+    if #paths > 0 then ZenSource.changed(paths) end
 end
 
 --- Key for ZenOS's cached listings that show the cloud books: changes with
@@ -144,19 +171,6 @@ function Virtual.listingRebuilding()
     -- Tasks run before the next repaint, which draws the new listing.
     UIManager:nextTick(function() UIManager:close(msg) end)
     return true
-end
-
--- Call after the catalog changes: redraws the library folder, or a folder
--- above it (which counts its books, or lists them in flat view), if it's
--- shown. ZenOS's cached listing has a new key by then, so it's rebuilt.
-function Virtual.refresh()
-    if not Virtual.folder then return end
-    local FileManager = require("apps/filemanager/filemanager")
-    local fc = FileManager.instance and FileManager.instance.file_chooser
-    local path = fc and normalize(fc.path)
-    local shown = path and (path == Virtual.folder or path == ""
-            or Virtual.folder:sub(1, #path + 1) == path .. "/")
-    if shown then fc:refreshPath() end
 end
 
 local function attributes(book)
@@ -593,13 +607,12 @@ function Virtual.install()
         logger.warn("Athenaeum: not installed:", Guard.statusText())
         return false
     end
-    -- If a hook fails later: no more cloud books in the folder.
+    -- If a hook fails later: no more cloud books in the folder (ZenOS,
+    -- told they're gone, redraws it).
     Guard.on_failure.library = function()
         local folder = Virtual.folder
         Virtual.setCatalog(folder, {})
         Virtual.forgetDecodedCovers()
-        local UIManager = require("ui/uimanager")
-        UIManager:nextTick(function() pcall(Virtual.refresh) end)
     end
     -- Before the file browser lists the folder (plugins start first), so
     -- ZenOS's saved listing is used.
