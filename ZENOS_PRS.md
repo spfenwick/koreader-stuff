@@ -8,7 +8,7 @@ upstream as #892 on 2026-11-17). Base each PR on upstream's `dev`.
 Each entry: what's wrong in ZenOS, the fix, and what goes away in the
 plugins. When one merges, remove the plugin code and update this file.
 
-Suggested order: 1, 3, 4, 5 (2 is no longer needed by the plugins).
+Suggested order: 1, 3, 4, 5, 6 (2 is no longer needed by the plugins).
 
 Open upstream (2026-11-25):
 - [#911](https://github.com/xZenLabs/zen-os/pull/911) "Ask book sources when
@@ -203,6 +203,61 @@ rows (no covers) itself. Not yet checked in the emulator with cloud books.
 
 **Plugins lose:** `Badge.installHome`, `forHome`, `badgeHomeCover`,
 `coverRect` and `Badge.place` in `athenaeum/badge.lua`.
+
+## 6. Book sources list their books in folder listings
+
+**In ZenOS:** a source's books appear in the Authors, Series, Tags and
+Languages tabs, Home, To Be Read and the book switcher, but not in a
+folder's listing. `listingKey()` only keys ZenOS's listing cache; the
+source has to add the books itself, "e.g. by wrapping
+FileChooser:getList" (`common/book_sources.lua`). The Kindle source isn't
+in any folder listing.
+
+So Athenæum wraps `FileChooser:getList` (`installListing` in
+`athenaeum/virtual.lua`), the most fragile hook it has left:
+- it builds each cloud item with KOReader's `getListItem(dir, name,
+  fullpath, attributes, collate)` and fakes the file attributes (size,
+  dates) from the catalog;
+- with no `collate` it pads the list with `true`, as KOReader does when
+  only counting (book counts in the folders above);
+- for the title, author and series sorts it swaps `ui.bookinfo.getDocProps`
+  for the duration of the listing (`withCloudDocProps`), because those
+  sorts ask CoverBrowser's `getDocProps`, which has no row for a path
+  without a file;
+- it sets `doc_props` on each item for ZenOS's series grouping, and the
+  badge indent for plain list rows;
+- ZenOS wraps `getList` too (`context_menu.lua` for the status filter,
+  `browser_flat_view_compat.lua` for flat view). If either one ever
+  replaces it instead of wrapping it, the cloud books disappear from the
+  Library with no error.
+
+Reading the code (not checked on a device): the cloud items never go
+through `FileChooser:show_file`, so ZenOS's status filter and KOReader's
+file filters don't apply to them.
+
+**Fix:** an optional source function `listing(folder)` → `{ { file = path,
+info = bookinfo fields, attr = { size, modification, access, change } },
+… }`, or nil for folders it has nothing in. ZenOS adds these entries where
+it builds a listing (its `getList` wrapper, or its flat view scan), as it
+would a file:
+- through `show_file`, so the status filter applies;
+- with `getListItem`, the given attributes and `doc_props` from `info`, so
+  every sort and the series grouping work without a `getDocProps` lookup;
+- counted in the folders above, and in flat view;
+- skipping a path that's already listed as a real file (a file that turned
+  up at a source book's name).
+
+`listingKey()` stays: it's what tells the cache those entries changed.
+
+**Plugins lose:** in `athenaeum/virtual.lua`, `installListing` (the
+`getList` hook), `addCloudItems`, `withCloudDocProps` and the fake
+attributes; and the silent-failure case, where Athenæum's hook is bypassed
+without an error. Athenæum's search results still build their own items
+(`Virtual.listItem`, `athenaeum/search.lua`) unless ZenOS's search asks the
+sources too.
+
+Bigger than #4. It replaces the most fragile KOReader hook left, so worth
+doing after #5.
 
 ## Not worth a PR
 
