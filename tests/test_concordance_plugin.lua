@@ -596,6 +596,59 @@ do
     package.loaded["config/manager"] = old_mgr
 end
 
+-- Problems with what Concordance reads from ZenOS outside BookSources:
+-- incognito mode's setting and the metadata service.
+do
+    local Problems = require("concordance/problems")
+    local old_mgr = package.loaded["config/manager"]
+    local old_service = package.loaded["modules/filebrowser/metadata/service"]
+    local old_preload = package.preload["modules/filebrowser/metadata/service"]
+    local function checkWith(installed, manager)
+        Problems.reset()
+        P._setZenosInstalled(installed)
+        P._resetZenOSCheck()
+        package.loaded["config/manager"] = manager
+        return P.checkZenOS()
+    end
+    local function mgr(config) return { get = function() return config end } end
+
+    check(checkWith(false, nil) == 0 and not Problems.has("zenos:incognito"), "no ZenOS: nothing to check")
+    check(checkWith(true, mgr({ features = { incognito_mode = false } })) == 0
+        and not Problems.has("zenos:incognito"), "ZenOS's config as expected: no problem")
+    check(checkWith(true, nil) == 1 and Problems.has("zenos:incognito"), "ZenOS without config/manager: a problem")
+    check(checkWith(true, mgr({ features = {} })) == 1 and Problems.has("zenos:incognito"),
+        "incognito_mode renamed: a problem")
+    check(checkWith(true, mgr({ features = "?" })) == 1, "no features table: a problem")
+    check(checkWith(true, { get = function() error("boom") end }) == 1, "a failing get: a problem")
+    Problems.reset()
+    P._resetZenOSCheck()
+    check(P.checkZenOS() == 1 and P.checkZenOS() == 0, "checked once per run")
+
+    -- At run time: a get that fails is reported too.
+    Problems.reset()
+    package.loaded["config/manager"] = { get = function() error("boom") end }
+    check(P.incognito() == false and Problems.has("zenos:incognito"), "incognito(): a failing get reported")
+
+    -- The metadata service missing: reported only when ZenOS is installed.
+    package.loaded["modules/filebrowser/metadata/service"] = nil
+    package.preload["modules/filebrowser/metadata/service"] = function() error("moved") end
+    Problems.reset()
+    P._setZenosInstalled(false)
+    check(P.installMetadataHook() == false and not Problems.has("zenos:editsEmbedded"),
+        "no ZenOS: no metadata service, no problem")
+    Problems.reset()
+    P._setZenosInstalled(true)
+    check(P.installMetadataHook() == false and Problems.has("zenos:editsEmbedded"),
+        "ZenOS without its metadata service: a problem")
+
+    package.preload["modules/filebrowser/metadata/service"] = old_preload
+    package.loaded["modules/filebrowser/metadata/service"] = old_service
+    package.loaded["config/manager"] = old_mgr
+    P._setZenosInstalled(nil)
+    P._resetZenOSCheck()
+    Problems.reset()
+end
+
 -- The device's name: progress sync's "Device hostname", else the model.
 do
     local kosync = dev.dir .. "/kosync.lua"

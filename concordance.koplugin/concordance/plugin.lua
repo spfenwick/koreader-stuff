@@ -346,6 +346,7 @@ function Plugin.incognito()
     if type(Manager) == "table" and type(Manager.get) == "function" then
         local ok, config = pcall(Manager.get)
         if ok and incognitoIn(config) then return true end
+        if not ok then Plugin.reportIncognito("config/manager's get failed: " .. tostring(config)) end
     end
     for _, name in ipairs({ "apps/filemanager/filemanager", "apps/reader/readerui" }) do
         local mod = package.loaded[name]
@@ -355,6 +356,59 @@ function Plugin.incognito()
     end
     return false
 end
+
+--- Whether ZenOS is installed and turned on, from its plugin folder rather
+-- than its modules (those are what may have moved). Read once.
+local zenos_installed
+function Plugin.zenosInstalled()
+    if zenos_installed == nil then
+        local ok, versions = pcall(Plugin.pluginVersions)
+        zenos_installed = ok and type(versions) == "table" and versions.zenos ~= nil or false
+    end
+    return zenos_installed
+end
+--- Tests: say whether ZenOS is installed (nil: look again), and check again.
+function Plugin._setZenosInstalled(v) zenos_installed = v end
+
+--- ZenOS is installed but Concordance can't read its incognito setting:
+-- incognito() would always say no, and books read in incognito mode would
+-- be recorded and synced.
+function Plugin.reportIncognito(why, from_check)
+    logger.warn("Concordance: can't tell whether ZenOS's incognito mode is on:", why)
+    Problems.report("zenos:incognito",
+        "Concordance can't tell when ZenOS's incognito mode is on: books read in it may be synced: ZenOS has changed",
+        why, from_check)
+end
+
+--- What's wrong with ZenOS's incognito setting as Concordance reads it, or
+-- nil. ZenOS merges its defaults into its config, so incognito_mode is
+-- always there (false when off).
+function Plugin.incognitoProblem()
+    local Manager = package.loaded["config/manager"]
+    if type(Manager) ~= "table" or type(Manager.get) ~= "function" then
+        return "config/manager isn't loaded"
+    end
+    local ok, config = pcall(Manager.get)
+    if not ok then return "config/manager's get failed: " .. tostring(config) end
+    if type(config) ~= "table" or type(config.features) ~= "table" then return "its config has no features" end
+    if type(config.features.incognito_mode) ~= "boolean" then return "its config has no features.incognito_mode" end
+    return nil
+end
+
+--- Checks, once per KOReader process and after ZenOS has started, what
+-- Concordance relies on in ZenOS outside BookSources (BookSources is
+-- feature-detected where it's used). Returns the number of problems.
+local checked_zenos = false
+function Plugin.checkZenOS()
+    if checked_zenos then return 0 end
+    checked_zenos = true
+    if not Plugin.zenosInstalled() then return 0 end
+    local why = Plugin.incognitoProblem()
+    if not why then return 0 end
+    Plugin.reportIncognito(why, true)
+    return 1
+end
+function Plugin._resetZenOSCheck() checked_zenos = false end
 
 --- The process-wide annotation sync (KOReader side).
 function Plugin.annSync()
@@ -569,7 +623,18 @@ end
 -- server); does nothing without ZenOS. Returns true if the hook is in place.
 function Plugin.installMetadataHook()
     local ok, Service = pcall(require, "modules/filebrowser/metadata/service")
-    if not ok or type(Service) ~= "table" then return false end -- no ZenOS
+    if not ok or type(Service) ~= "table" then
+        -- No ZenOS, or (when it's installed) its metadata service moved:
+        -- its edits would then go into the EPUB and sync as clears.
+        if Plugin.zenosInstalled() then
+            local why = ok and "modules/filebrowser/metadata/service isn't a module"
+                or "modules/filebrowser/metadata/service can't be loaded"
+            logger.warn("Concordance: ZenOS's metadata service not found:", Service)
+            Problems.report("zenos:editsEmbedded",
+                "Edits in ZenOS's metadata editor may not sync: ZenOS has changed", why)
+        end
+        return false
+    end
     return (require("concordance/metadatahook").install(Service, {
         active = function() return Plugin.statsServer() ~= nil end,
         logger = logger,

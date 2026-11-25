@@ -116,7 +116,12 @@ function Concordance:init()
     Plugin.setupIdentity()
     if not started then
         started = true
-        UIManager:scheduleIn(STARTUP_DELAY, function() self.trigger("start") end)
+        UIManager:scheduleIn(STARTUP_DELAY, function()
+            -- ZenOS starts after Concordance: its config is loaded by now.
+            local ok, err = pcall(Plugin.checkZenOS)
+            if not ok then logger.warn("Concordance: checking ZenOS failed:", err) end
+            self.trigger("start")
+        end)
     end
     Updates.register(function() return self:updateEntries() end)
     Updates.scheduleCheck()
