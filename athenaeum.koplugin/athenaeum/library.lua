@@ -48,7 +48,6 @@ local Virtual = require("athenaeum/virtual")
 
 Virtual.canFetchCovers = Covers.canFetch
 Virtual.requestCovers = Covers.request
-Virtual.coversBusy = Covers.busy
 -- ZenOS's cached covers for these books are stale once theirs arrive.
 Covers.on_arrived = function(books)
     local paths = {}

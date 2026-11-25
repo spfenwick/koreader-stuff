@@ -250,8 +250,10 @@ ZenOS (`common/book_sources.lua` unless noted):
   listing (either install order works); `isFileless(item or path)`.
 - Covers: ZenOS never sends a source's book without a file to
   CoverBrowser's extraction. It calls the source's optional
-  `fetchCovers(paths)` instead, and `isExtractingInBackground` also asks
-  `fetchingCovers()`.
+  `fetchCovers(paths)` instead. ZenOS keeps CoverBrowser waiting
+  (`isExtractingInBackground`) until the source reports each path with
+  `changed(paths)`, or for `COVER_WAIT` (60 s); no `fetchingCovers()` in
+  the contract. A failing `fetchCovers` isn't waited for.
 - `getDocProps` skips CoverBrowser's database for a book without a file.
 - Specs: unit specs for all of the above; `book_listing_scans_spec.lua`
   classifies every `lfs.dir` user in ZenOS and fails on a new one (a book
@@ -265,8 +267,9 @@ ZenOS (`common/book_sources.lua` unless noted):
 Athenæum 0.10.3 (uncommitted) needs a ZenOS with it (Guard's startup check:
 `addToListing`, `folderBooks`, `isFileless`). It dropped `addCloudItems`,
 `withCloudDocProps`, the count padding, its `extractInBackground` /
-`isExtractingInBackground` hooks (now the source's `fetchCovers` /
-`fetchingCovers`) and the "Include cloud books in Authors, Series and
+`isExtractingInBackground` hooks (now the source's `fetchCovers`; since
+0.10.5 every path asked for is reported with `changed()`, including a
+queued batch that can't start) and the "Include cloud books in Authors, Series and
 Tags" setting (`zenos_groups`): `books()` gives the folder listing too, so
 the two can't differ. `books()` gives `attr` (date added, size). Its
 `getList` hook remains, slimmed down: the "Rebuilding library…" message

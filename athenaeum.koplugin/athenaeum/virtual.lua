@@ -207,7 +207,6 @@ Virtual.attributes = attributes
 -- Hooks set by the library (see library.lua and covers.lua).
 Virtual.canFetchCovers = nil -- function() -> true if covers can be downloaded now
 Virtual.requestCovers = nil  -- function(books) -> true if they'll be downloaded
-Virtual.coversBusy = nil     -- function() -> true while downloading
 Virtual.detailsButtons = nil -- function(id, full_book, close) -> ButtonDialog rows
 Virtual.stateText = nil      -- function(id) -> a line on the book's status from other devices, or nil
 
@@ -471,11 +470,6 @@ function Virtual.fetchCovers(paths)
         end
         ZenSource.changed(missed)
     end
-end
-
---- True while covers are downloading (ZenOS keeps CoverBrowser waiting).
-function Virtual.fetchingCovers()
-    return Virtual.coversBusy and Virtual.coversBusy() or false
 end
 
 local function installOpen()

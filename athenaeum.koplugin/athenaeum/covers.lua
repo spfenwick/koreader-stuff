@@ -13,7 +13,8 @@ Covers.request(books)
     fetchCovers, see virtual.lua's Virtual.fetchCovers). Several requests
     while a download runs are batched into the next one.
 Covers.busy()
-    true while downloading, so file browsers keep polling for covers.
+    true while downloading. ZenOS keeps CoverBrowser waiting by itself,
+    until on_arrived reports each book asked for.
 ]]
 
 local lfs = require("libs/libkoreader-lfs")
@@ -362,15 +363,24 @@ local function pollCovers()
             b.cover_retry_at = now + RETRY_SOON
         end
     end
-    -- Start the next batch before reporting, so file browsers polling
-    -- busy() keep waiting for it.
+    -- Start the next batch before reporting, so busy() stays true for it.
     local next_books = {}
     for _id, b in pairs(Covers.pending) do table.insert(next_books, b) end
     Covers.pending, Covers.pending_count = {}, 0
-    if #next_books > 0 then start(next_books) end
+    local reported = job.books
+    if #next_books > 0 and not start(next_books) then
+        -- Couldn't start: reported too (ZenOS waits for every book asked
+        -- for), to try again soon.
+        reported = {}
+        for _i, b in ipairs(job.books) do reported[#reported + 1] = b end
+        for _i, b in ipairs(next_books) do
+            b.cover_retry_at = now + RETRY_SOON
+            reported[#reported + 1] = b
+        end
+    end
     -- Every book asked for changed state (cover, none, or retry later).
-    if Covers.on_arrived and #job.books > 0 then
-        local ok, err = pcall(Covers.on_arrived, job.books)
+    if Covers.on_arrived and #reported > 0 then
+        local ok, err = pcall(Covers.on_arrived, reported)
         if not ok then logger.warn("Athenaeum: covers: on_arrived:", err) end
     end
     if Covers.on_done then Covers.on_done(result) end

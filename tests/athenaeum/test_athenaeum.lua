@@ -2367,14 +2367,14 @@ do
     check(source.owns("/lib/Ann, Bo - Cloud One.epub") and not source.owns("/lib/a.epub"), "owns cloud books only")
 
     -- Covers: ZenOS asks the source for cloud books' covers (never extracted).
-    local real_request, real_busy = Virtual.requestCovers, Virtual.coversBusy
+    local real_request = Virtual.requestCovers
     local requested
     Virtual.requestCovers = function(list) requested = list return true end
-    Virtual.coversBusy = function() return true end
     source.fetchCovers({ "/lib/Ann, Bo - Cloud One.epub", "/lib/a.epub" })
     check(requested and #requested == 1 and requested[1].path == "/lib/Ann, Bo - Cloud One.epub",
         "fetchCovers: the cloud book's cover requested, other paths ignored")
-    check(source.fetchingCovers() == true, "fetchingCovers while downloading")
+    -- ZenOS keeps CoverBrowser waiting by itself, until changed() reports them.
+    check(source.fetchingCovers == nil, "no fetchingCovers")
     -- Can't download now: shown without a cover for now, ZenOS told.
     Virtual.requestCovers = function() return false end
     ZenOS.changes = {}
@@ -2382,7 +2382,7 @@ do
     check(Virtual.by_path["/lib/Ann, Bo - Cloud One.epub"].cover_retry_at ~= nil
         and #ZenOS.changes == 1, "fetchCovers offline: retried later, ZenOS told")
     Virtual.by_path["/lib/Ann, Bo - Cloud One.epub"].cover_retry_at = nil
-    Virtual.requestCovers, Virtual.coversBusy = real_request, real_busy
+    Virtual.requestCovers = real_request
 
     -- Cover badges: the icon of the badge the book gets (ZenOS paints it).
     local Badge = require("athenaeum/badge")
@@ -2507,6 +2507,36 @@ do
     ZenOS.changes = {}
     Covers.on_arrived({ Virtual.books[1] })
     check(ZenOS.changes[1] and ZenOS.changes[1][1] == "/lib/Cloud Two.epub", "cover arrival reported")
+
+    -- ZenOS waits for every book it asked covers for: books queued behind a
+    -- batch whose download can't start are reported too, retried soon.
+    do
+        local ffiutil = require("ffi/util")
+        local UIManager = require("ui/uimanager")
+        local real = { ffiutil.isSubProcessDone, ffiutil.readAllFromFD, ffiutil.runInSubProcess,
+            UIManager.scheduleIn, Covers.on_arrived, Covers.config }
+        ffiutil.isSubProcessDone = function() return true end
+        ffiutil.readAllFromFD = function()
+            return require("dump")({ results = { a = { file = "a/a.webp", w = 10, h = 15 } } })
+        end
+        ffiutil.runInSubProcess = function() return nil, "no fork" end
+        UIManager.scheduleIn = function() end
+        Covers.config = { dir = "/covers" }
+        local done = { id = "a", path = "/lib/A.epub" }
+        local queued = { id = "b", path = "/lib/B.epub" }
+        local reported
+        Covers.on_arrived = function(books) reported = books end
+        Covers.job = { pid = 1, fd = 1, books = { done }, started = require("athenaeum/timing").start() }
+        Covers.pending, Covers.pending_count = { b = queued }, 1
+        Covers.poll()
+        check(reported and #reported == 2 and reported[1] == done and reported[2] == queued,
+            "unstarted batch reported with the finished one")
+        check(done.cover == "/covers/a/a.webp" and queued.cover_retry_at ~= nil and not Covers.busy(),
+            "finished cover kept, queued one retried soon, not busy")
+        ffiutil.isSubProcessDone, ffiutil.readAllFromFD, ffiutil.runInSubProcess = real[1], real[2], real[3]
+        UIManager.scheduleIn, Covers.on_arrived, Covers.config = real[4], real[5], real[6]
+        Covers.pending, Covers.pending_count = {}, 0
+    end
 
     -- ZenOS's tag groups are left alone.
     check(db.getGroupedByTags == orig_tags, "tags not hooked")
