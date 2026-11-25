@@ -36,6 +36,7 @@ local lfs = require("libs/libkoreader-lfs")
 local _ = require("gettext")
 local Guard = require("athenaeum/guard")
 local Virtual = require("athenaeum/virtual")
+local ZenSource = require("athenaeum/zenos_source")
 
 local History = {
     installed = false,
@@ -279,7 +280,7 @@ function History.moved(moves)
     -- the entries it can tell are cloud ones.
     local list = {}
     for _i, e in ipairs(History.saved and History.saved() or {}) do list[#list + 1] = e end
-    local changed, saved_changed = false, false
+    local changed, saved_changed = {}, false
     for _i, m in ipairs(moves) do
         local old, new = m[1], m[2]
         if type(old) == "string" and type(new) == "string" and old ~= new then
@@ -293,7 +294,8 @@ function History.moved(moves)
                     table.remove(rh.hist, j)
                 end
                 insertAt(rh, new, time)
-                changed = true
+                changed[#changed + 1] = old
+                changed[#changed + 1] = new
             end
             local kept, time, id, moved = {}, nil, nil, false
             for _j, e in ipairs(list) do
@@ -312,13 +314,12 @@ function History.moved(moves)
             end
         end
     end
-    if changed then
+    if #changed > 0 then
         rh:_flush()
-        -- New entry tables throughout (see reconcile).
-        rh:reload(true)
+        ZenSource.historyChanged(changed) -- see reconcile
     end
     if saved_changed and History.save then History.save("history_cloud", list) end
-    return changed
+    return #changed > 0
 end
 
 -- After a catalog load, and after a delete ---------------------------------------
@@ -327,8 +328,10 @@ end
 -- with a file opens it (a book downloaded to its cloud entry's path); a
 -- catalog book's cloud entry is shown and doesn't open (a book deleted,
 -- greyed out by KOReader); an entry for a book gone from the catalog is
--- greyed out. changed: the history was changed already (save it).
+-- greyed out. changed: paths whose entries were changed already (the
+-- history is saved then), or nil.
 local function reconcile(changed)
+    changed = changed or {}
     local rh = require("readhistory")
     for i, e in ipairs(rh.hist) do
         local cloud = Virtual.by_path[e.file] ~= nil
@@ -336,12 +339,12 @@ local function reconcile(changed)
             if e.dim or e.select_enabled then
                 rh.hist[i] = copy(e)
                 rh.hist[i].dim, rh.hist[i].select_enabled = false, false
-                changed = true
+                changed[#changed + 1] = e.file
             end
         elseif not e.select_enabled and isFile(e.file) then
             rh.hist[i] = copy(e)
             rh.hist[i].dim, rh.hist[i].select_enabled = false, true
-            changed = true
+            changed[#changed + 1] = e.file
         elseif History.isCloudPath(e.file) then
             -- Not the catalog's: gone from it, greyed out like a missing
             -- file (once the catalog is known). (A book on the device under
@@ -350,26 +353,23 @@ local function reconcile(changed)
             local gone = Virtual.folder ~= nil and not matched[idOf(e.file) or false]
             if e.dim ~= gone then
                 e.dim = gone
-                changed = true
+                changed[#changed + 1] = e.file
             end
         end
     end
-    if changed then
+    if #changed > 0 then
         rh:_flush()
-        -- Read back from the file just saved, so every entry is a new table.
-        -- ZenOS's "last read" sort keeps its own index of the history while
-        -- the history's length and first and last entries (the tables) stay
-        -- the same, so an entry changed in the middle went unnoticed: a
-        -- deleted book's cloud entry sorted by date added until the history
-        -- was next reloaded. Our _read and clearMissing hooks keep cloud
-        -- entries as they are through the re-read.
-        rh:reload(true)
+        -- ZenOS's "last read" sort keeps its own index of the history, which
+        -- can't see an entry changed in the middle (a deleted book's cloud
+        -- entry put back would sort by date added): telling it drops the
+        -- index at once, before the caller's redraw, and refreshes Home.
+        ZenSource.historyChanged(changed)
     end
 end
 
 function History.reconcile()
     if not History.installed or not Guard.ok("history") then return end
-    reconcile(false)
+    reconcile(nil)
 end
 
 --- Before KOReader deletes catalog books' files: their history entries'
@@ -393,11 +393,11 @@ end
 function History.afterDelete(kept)
     if not History.installed or not Guard.ok("history") or next(kept or {}) == nil then return end
     local rh = require("readhistory")
-    local changed = false
+    local changed = {}
     for path, time in pairs(kept) do
         if not isFile(path) and not rh:getIndexByFile(path) then
             insertAt(rh, path, time)
-            changed = true
+            changed[#changed + 1] = path
         end
     end
     reconcile(changed)

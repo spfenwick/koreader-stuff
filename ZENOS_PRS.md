@@ -8,7 +8,7 @@ upstream as #892 on 2026-11-17). Base each PR on upstream's `dev`.
 Each entry: what's wrong in ZenOS, the fix, and what goes away in the
 plugins. When one merges, remove the plugin code and update this file.
 
-Suggested order: 1, 2, 3, 4, 5. The first two are small.
+Suggested order: 1, 3, 4, 5 (2 is no longer needed by the plugins).
 
 ## 1. Opens and long-presses ask the book sources everywhere
 
@@ -60,8 +60,26 @@ reloaded.
 revision bumped from `ReadHistory:_flush`. Neither needs the realpath walk
 the memo exists to avoid.
 
-**Plugins lose:** the `rh:reload(true)` workaround (and its comment) in
-`concordance/histsync.lua` and `athenaeum/history.lua`.
+**Status (2026-11-25): not needed by the plugins.** #3's
+`BookSources.historyChanged` drops the memo (on the `refresh-views` PR
+branch even with no file browser open, e.g. in the reader; `custom` drops it
+only when the file browser exists). Both plugins now call it instead of
+`rh:reload(true)`: Concordance's `refreshAfterHistory` tells ZenOS first and
+leaves the file browser's redraw to it; Athenaeum's `History.reconcile` and
+`History.moved` pass the paths they changed. Checked in the emulator
+(`tests/athenaeum/e2e_history_order.py`, a retime and a move in the middle
+of the history, sorted by last read; each also run without the
+notification, which shows the stale order).
+
+The memo goes stale only when nothing re-reads history.lua in between:
+KOReader's `_flush` doesn't update `last_read_time`, so the next `reload()`
+usually re-reads it (new tables, memo missed), unless the save falls in
+the second it was last read (FAT32's 2 s times make that likelier on a
+Kobo). Since stable paths (Athenaeum 0.10), a delete keeps the book's path
+and time, so it never needed this.
+
+A fix inside ZenOS would still help changes nobody reports (another
+plugin, an edited history.lua), but that's optional.
 
 ## 3. Home refreshes itself when the sources report changes
 

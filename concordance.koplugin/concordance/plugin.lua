@@ -530,13 +530,22 @@ local function cloudPath(uuids)
 end
 
 --- After books read elsewhere went into the history: the file browser, an
--- open History list and, under ZenOS, Home show the new order (ZenOS
--- refreshes Home now if it's shown, else when it's next shown).
+-- open History list and, under ZenOS, Home show the new order. Under ZenOS,
+-- ZenOS is told first: that drops its "last read" index (which can't see a
+-- book moved in the middle of the history), even with no file browser
+-- open, and it redraws the file browser and Home itself (Home now if it's
+-- shown, else when it's next shown).
 local function refreshAfterHistory(paths)
+    local BookSources = zenSources()
+    local told_zenos = false
+    if BookSources and type(BookSources.historyChanged) == "function" then
+        local ok, err = pcall(BookSources.historyChanged, paths)
+        if ok then told_zenos = true else logger.warn("Concordance: telling ZenOS about the history failed:", err) end
+    end
     local FileManager = package.loaded["apps/filemanager/filemanager"]
     local fm = type(FileManager) == "table" and FileManager.instance
     if not fm then return end
-    if fm.file_chooser then
+    if fm.file_chooser and not told_zenos then
         if type(fm.file_chooser.refreshPath) == "function" then
             local ok, err = pcall(fm.file_chooser.refreshPath, fm.file_chooser)
             if not ok then
@@ -562,12 +571,8 @@ local function refreshAfterHistory(paths)
                 "FileManagerHistory:updateItemTable is missing")
         end
     end
-    local BookSources = zenSources()
-    if BookSources and type(BookSources.historyChanged) == "function" then
-        local ok, err = pcall(BookSources.historyChanged, paths)
-        if not ok then logger.warn("Concordance: telling ZenOS's Home about the history failed:", err) end
-    end
 end
+Plugin._refreshAfterHistory = refreshAfterHistory -- for tests
 
 --- The process-wide reading history sync (synced with book data).
 function Plugin.histSync()

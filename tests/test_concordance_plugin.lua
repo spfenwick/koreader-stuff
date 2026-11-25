@@ -570,6 +570,44 @@ do
     package.loaded["common/book_sources"] = old_sources
 end
 
+-- After books went into the history: ZenOS told first (it redraws the file
+-- browser itself), else the file browser redrawn; an open History list
+-- either way.
+do
+    local old_fm = package.loaded["apps/filemanager/filemanager"]
+    local old_sources = package.loaded["common/book_sources"]
+    local calls = {}
+    local fm = {
+        file_chooser = { refreshPath = function() calls[#calls + 1] = "refreshPath" end },
+        history = { booklist_menu = {}, updateItemTable = function() calls[#calls + 1] = "history" end },
+    }
+    package.loaded["apps/filemanager/filemanager"] = { instance = fm }
+    package.loaded["common/book_sources"] = nil
+    P._refreshAfterHistory({ "/b/one.epub" })
+    check(table.concat(calls, ",") == "refreshPath,history", "no ZenOS: file browser and History redrawn: "
+        .. table.concat(calls, ","))
+    calls = {}
+    local told
+    package.loaded["common/book_sources"] = { historyChanged = function(paths)
+        told = paths
+        calls[#calls + 1] = "zenos"
+    end }
+    P._refreshAfterHistory({ "/b/one.epub" })
+    check(table.concat(calls, ",") == "zenos,history" and told and told[1] == "/b/one.epub",
+        "ZenOS: told first, redraws the file browser itself: " .. table.concat(calls, ","))
+    calls = {}
+    package.loaded["apps/filemanager/filemanager"] = { instance = nil }
+    P._refreshAfterHistory({ "/b/one.epub" })
+    check(table.concat(calls, ",") == "zenos", "ZenOS told even with no file browser (in the reader)")
+    calls = {}
+    package.loaded["apps/filemanager/filemanager"] = { instance = fm }
+    package.loaded["common/book_sources"] = { historyChanged = function() error("boom") end }
+    P._refreshAfterHistory({ "/b/one.epub" })
+    check(table.concat(calls, ",") == "refreshPath,history", "ZenOS failing: file browser redrawn by us")
+    package.loaded["apps/filemanager/filemanager"] = old_fm
+    package.loaded["common/book_sources"] = old_sources
+end
+
 -- ZenOS's incognito mode: its shared config, or its plugin in the file browser or reader.
 do
     local old_fm, old_rui = package.loaded["apps/filemanager/filemanager"], package.loaded["apps/reader/readerui"]

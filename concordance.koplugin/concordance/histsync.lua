@@ -416,22 +416,12 @@ function HistSync:_put(rh, todo, order)
     return n, seen, moved, applied
 end
 
---- After _put: reads the history back, redraws and records what's applied.
+--- After _put: redraws and records what's applied. (refresh_ui tells
+-- ZenOS the history changed: its "last read" order can't see a book moved
+-- in the middle of it.)
 function HistSync:_finishPut(rh, n, seen, moved)
     local store = self.deps.store
     if n > 0 then
-        -- Read back from the file just saved, so every entry is a new table.
-        -- ZenOS's "last read" order is cached while the history's length and
-        -- first and last entries (the tables) stay the same, so a book moved
-        -- in the middle went unnoticed. (Athenaeum's hooks keep cloud
-        -- entries as they are through the re-read.)
-        if rh.reload then
-            local ok, err = pcall(rh.reload, rh, true)
-            if not ok then
-                self.log.warn("Concordance: re-reading the history failed:", err)
-                Problems.report("hist:reload", "Re-reading KOReader's history failed", err)
-            end
-        end
         local rok, rerr = pcall(self.deps.refresh_ui or function() self.deps.finder:_refreshUI() end, moved)
         if not rok then
             self.log.warn("Concordance: redrawing after the history changed failed:", rerr)

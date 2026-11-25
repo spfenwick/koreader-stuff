@@ -204,12 +204,10 @@ do
     A.rh:open(a1, clock); tick(10)
     B.rh:open(b2, clock); tick(10)
     A.rh:open(a3, clock); tick(10)
-    local A_first = A.rh.hist[1]
     round(A, B)
     check(A.rh:files() == "three,two,one", "A has B's book in time order: " .. A.rh:files())
-    -- ZenOS caches the "last read" order while hist[1] is the same table.
-    check(A.rh.reloads == 1 and A.rh.hist[1] ~= A_first and A.rh.hist[1].file == A_first.file
-        and A.rh.hist[1].time == A_first.time, "A's history read back after saving: new tables")
+    -- Not read back: ZenOS is told the history changed (refresh_ui) instead.
+    check(not A.rh.reloads, "A's history not read back after saving")
     check(A.refreshed and #A.refreshed == 1 and A.refreshed[1] == a2,
         "views refreshed for the book put into the history")
     check(B.rh:files() == "three,two,one", "B has A's books in time order: " .. B.rh:files())

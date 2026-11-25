@@ -1906,8 +1906,7 @@ do
         dim = false, select_enabled = true })
     table.insert(ReadHistory.hist, { time = 10, file = folder .. "/old.epub", text = "old.epub",
         dim = true, select_enabled = false })
-    local first, last, len = ReadHistory.hist[1], ReadHistory.hist[#ReadHistory.hist], #ReadHistory.hist
-    local moved = ReadHistory.hist[2]
+    local len = #ReadHistory.hist
     Library.installDeleteHooks()
     local ticks = {}
     UIManager.nextTick = function(_self, fn) table.insert(ticks, fn) end
@@ -1915,7 +1914,7 @@ do
     local ZenSourceMod = require("athenaeum/zenos_source")
     local was_registered = ZenSourceMod.registered
     ZenSourceMod.registered = true
-    ZenOS.moves, ZenOS.changes = {}, {}
+    ZenOS.moves, ZenOS.changes, ZenOS.history_changes = {}, {}, {}
     check(FileManager.deleteFile(FileManager, up, true), "file deleted")
     local told_now = {}
     for _i, paths in ipairs(ZenOS.changes) do
@@ -1924,13 +1923,17 @@ do
     check(#ZenOS.moves == 0 and told_now[up], "ZenOS told the book changed, before the caller redraws")
     check(#ticks > 0, "the reload waits for the caller's redraw")
     eq(ReadHistory:getIndexByFile(cloud1), 2, "deleted: the cloud entry, in the same place")
-    check(ReadHistory.hist[2] ~= moved, "moved entry is a new table")
     check(not ReadHistory.hist[2].dim and not ReadHistory.hist[2].select_enabled,
-        "the cloud entry kept as one through the re-read")
-    check(ReadHistory.hist[1] ~= first and ReadHistory.hist[1].file == down and ReadHistory.hist[1].time == 300,
-        "history read back after saving: a new first entry")
-    check(#ReadHistory.hist == len and ReadHistory.hist[#ReadHistory.hist] ~= last
-        and ReadHistory.hist[#ReadHistory.hist].file == last.file, "same length and entries, new tables")
+        "the cloud entry is a cloud entry again")
+    check(ReadHistory.hist[1].file == down and ReadHistory.hist[1].time == 300 and #ReadHistory.hist == len,
+        "the other entries as they were")
+    -- ZenOS's "last read" index can't see the entry changed in the middle:
+    -- it's told the history changed, before the caller redraws.
+    local hist_told = {}
+    for _i, paths in ipairs(ZenOS.history_changes) do
+        for _j, p in ipairs(paths or {}) do hist_told[p] = true end
+    end
+    check(hist_told[cloud1], "ZenOS told the history changed, before the caller redraws")
     -- ZenOS is told the file and the cloud entry changed (Home forgets them).
     ZenOS.changes = {}
     UIManager.nextTick = function(_self, fn) fn() end
