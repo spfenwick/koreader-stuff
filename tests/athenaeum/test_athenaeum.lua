@@ -31,6 +31,7 @@ package.loaded["common/book_sources"] = {
     installMetadataIntegration = function() ZenOS.integrated = ZenOS.integrated + 1 return true end,
     addToListing = function() return 0 end,
     folderBooks = function() return {} end,
+    isFileless = function() return false end,
 }
 
 local lfs = require("libs/libkoreader-lfs")
@@ -2364,6 +2365,24 @@ do
         "file attributes from the catalog: " .. tostring(attr and attr.modification))
 
     check(source.owns("/lib/Ann, Bo - Cloud One.epub") and not source.owns("/lib/a.epub"), "owns cloud books only")
+
+    -- Covers: ZenOS asks the source for cloud books' covers (never extracted).
+    local real_request, real_busy = Virtual.requestCovers, Virtual.coversBusy
+    local requested
+    Virtual.requestCovers = function(list) requested = list return true end
+    Virtual.coversBusy = function() return true end
+    source.fetchCovers({ "/lib/Ann, Bo - Cloud One.epub", "/lib/a.epub" })
+    check(requested and #requested == 1 and requested[1].path == "/lib/Ann, Bo - Cloud One.epub",
+        "fetchCovers: the cloud book's cover requested, other paths ignored")
+    check(source.fetchingCovers() == true, "fetchingCovers while downloading")
+    -- Can't download now: shown without a cover for now, ZenOS told.
+    Virtual.requestCovers = function() return false end
+    ZenOS.changes = {}
+    source.fetchCovers({ "/lib/Ann, Bo - Cloud One.epub" })
+    check(Virtual.by_path["/lib/Ann, Bo - Cloud One.epub"].cover_retry_at ~= nil
+        and #ZenOS.changes == 1, "fetchCovers offline: retried later, ZenOS told")
+    Virtual.by_path["/lib/Ann, Bo - Cloud One.epub"].cover_retry_at = nil
+    Virtual.requestCovers, Virtual.coversBusy = real_request, real_busy
 
     -- Cover badges: the icon of the badge the book gets (ZenOS paints it).
     local Badge = require("athenaeum/badge")

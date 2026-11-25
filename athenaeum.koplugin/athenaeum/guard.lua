@@ -208,6 +208,9 @@ function Guard.check()
             installMetadataIntegration = true,
             -- ZenOS lists the cloud books in the library folder (from books()).
             addToListing = true, folderBooks = true,
+            -- ZenOS asks the source for covers of books without a file
+            -- (fetchCovers) instead of CoverBrowser extracting them.
+            isFileless = true,
         })
         -- Cover badges are ZenOS's to paint (athenaeum/badge.lua).
         requires("badge", "common/book_sources", { badge = true })
@@ -222,8 +225,7 @@ function Guard.check()
     local ok_bim, bim = pcall(require, "bookinfomanager")
     if ok_bim and type(bim) == "table" then
         requires("library", "bookinfomanager", {
-            getBookInfo = 3, extractInBackground = 2, isExtractingInBackground = 1,
-            isCachedCoverInvalid = 2,
+            getBookInfo = 3, isCachedCoverInvalid = 2,
         })
         -- The shape of what getBookInfo returns, on a folder (no database read).
         local DataStorage = require("datastorage")

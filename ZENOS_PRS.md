@@ -8,7 +8,8 @@ upstream as #892 on 2026-11-17). Base each PR on upstream's `dev`.
 Each entry: what's wrong in ZenOS, the fix, and what goes away in the
 plugins. When one merges, remove the plugin code and update this file.
 
-Suggested order: 1, 3, 4, 5, 6, 7 (2 is no longer needed by the plugins).
+Suggested order: 1, 3, 4, 5, 6, 7, then 8 after talking to the maintainer (2 is no longer
+needed by the plugins).
 
 Open upstream (2026-11-25):
 - [#911](https://github.com/xZenLabs/zen-os/pull/911) "Ask book sources when
@@ -228,54 +229,65 @@ the date and size sorts. Books with a file (the Kindle library's) are listed
 where they are, as before. `listingKey()` stays: it keys the saved listing
 cache, which outlives a run.
 
-**Status (2026-11-25):** on ZenOS `custom`, uncommitted:
-- `common/book_sources.lua`: `folderBooks(folder)` (books() indexed by
-  folder, rebuilt when `revision()` changes), `addToListing`, and
-  `installListingIntegration` (wraps `FileChooser:getPathList` for the
-  file browser only; installed in `modules/filebrowser/filebrowser.lua`).
-  `addToListing` adds a folder's books to a listing once (it remembers the
-  folders per listing's files table, weakly keyed), so the wrapper and the
-  flat view's scan can be installed in either order without duplicates in
-  listings or counts. A file is checked on disk only when
-  counting; a listing compares with the files it found. `getDocProps` no
-  longer queries CoverBrowser's database for a source's book without a
-  file, so the metadata sorts need no swap. Documented: such a book's
-  `bookInfo()` must set `cover_fetched`, or CoverBrowser tries to extract
-  its cover from the missing file.
-- `browser_flat_view_compat.lua`: `scan_flat` adds them for every folder
-  it walks.
-- Specs: 11 new (two for the install order); the Lua suite passes apart
-  from 2 updater specs that fail without these changes too.
-- Emulator: a test source (scratch script) listed by name and title, the
-  status filter, a subfolder's count, flat view (rerun after the
-  install-order fix); Athenæum's
-  `e2e_stable_paths.py` and `e2e_history_order.py` pass with Athenæum
-  using it.
+**Status (2026-11-25):** on ZenOS `custom`, uncommitted.
 
-Athenæum (uncommitted) uses it and needs a ZenOS with it (Guard's startup
-check: `addToListing`, `folderBooks`). It dropped `addCloudItems`,
-`withCloudDocProps`, the count padding and the "Include cloud books in
-Authors, Series and Tags" setting (`zenos_groups`): `books()` now gives
-the folder listing too, so the two can't differ. `books()` gives `attr`
-(date added, size). Its `getList` hook remains, slimmed down: the
-"Rebuilding library…" message and the badge indent for plain list rows
-(`Badge.decorate`), on items ZenOS built. Also still Athenæum's: the
-`extractInBackground` hook (covers are downloaded), the
-`hasBookBeenOpened` / `isFileInCollections` shortcuts (`getListItem`
-still asks both per item), and its search results (`Virtual.listItem`).
+ZenOS (`common/book_sources.lua` unless noted):
+- `folderBooks(folder)`: `books()` indexed by folder, only books their own
+  source `owns()` (so taps, long-presses and file operations go to the
+  source; a book without a file never reaches code that needs one). Rebuilt
+  when `revision()` changes or a folder's `listingKey()` does, so listings
+  and the saved listing cache can't disagree when a source forgets
+  `changed()`.
+- `visibleFolderBooks(chooser, folder, present)`: the ones without a file
+  that pass `show_file`. Every ZenOS scan that lists a folder's books uses
+  it: `addToListing` (the `getPathList` wrapper, `installListingIntegration`),
+  the flat view's `scan_flat`, and folder covers (`folder_cover.lua`: count,
+  cover images, "all finished", and the descriptor cache key includes
+  `listingKey`). Before, folder covers scanned with `lfs.dir` and missed
+  them: a wrong count with a status filter, cloud books never used for the
+  images, and a folder marked finished while it held unread cloud books.
+- `addToListing` marks items `_zen_source = id`, adds a folder once per
+  listing (either install order works); `isFileless(item or path)`.
+- Covers: ZenOS never sends a source's book without a file to
+  CoverBrowser's extraction. It calls the source's optional
+  `fetchCovers(paths)` instead, and `isExtractingInBackground` also asks
+  `fetchingCovers()`.
+- `getDocProps` skips CoverBrowser's database for a book without a file.
+- Specs: unit specs for all of the above; `book_listing_scans_spec.lua`
+  classifies every `lfs.dir` user in ZenOS and fails on a new one (a book
+  scan must ask the book sources); `integration/book_sources_listing_spec.lua`
+  runs KOReader's real `filechooser.lua` (only device, BookList's base and
+  UIManager stubbed) and checks counts, `getListItem` items and filters, so
+  a KOReader change there fails when ZenOS's pinned KOReader is updated.
+  Lua suite: all pass apart from 2 updater specs that fail without these
+  changes too.
 
-New fragility in ZenOS, for the PR description:
-- Folder counts rely on KOReader counting a folder through `getList(path)`
-  without `collate` (so through `getPathList`). If KOReader counted
-  elsewhere, source books would drop out of counts; listings would be
-  unaffected.
-- ZenOS itself now lists items with no file, for any source. Code that
-  assumes a listed item exists on disk can meet one: cover extraction
-  (documented as `cover_fetched`), folder covers, file operations (copy,
-  move, rename, "Open with"). Athenæum's cloud books have taken these
-  paths for a while, injected by its own hook.
-- Listings are as fresh as the sources' `changed()` calls, as the group
-  tabs already are.
+Athenæum 0.10.3 (uncommitted) needs a ZenOS with it (Guard's startup check:
+`addToListing`, `folderBooks`, `isFileless`). It dropped `addCloudItems`,
+`withCloudDocProps`, the count padding, its `extractInBackground` /
+`isExtractingInBackground` hooks (now the source's `fetchCovers` /
+`fetchingCovers`) and the "Include cloud books in Authors, Series and
+Tags" setting (`zenos_groups`): `books()` gives the folder listing too, so
+the two can't differ. `books()` gives `attr` (date added, size). Its
+`getList` hook remains, slimmed down: the "Rebuilding library…" message
+and the badge indent for plain list rows, on items ZenOS built. Still its
+own: the `hasBookBeenOpened` / `isFileInCollections` shortcuts
+(`getListItem` asks both per item) and its search results (#7).
+
+Emulator: a test source (scratch script) listed by name and title, the
+status filter, a subfolder's count, flat view; Athenæum's covers
+downloaded through `fetchCovers` from a local server, with no extraction
+errors (scratch script); `e2e_stable_paths.py` and `e2e_history_order.py`
+pass.
+
+Remaining fragility in ZenOS, for the PR description:
+- ZenOS lists items with no file. The paths that need a file are covered
+  (taps, long-presses and file operations go to the owning source; covers
+  through `fetchCovers`; book scans through `visibleFolderBooks`, enforced
+  by the scan spec), but new code that takes a listed item's path to the
+  disk should check `isFileless`.
+- `lfs.dir` users classified as "not a book scan" in the spec are trusted
+  to be right (e.g. `cover_utils.lua`'s fallback without a file chooser).
 
 ## 7. Book sources' books without a file appear in search results
 
@@ -320,6 +332,74 @@ cloud books in file search", which would then have to become a source
 option or go, as `zenos_groups` did in #6), and with it `Virtual.listItem`
 (search's only user) and the `getListItem` dependency in Guard's startup
 check. Every source's books become searchable, not just Athenæum's.
+
+Not started.
+
+## 8. ZenOS builds the Library's folder contents itself
+
+**In ZenOS:** the Authors, Series, Tags and To Be Read views are ZenOS pages
+built from data (`db_bookinfo.lua`: CoverBrowser's database plus
+`BookSources.books()`), so source books just work there. The Library tab is
+KOReader's `FileChooser` inside `FileManager`. ZenOS already owns most of
+it (`browser_item_table_cache.lua` wraps `genItemTableFromPath`, plus its
+rendering, series grouping, flat view, filters and folder covers), but on
+a cache miss it still asks KOReader to build the folder's contents:
+`getList` → `getPathList` → `getListItem`, one item at a time. Every
+KOReader listing hook (ZenOS's from #6, Athenæum's slim `getList` hook and
+its `hasBookBeenOpened` / `isFileInCollections` shortcuts) sits in that
+step.
+
+**Fix:** keep KOReader's `FileChooser` as the frame, and on a cache miss
+build the item table in ZenOS instead of calling KOReader's
+`genItemTableFromPath`:
+- the folder's files and subfolders from one `lfs.dir` read (the
+  attributes it already reads);
+- metadata from CoverBrowser's database for the whole folder
+  (`db_bookinfo.getLightMetadata(directory)` already does this);
+- the book sources' books without a file (`visibleFolderBooks`), with no
+  `getListItem` stand-ins;
+- the item fields set directly (`opened` from the folder's sidecars,
+  collections once per listing), so no per-item `hasBookBeenOpened` /
+  `isFileInCollections`;
+- the filters in one place (hidden, unsupported, `exclude_files`, status).
+
+Navigation, file operations, select mode, the long-press dialog and the
+about 55 places where KOReader and its plugins call `refreshPath` or
+`changeToPath` (search's "go to folder", history's "show in folder", OPDS
+and Calibre after a download, Athenæum and Concordance) stay KOReader's.
+
+**Why not a separate Library page** like the group views: it would have to
+reimplement folder navigation, sorting, filters, display modes, select
+mode, file operations and the long-press dialog, and keep a ZenOS page in
+step with every `refreshPath` / `changeToPath` caller. Plugins and user
+patches that hook the file chooser (CoverBrowser's display modes among
+them) would stop affecting it. Probably as big as `group_view.lua` plus
+most of `browser_item_table_cache.lua`, with the largest regression risk
+of anything here.
+
+Things to watch:
+- KOReader's item shape and listing features become ZenOS's to follow:
+  new sort orders, new filters, `show_filter` types.
+- Patches and plugins that hook `getList` / `getPathList` stop affecting
+  the Library.
+- Edge cases KOReader handles today: unreadable folders on Android
+  (`unreadable_dir_content`), folders reached through symlinks, hidden
+  files, macOS `._` files, "show unsupported files", flat view.
+- Check with the maintainer first: it moves the decision about what a
+  folder contains from KOReader to ZenOS.
+
+**Plugins lose:** Athenæum's slim `getList` hook (if ZenOS sets the
+plain-row badge indent itself) and its `hasBookBeenOpened` /
+`isFileInCollections` shortcuts. ZenOS loses the `getPathList` wrapper
+and `getListItem` stand-ins from #6. Listings, folder counts, folder
+covers, flat view and search (#7) could share one folder index instead of
+each scanning folders. Likely faster on the Kobo (one directory read plus
+one database query per folder, instead of per-item lookups for about
+2,150 books).
+
+#6 and #7 are useful either way: this would mostly reorganise their code,
+not replace it. Probably a few hundred lines plus specs, mostly in
+`browser_item_table_cache.lua` and a new item builder.
 
 Not started.
 

@@ -9,8 +9,8 @@ Covers.download(fetch, root, store, dir, books, opts)
     blocking: downloads covers for books ({ id, href }), records them in the
     store. Runs in a subprocess (on-demand jobs here, or the sync job).
 Covers.request(books)
-    asks for covers in the background (CoverBrowser and ZenOS ask through
-    BookInfoManager:extractInBackground, see virtual.lua). Several requests
+    asks for covers in the background (ZenOS asks through the book source's
+    fetchCovers, see virtual.lua's Virtual.fetchCovers). Several requests
     while a download runs are batched into the next one.
 Covers.busy()
     true while downloading, so file browsers keep polling for covers.
