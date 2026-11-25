@@ -203,8 +203,10 @@ source badges"; no PR branch yet), to be opened once #911 and #912 are
 merged (`common/source_badge.lua`, spec `spec/lua/unit/source_badge_spec.lua`).
 Athenæum 0.9.20 gives `badge()`, assumes a ZenOS with it (Guard's startup
 check turns badges off without it), and has dropped its Home badge hook,
-the stack walk and its cover painting; it paints only KOReader's plain list
-rows (no covers) itself. Not yet checked in the emulator with cloud books.
+the stack walk and its cover painting. Since 0.10.8 it paints no badges
+of its own at all: KOReader's plain list rows and other non-ZenOS views
+show none (the `BookList`/`Menu:paintTo` hooks, the row indent and their
+startup check are gone). Not yet checked in the emulator with cloud books.
 
 **Plugins lose:** `Badge.installHome`, `forHome`, `badgeHomeCover`,
 `coverRect` and `Badge.place` in `athenaeum/badge.lua`.
@@ -407,8 +409,7 @@ Things to watch:
 - Check with the maintainer first: it moves the decision about what a
   folder contains from KOReader to ZenOS.
 
-**Plugins lose:** Athenæum's slim `getList` hook (if ZenOS sets the
-plain-row badge indent itself) and its `hasBookBeenOpened` /
+**Plugins lose:** Athenæum's `getList` hook and its `hasBookBeenOpened` /
 `isFileInCollections` shortcuts. ZenOS loses the `getPathList` wrapper
 and `getListItem` stand-ins from #6. Listings, folder counts, folder
 covers, flat view and search (#7) could share one folder index instead of

@@ -62,22 +62,6 @@ function Athenaeum:init()
                 end)
             end
         end
-        local Badge = require("athenaeum/badge")
-        Badge.install()
-        if Badge.installed then
-            local Guard = require("athenaeum/guard")
-            Virtual.decorate = function(item)
-                if Guard.ok("rows") then Guard.call("rows", Badge.decorate, item) end
-            end
-            -- One protected call for a listing (2,000 books), not one per item.
-            Virtual.decorateAll = function(items)
-                if Guard.ok("rows") then
-                    Guard.call("rows", function()
-                        for _i, item in ipairs(items) do Badge.decorate(item) end
-                    end)
-                end
-            end
-        end
         require("athenaeum/search").install(Virtual)
         Library.installDeleteHooks()
         Library.installCatalogMetadataHook()

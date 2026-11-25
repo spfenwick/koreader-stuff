@@ -56,11 +56,6 @@ Covers.on_arrived = function(books)
     end
     if #paths > 0 then ZenSource.changed(paths) end
 end
--- Badges change how listed items are laid out (see Badge.decorate).
-Virtual.listingExtra = function()
-    return table.concat({ tostring(Guard.ok("rows")), tostring(Badge.cloud_enabled),
-        tostring(Badge.local_enabled), tostring(Badge.noncloud_enabled) }, ",")
-end
 
 local Library = {
     job = nil,          -- running sync: { pid, fd, mode, started }
@@ -97,8 +92,8 @@ function Library.save(key, value)
     Settings.save(key, value)
 end
 
---- Redraws the file browser after a badge setting changed (the listing is
--- rebuilt: plain list rows make room for the badge).
+--- Redraws the file browser after a badge setting changed (ZenOS repaints
+-- its covers' badges).
 function Library.repaint()
     ZenSource.badgesChanged()
     local FileManager = require("apps/filemanager/filemanager")

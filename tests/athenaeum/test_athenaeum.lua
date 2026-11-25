@@ -1266,17 +1266,6 @@ end
 
 do
     local Badge = require("athenaeum/badge")
-    local Blitbuffer = require("ffi/blitbuffer")
-    local Geom = require("ui/geometry")
-    local bb = Blitbuffer.new(400, 300, Blitbuffer.TYPE_BB8)
-    local function changed(x0, y0, w, h)
-        for yy = y0, y0 + h - 1 do
-            for xx = x0, x0 + w - 1 do
-                if bb:getPixel(xx, yy):getColor8().a ~= Blitbuffer.COLOR_GRAY.a then return true end
-            end
-        end
-        return false
-    end
     -- The library's (set when it's loaded), put back at the end.
     local real_on_device, real_cloud, real_non_cloud = Badge.isOnDevice, Badge.isCloud, Badge.isNonCloud
     Badge.isOnDevice = function(path) return path == "/lib/local.epub" end
@@ -1297,49 +1286,6 @@ do
     check(Badge.kind("/lib/cloud-x.epub") == nil, "cloud badge can be turned off")
     Badge.cloud_enabled = true
 
-    -- Plain list rows (no cover): room is made before the name, and the
-    -- badge drawn there.
-    local item = { path = "/lib/cloud-x.epub" }
-    Badge.decorate(item)
-    local _size, slot = Badge.plainSize()
-    check(item.indent == slot, "plain row: room made for the cloud badge")
-    local other = { path = "/lib/local.epub" }
-    Badge.decorate(other)
-    check(other.indent == nil, "plain row: no room for a book without a badge")
-    bb:fill(Blitbuffer.COLOR_GRAY)
-    local row = { entry = item, dimen = Geom:new{ x = 0, y = 220, w = 400, h = 60 },
-        _underline_container = { dimen = Geom:new{ x = 50, y = 220, w = 300, h = 60 } } }
-    Badge.paintOn({ item_group = { row } }, bb)
-    check(changed(50, 230, 40, 40), "plain row: badge drawn before the name")
-    check(not changed(300, 220, 100, 60), "plain row: nothing on the row's right")
-    local dark = 0
-    for yy = 235, 265 do
-        for xx = 50, 80 do
-            if bb:getPixel(xx, yy):getColor8().a < 128 then dark = dark + 1 end
-        end
-    end
-    check(dark > 10, "cloud icon loaded (dark pixels inside the badge)")
-    bb:fill(Blitbuffer.COLOR_GRAY)
-    Badge.cloud_enabled = false
-    Badge.paintOn({ item_group = { row } }, bb)
-    check(not changed(0, 220, 400, 60), "plain row: badge follows the setting")
-    Badge.cloud_enabled = true
-
-    -- Covers are ZenOS's to badge: nothing painted over CoverBrowser items.
-    bb:fill(Blitbuffer.COLOR_GRAY)
-    local cover = { image = true, dimen = Geom:new{ x = 20, y = 10, w = 120, h = 180 } }
-    Badge.paintOn({ item_group = {
-        { entry = { path = "/lib/cloud-x.epub", indent = slot }, do_cover_image = true,
-          dimen = Geom:new{ x = 0, y = 0, w = 160, h = 200 }, { { cover } },
-          _underline_container = { dimen = Geom:new{ x = 0, y = 0, w = 160, h = 200 } } },
-    } }, bb)
-    check(not changed(0, 0, 400, 220), "cover items left to ZenOS")
-
-    bb:fill(Blitbuffer.COLOR_GRAY)
-    item.indent = nil
-    Badge.paintOn({ item_group = { row } }, bb)
-    check(not changed(0, 220, 400, 60), "plain row without room: no badge")
-
     -- Not-in-catalog badge: off by default.
     check(not Badge.noncloud_enabled, "default: not-in-catalog badge off")
     Badge.isNonCloud = function(path) return path == "/lib/mine.epub" end
@@ -1355,7 +1301,6 @@ do
 
     Badge.noncloud_enabled, Badge.local_enabled, Badge.cloud_enabled = false, false, true
     Badge.isOnDevice, Badge.isCloud, Badge.isNonCloud = real_on_device, real_cloud, real_non_cloud
-    bb:free()
 end
 
 -- Guard -------------------------------------------------------------------------------------
@@ -1474,34 +1419,6 @@ do
     package.loaded["common/book_sources"] = zen
     check(Guard.check() and not Guard.zenos_missing, "ZenOS back")
 
-    -- Plain-row badge: a real KOReader list, painted, has the fields it reads.
-    local Badge = require("athenaeum/badge")
-    eq(Badge.checkPlainRows(), nil, "plain rows as the badge expects on this KOReader")
-    -- Room made that's too small for the badge (as if KOReader stopped
-    -- honouring entry.indent): only the plain-row badge is turned off.
-    local real_size = Badge.plainSize
-    Badge.plainSize = function()
-        local size, slot = real_size()
-        return size * 4, slot
-    end
-    check(Guard.check(), "plain-row problem doesn't stop the library")
-    check(not Guard.ok("rows") and Guard.ok("badge"), "only the plain-row badge off")
-    check(Guard.statusText():find("rows not started: room for the badge not kept", 1, true),
-        "plain-row problem described: " .. Guard.statusText())
-    Badge.plainSize = real_size
-    -- Rows not where it looks (as if KOReader renamed _underline_container).
-    local Menu = require("ui/widget/menu")
-    local real_menu_paint = Menu.paintTo
-    Menu.paintTo = function(self, ...)
-        local r = real_menu_paint(self, ...)
-        for _i, item in ipairs(self.item_group or {}) do
-            if type(item) == "table" then item._underline_container = nil end
-        end
-        return r
-    end
-    eq(Badge.checkPlainRows(), "row text not found (_underline_container)", "renamed field noticed")
-    Menu.paintTo = real_menu_paint
-    check(Guard.check() and Guard.ok("rows"), "plain rows back")
     reset()
 end
 
@@ -2618,10 +2535,6 @@ do
     Virtual.setCatalog("/lib", rows())
     eq(#ZenOS.changes, 0, "tags read on the old row: no change")
     Virtual.setCatalog("/lib", { { id = "c2", title = "Cloud Two" } })
-    local real_extra = Virtual.listingExtra
-    Virtual.listingExtra = function() return "badges" end
-    check(source.listingKey("/lib") ~= key2, "key changes with badge settings")
-    Virtual.listingExtra = real_extra
 
     -- Covers arriving: ZenOS drops its cached covers.
     ZenOS.changes = {}

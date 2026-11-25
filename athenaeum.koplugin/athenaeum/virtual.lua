@@ -18,7 +18,6 @@ Virtual.listingKey(). The KOReader and CoverBrowser functions changed here:
   FileChooser:getList              adds the entries to the library folder
                                    (and counts them in the folder above),
                                    with the "Rebuilding library..." message
-                                   and room for the badge in plain list rows
   BookInfoManager:extractInBackground / :isExtractingInBackground
                                    covers not downloaded yet are fetched when
                                    CoverBrowser (or ZenOS) asks to extract
@@ -51,7 +50,6 @@ local Virtual = {
     installed = false,
     generation = 0, -- changes with every setCatalog()
     catalog_sig = "", -- the books listed and what their list items show
-    listingExtra = nil, -- function() -> string: other settings list items show
 }
 
 local function normalize(path)
@@ -165,10 +163,9 @@ function Virtual.notifyChanged(old_books)
 end
 
 --- Key for ZenOS's cached listings that show the cloud books: changes with
--- the books and how their items are drawn, and is the same after a restart.
+-- the books, and is the same after a restart.
 function Virtual.listingKey()
-    local extra = Virtual.listingExtra and Virtual.listingExtra() or ""
-    return Virtual.catalog_sig .. "/" .. extra
+    return Virtual.catalog_sig
 end
 
 --- The library folder's listing is being built (FileChooser:getList, which
@@ -393,18 +390,6 @@ function Virtual.showDetails(path, opts)
     }
 end
 
---- A file browser item for a virtual book (as in the library folder).
--- Optional: decorate(item) adjusts a listed item (the badge reserves room
--- for itself in plain list rows); decorateAll(items) does it for a whole
--- listing at once.
-Virtual.decorate = nil
-Virtual.decorateAll = nil
-
-local function decorate(item)
-    if Virtual.decorate and type(item) == "table" then Virtual.decorate(item) end
-    return item
-end
-
 -- The book's metadata on its list item, as KOReader's title, authors and
 -- series sorts leave it. Code that reads metadata from CoverBrowser's
 -- database itself when an item has none (ZenOS's series grouping in the
@@ -418,9 +403,10 @@ local function withProps(item, book)
     return item
 end
 
+--- A file browser item for a virtual book (as in the library folder).
 function Virtual.listItem(fc, book, collate)
     local dir = book.path:match("^(.*)/[^/]*$")
-    return decorate(withProps(fc:getListItem(dir, book.filename, book.path, attributes(book), collate), book))
+    return withProps(fc:getListItem(dir, book.filename, book.path, attributes(book), collate), book)
 end
 
 -- getDocProps() fields CoverBrowser keeps (ZenOS's book sources fill them).
@@ -510,15 +496,7 @@ local function installListing()
             -- calls per book) cost more than some of the parts it measured.
             local t0 = Timing.start()
             withCloudDocProps(self.ui, function() addCloudItems(self, path, files, collate) end)
-            local t_decorate = Timing.start()
-            if Virtual.decorateAll then
-                Virtual.decorateAll(files)
-            else
-                for _i, item in ipairs(files) do decorate(item) end
-            end
-            local decorate_ms = Timing.since(t_decorate)
             Timing.record("listing: add cloud books", Timing.since(t0), #Virtual.books .. " books")
-            Timing.record("listing: badges", decorate_ms, #files .. " items")
         end
         return dirs, files, readable
     end, "FileChooser:getList")
