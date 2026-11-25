@@ -31,7 +31,6 @@ package.loaded["common/book_sources"] = {
     installMetadataIntegration = function() ZenOS.integrated = ZenOS.integrated + 1 return true end,
     addToListing = function() return 0 end,
     folderBooks = function() return {} end,
-    isFileless = function() return false end,
 }
 
 local lfs = require("libs/libkoreader-lfs")
@@ -2418,23 +2417,42 @@ do
 
     check(source.owns("/lib/Ann, Bo - Cloud One.epub") and not source.owns("/lib/a.epub"), "owns cloud books only")
 
-    -- Covers: ZenOS asks the source for cloud books' covers (never extracted).
-    local real_request = Virtual.requestCovers
-    local requested
-    Virtual.requestCovers = function(list) requested = list return true end
-    source.fetchCovers({ "/lib/Ann, Bo - Cloud One.epub", "/lib/a.epub" })
-    check(requested and #requested == 1 and requested[1].path == "/lib/Ann, Bo - Cloud One.epub",
-        "fetchCovers: the cloud book's cover requested, other paths ignored")
-    -- ZenOS keeps CoverBrowser waiting by itself, until changed() reports them.
-    check(source.fetchingCovers == nil, "no fetchingCovers")
-    -- Can't download now: shown without a cover for now, ZenOS told.
-    Virtual.requestCovers = function() return false end
-    ZenOS.changes = {}
-    source.fetchCovers({ "/lib/Ann, Bo - Cloud One.epub" })
-    check(Virtual.by_path["/lib/Ann, Bo - Cloud One.epub"].cover_retry_at ~= nil
-        and #ZenOS.changes == 1, "fetchCovers offline: retried later, ZenOS told")
-    Virtual.by_path["/lib/Ann, Bo - Cloud One.epub"].cover_retry_at = nil
-    Virtual.requestCovers = real_request
+    -- Covers: cloud books are never extracted by CoverBrowser; their
+    -- covers are downloaded, and it waits while they are.
+    check(source.fetchCovers == nil, "covers aren't ZenOS's to ask for")
+    do
+        local bim = package.loaded["bookinfomanager"]
+        local stub = {}
+        stub.extractInBackground = function(self, files) self.extracted = files return "started" end
+        stub.isExtractingInBackground = function() return false end
+        package.loaded["bookinfomanager"] = stub
+        local real_request, real_busy = Virtual.requestCovers, Virtual.coversBusy
+        local requested, busy
+        Virtual.requestCovers = function(list) requested = list return true end
+        Virtual.coversBusy = function() return busy end
+        check(Virtual._installBookInfo(), "extraction hooks installed")
+        eq(stub:extractInBackground({ { filepath = "/lib/Ann, Bo - Cloud One.epub" }, "/lib/a.epub" }),
+            "started", "other paths still extracted")
+        check(requested and #requested == 1 and requested[1].path == "/lib/Ann, Bo - Cloud One.epub",
+            "the cloud book's cover requested")
+        check(#stub.extracted == 1 and stub.extracted[1] == "/lib/a.epub", "only the other path extracted")
+        stub.extracted = nil
+        check(stub:extractInBackground({ "/lib/Ann, Bo - Cloud One.epub" }) == true and stub.extracted == nil,
+            "only cloud books: success, nothing extracted")
+        busy = true
+        check(stub:isExtractingInBackground(), "CoverBrowser waits while covers download")
+        busy = false
+        check(not stub:isExtractingInBackground(), "and not after")
+        -- Can't download now: shown without a cover for now, ZenOS told.
+        Virtual.requestCovers = function() return false end
+        ZenOS.changes = {}
+        stub:extractInBackground({ "/lib/Ann, Bo - Cloud One.epub" })
+        check(Virtual.by_path["/lib/Ann, Bo - Cloud One.epub"].cover_retry_at ~= nil
+            and #ZenOS.changes == 1, "offline: retried later, ZenOS told")
+        Virtual.by_path["/lib/Ann, Bo - Cloud One.epub"].cover_retry_at = nil
+        Virtual.requestCovers, Virtual.coversBusy = real_request, real_busy
+        package.loaded["bookinfomanager"] = bim
+    end
 
     -- Cover badges: the icon of the badge the book gets (ZenOS paints it).
     local Badge = require("athenaeum/badge")

@@ -12,10 +12,6 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   suggestions), via open() and showContextMenu(): ZenOS asks the sources
   in its filemanagerutil.openFile and FileChooser:showFileDialog wrappers,
   and cancels its opening banner when a source opens a book
-  covers of cloud books, downloaded when ZenOS asks (fetchCovers; ZenOS
-  never sends a book without a file to CoverBrowser's extraction). Every
-  path asked for is reported with changed() (cover, none, or retry later):
-  ZenOS keeps CoverBrowser waiting until then
   cover badges (cloud, on this device, not in the catalog) on every cover
   ZenOS draws, via badge(): ZenOS paints the icon (athenaeum/badge.lua)
   covers and metadata everywhere, via bookInfo(), answered inside ZenOS's
@@ -186,7 +182,6 @@ function ZenSource.install(virtual)
         status = protect("library", "status", status),
         history = protect("zenos", "history", history),
         badge = protect("badge", "badge", badge),
-        fetchCovers = protect("library", "fetchCovers", function(paths) Virtual.fetchCovers(paths) end),
     }
     if not BookSources.register(ID, source) then
         Guard.problem("library", "ZenOS refused the book source")

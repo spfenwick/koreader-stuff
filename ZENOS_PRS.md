@@ -247,13 +247,14 @@ ZenOS (`common/book_sources.lua` unless noted):
   them: a wrong count with a status filter, cloud books never used for the
   images, and a folder marked finished while it held unread cloud books.
 - `addToListing` marks items `_zen_source = id`, adds a folder once per
-  listing (either install order works); `isFileless(item or path)`.
-- Covers: ZenOS never sends a source's book without a file to
-  CoverBrowser's extraction. It calls the source's optional
-  `fetchCovers(paths)` instead. ZenOS keeps CoverBrowser waiting
-  (`isExtractingInBackground`) until the source reports each path with
-  `changed(paths)`, or for `COVER_WAIT` (60 s); no `fetchingCovers()` in
-  the contract. A failing `fetchCovers` isn't waited for.
+  listing (either install order works).
+- Covers stay the source's business: CoverBrowser asks to extract a book
+  whose `bookInfo()` leaves `cover_fetched` nil, and a source that fetches
+  covers some other way catches that itself (Athenæum hooks
+  `extractInBackground` / `isExtractingInBackground`). A `fetchCovers`
+  contract with a `COVER_WAIT` timeout was tried and taken out again: one
+  source used it, and it moved Athenæum's own "downloading" state into a
+  timer in ZenOS.
 - `getDocProps` skips CoverBrowser's database for a book without a file.
 - Specs: unit specs for all of the above; `book_listing_scans_spec.lua`
   classifies every `lfs.dir` user in ZenOS and fails on a new one (a book
@@ -265,30 +266,29 @@ ZenOS (`common/book_sources.lua` unless noted):
   changes too.
 
 Athenæum 0.10.3 (uncommitted) needs a ZenOS with it (Guard's startup check:
-`addToListing`, `folderBooks`, `isFileless`). It dropped `addCloudItems`,
-`withCloudDocProps`, the count padding, its `extractInBackground` /
-`isExtractingInBackground` hooks (now the source's `fetchCovers`; since
-0.10.5 every path asked for is reported with `changed()`, including a
-queued batch that can't start) and the "Include cloud books in Authors, Series and
+`addToListing`, `folderBooks`). It dropped `addCloudItems`,
+`withCloudDocProps`, the count padding and the "Include cloud books in Authors, Series and
 Tags" setting (`zenos_groups`): `books()` gives the folder listing too, so
 the two can't differ. `books()` gives `attr` (date added, size). Its
 `getList` hook remains, slimmed down: the "Rebuilding library…" message
 and the badge indent for plain list rows, on items ZenOS built. Still its
-own: the `hasBookBeenOpened` / `isFileInCollections` shortcuts
+own: the `extractInBackground` / `isExtractingInBackground` hooks (cloud
+covers are downloaded; 0.10.4–0.10.5 used a ZenOS `fetchCovers` instead,
+back in Athenæum since 0.10.6), the `hasBookBeenOpened` / `isFileInCollections` shortcuts
 (`getListItem` asks both per item) and its search results (#7).
 
 Emulator: a test source (scratch script) listed by name and title, the
 status filter, a subfolder's count, flat view; Athenæum's covers
-downloaded through `fetchCovers` from a local server, with no extraction
+downloaded from a local server (through `fetchCovers`, before 0.10.6), with no extraction
 errors (scratch script); `e2e_stable_paths.py` and `e2e_history_order.py`
 pass.
 
 Remaining fragility in ZenOS, for the PR description:
 - ZenOS lists items with no file. The paths that need a file are covered
   (taps, long-presses and file operations go to the owning source; covers
-  through `fetchCovers`; book scans through `visibleFolderBooks`, enforced
-  by the scan spec), but new code that takes a listed item's path to the
-  disk should check `isFileless`.
+  by the source's own extraction hook; book scans through
+  `visibleFolderBooks`, enforced by the scan spec), but new code that takes
+  a listed item's path to the disk must allow for it.
 - `lfs.dir` users classified as "not a book scan" in the spec are trusted
   to be right (e.g. `cover_utils.lua`'s fallback without a file chooser).
 

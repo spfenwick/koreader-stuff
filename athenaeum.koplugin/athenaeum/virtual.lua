@@ -13,13 +13,16 @@ until the next load names the book again.
 The plugin runs under ZenOS only: the cloud books are a ZenOS book source
 (zenos_source.lua), so ZenOS lists them in the library folder (books
 without a file), answers CoverBrowser's getBookInfo and getDocProps for
-them (from Virtual.bookInfoFor), asks for their covers (fetchCovers: they're
-downloaded, never extracted), sends taps and long-presses to the source,
-and keys its cached listings on Virtual.listingKey(). The KOReader
-functions changed here:
+them (from Virtual.bookInfoFor), sends taps and long-presses to the source,
+and keys its cached listings on Virtual.listingKey(). The KOReader and
+CoverBrowser functions changed here:
   FileChooser:getList              in the library folder: the "Rebuilding
                                    library..." message, and room for the
                                    badge in plain list rows
+  BookInfoManager:extractInBackground / :isExtractingInBackground
+                                   covers not downloaded yet are fetched when
+                                   CoverBrowser (or ZenOS) asks to extract
+                                   them, and it waits while they download
   ReaderUI:showReader / :switchDocument
                                    any other route that opens a virtual book
   DocSettings:flush, :flushCustomCover, :flushCustomMetadata
@@ -207,6 +210,7 @@ Virtual.attributes = attributes
 -- Hooks set by the library (see library.lua and covers.lua).
 Virtual.canFetchCovers = nil -- function() -> true if covers can be downloaded now
 Virtual.requestCovers = nil  -- function(books) -> true if they'll be downloaded
+Virtual.coversBusy = nil     -- function() -> true while downloading
 Virtual.detailsButtons = nil -- function(id, full_book, close) -> ButtonDialog rows
 Virtual.stateText = nil      -- function(id) -> a line on the book's status from other devices, or nil
 
@@ -301,8 +305,8 @@ end
 -- any other book. The size reported is the size the cover is decoded at, so
 -- isCachedCoverInvalid() never asks for a bigger one. A cover that can be
 -- downloaded now is reported as not fetched yet: CoverBrowser then asks for
--- it through extractInBackground(), which ZenOS turns into the source's
--- fetchCovers (Virtual.fetchCovers), and redraws the book when it's ready.
+-- it through extractInBackground(), which installBookInfo turns into a
+-- download (Virtual.fetchCovers), and redraws the book when it's ready.
 local function bookInfo(book, get_cover)
     local directory, filename = util.splitFilePathName(book.path)
     local info = docProps(book)
@@ -451,10 +455,9 @@ local function installListing()
     end, "FileChooser:getList")
 end
 
---- ZenOS asks for covers of cloud books (they have no file to extract
--- them from; see ZenSource's fetchCovers): they're downloaded. If they
--- can't be now (Wi-Fi went off), they're shown without a cover for now
--- instead of waited for.
+--- Downloads the covers of the cloud books among paths (they have no file
+-- to extract them from). If they can't be now (Wi-Fi went off), they're
+-- shown without a cover for now instead of waited for.
 function Virtual.fetchCovers(paths)
     local wanted = {}
     for _i, path in ipairs(paths or {}) do
@@ -471,6 +474,37 @@ function Virtual.fetchCovers(paths)
         ZenSource.changed(missed)
     end
 end
+
+-- Cloud books are never extracted by CoverBrowser: their covers are
+-- downloaded (Virtual.fetchCovers), and it waits while they are.
+local function installBookInfo()
+    local ok, BookInfoManager = pcall(require, "bookinfomanager")
+    if not ok or type(BookInfoManager) ~= "table"
+            or type(BookInfoManager.extractInBackground) ~= "function" then
+        logger.warn("Athenaeum: CoverBrowser unavailable, no covers for cloud books")
+        return false
+    end
+    Guard.hook("library", BookInfoManager, "extractInBackground", function(orig, self, files, ...)
+        if type(files) ~= "table" then return orig(self, files, ...) end
+        local real, wanted = {}, {}
+        for _i, file in ipairs(files) do
+            local path = type(file) == "table" and file.filepath or file
+            if Virtual.by_path[path] then wanted[#wanted + 1] = path else real[#real + 1] = file end
+        end
+        if #wanted == 0 then return orig(self, files, ...) end
+        Virtual.fetchCovers(wanted)
+        if #real > 0 then return orig(self, real, ...) end
+        -- Success, though nothing was extracted: CoverBrowser shows an
+        -- error otherwise, and stops waiting once
+        -- isExtractingInBackground() is false.
+        return true
+    end, "BookInfoManager:extractInBackground")
+    Guard.hook("library", BookInfoManager, "isExtractingInBackground", function(orig, self, ...)
+        return orig(self, ...) or (Virtual.coversBusy and Virtual.coversBusy()) or false
+    end, "BookInfoManager:isExtractingInBackground")
+    return true
+end
+Virtual._installBookInfo = installBookInfo -- for tests
 
 local function installOpen()
     local ReaderUI = require("apps/reader/readerui")
@@ -613,6 +647,7 @@ function Virtual.install()
         return false
     end
     installListing()
+    installBookInfo()
     installOpen()
     installSettingsGuard()
     installCloudShortcuts()

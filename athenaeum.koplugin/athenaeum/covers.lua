@@ -13,8 +13,7 @@ Covers.request(books)
     fetchCovers, see virtual.lua's Virtual.fetchCovers). Several requests
     while a download runs are batched into the next one.
 Covers.busy()
-    true while downloading. ZenOS keeps CoverBrowser waiting by itself,
-    until on_arrived reports each book asked for.
+    true while downloading, so file browsers keep polling for covers.
 ]]
 
 local lfs = require("libs/libkoreader-lfs")
@@ -369,8 +368,8 @@ local function pollCovers()
     Covers.pending, Covers.pending_count = {}, 0
     local reported = job.books
     if #next_books > 0 and not start(next_books) then
-        -- Couldn't start: reported too (ZenOS waits for every book asked
-        -- for), to try again soon.
+        -- Couldn't start: reported too (redrawn without a cover), to try
+        -- again soon.
         reported = {}
         for _i, b in ipairs(job.books) do reported[#reported + 1] = b end
         for _i, b in ipairs(next_books) do
