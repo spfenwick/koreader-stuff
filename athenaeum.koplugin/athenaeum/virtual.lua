@@ -11,14 +11,14 @@ the listing (a book the matcher didn't recognise) hides the cloud entry
 until the next load names the book again.
 
 The plugin runs under ZenOS only: the cloud books are a ZenOS book source
-(zenos_source.lua), so ZenOS lists them in the library folder (books
-without a file), answers CoverBrowser's getBookInfo and getDocProps for
-them (from Virtual.bookInfoFor), sends taps and long-presses to the source,
-and keys its cached listings on Virtual.listingKey(). The KOReader and
-CoverBrowser functions changed here:
-  FileChooser:getList              in the library folder: the "Rebuilding
-                                   library..." message, and room for the
-                                   badge in plain list rows
+(zenos_source.lua), so ZenOS answers CoverBrowser's getBookInfo and
+getDocProps for them (from Virtual.bookInfoFor), sends taps and
+long-presses to the source, and keys its cached listings on
+Virtual.listingKey(). The KOReader and CoverBrowser functions changed here:
+  FileChooser:getList              adds the entries to the library folder
+                                   (and counts them in the folder above),
+                                   with the "Rebuilding library..." message
+                                   and room for the badge in plain list rows
   BookInfoManager:extractInBackground / :isExtractingInBackground
                                    covers not downloaded yet are fetched when
                                    CoverBrowser (or ZenOS) asks to extract
@@ -201,9 +201,6 @@ local function attributes(book)
         change = added,
     }
 end
---- A cloud book's stand-in file attributes (the date added and size), for
--- its list item and ZenOS's listing.
-Virtual.attributes = attributes
 
 -- Covers ----------------------------------------------------------------------
 
@@ -426,31 +423,103 @@ function Virtual.listItem(fc, book, collate)
     return decorate(withProps(fc:getListItem(dir, book.filename, book.path, attributes(book), collate), book))
 end
 
--- ZenOS lists the cloud books in the library folder (its book sources:
--- books without a file, from ZenSource's books()), and counts them in the
--- folders above. This only does what's Athenaeum's own around that: the
--- "Rebuilding library..." message when the cloud books changed, and making
--- room for the badge in plain list rows (Badge.decorate), the cloud books
--- and the folder's files alike.
+-- getDocProps() fields CoverBrowser keeps (ZenOS's book sources fill them).
+local DOC_PROPS = { "pages", "title", "authors", "series", "series_index",
+    "language", "keywords", "description" }
+
+-- The title, author and series sorts look up each book's metadata through
+-- FileManagerBookInfo:getDocProps(): for a cloud book that's CoverBrowser's
+-- getDocProps(), which ZenOS answers from its book sources (Athenaeum's
+-- metadata with the user's edits) after querying CoverBrowser's database,
+-- which has no row for a path without a file. While fn lists the cloud
+-- books, ui.bookinfo answers them from the book sources directly, with what
+-- that chain gives: the same fields, and display_title as KOReader sets it.
+-- Only with CoverBrowser (without it, KOReader looks elsewhere).
+local function withCloudDocProps(ui, fn)
+    local bookinfo = type(ui) == "table" and ui.coverbrowser and ui.bookinfo
+    local BookSources = package.loaded["common/book_sources"]
+    if type(bookinfo) ~= "table" or type(bookinfo.getDocProps) ~= "function"
+            or type(BookSources) ~= "table" or type(BookSources.bookInfo) ~= "function" then
+        return fn()
+    end
+    local splitFileNameType = require("apps/filemanager/filemanagerutil").splitFileNameType
+    local own, getDocProps = rawget(bookinfo, "getDocProps"), bookinfo.getDocProps
+    bookinfo.getDocProps = function(self, file, ...)
+        local info = Virtual.by_path[file] and BookSources.bookInfo(file, false)
+        if type(info) ~= "table" then return getDocProps(self, file, ...) end
+        local props = {}
+        for _i, key in ipairs(DOC_PROPS) do props[key] = info[key] end
+        props.display_title = props.title or splitFileNameType(file)
+        return props
+    end
+    local ok, err = pcall(fn)
+    rawset(bookinfo, "getDocProps", own)
+    if not ok then error(err, 0) end
+end
+Virtual._withCloudDocProps = withCloudDocProps -- for tests
+
+-- True when the file browser's filters (its status filter, excluded and
+-- unsupported files) let a cloud book through, as FileChooser:getList asks
+-- of each file. A filter that fails lets it through.
+local function passesFilter(fc, book)
+    if type(fc) ~= "table" or type(fc.show_file) ~= "function" then return true end
+    local ok, shown = pcall(fc.show_file, fc, book.filename, book.path)
+    return not ok or not not shown
+end
+Virtual._passesFilter = passesFilter -- for tests
+
+-- Adds the cloud books' items to a listing of the library folder (files:
+-- the folder's own), those the browser's filters let through. A file that
+-- turned up at a cloud book's name since the catalog was loaded is listed
+-- as itself (the next load renames the book).
+local function addCloudItems(fc, path, files, collate)
+    local present = {}
+    for _i, item in ipairs(files) do
+        if type(item) == "table" and type(item.path) == "string" then
+            present[item.path:match("[^/]*$")] = true
+        end
+    end
+    for _i, book in ipairs(Virtual.books) do
+        if not present[book.filename] and passesFilter(fc, book) then
+            table.insert(files, withProps(fc:getListItem(path, book.filename,
+                book.path, attributes(book), collate), book))
+        end
+    end
+end
+Virtual._addCloudItems = addCloudItems -- for tests
+
 local function installListing()
     local FileChooser = require("ui/widget/filechooser")
     Guard.hook("library", FileChooser, "getList", function(orig, self, path, collate)
-        local library = collate and self.name == "filemanager" and Virtual.folder
+        local library = self.name == "filemanager" and Virtual.folder
             and normalize(path) == Virtual.folder
-        if not library then return orig(self, path, collate) end
-        -- Only a message: a failure mustn't turn the library off.
-        local ok, err = pcall(Virtual.listingRebuilding)
-        if not ok then logger.warn("Athenaeum: rebuilding message:", err) end
-        local t0 = Timing.start()
-        local dirs, files, readable = orig(self, path, collate)
-        Timing.record("listing: library folder", Timing.since(t0), #files .. " items")
-        local t_decorate = Timing.start()
-        if Virtual.decorateAll then
-            Virtual.decorateAll(files)
-        else
-            for _i, item in ipairs(files) do decorate(item) end
+        if library and collate then
+            -- Only a message: a failure mustn't turn the library off.
+            local ok, err = pcall(Virtual.listingRebuilding)
+            if not ok then logger.warn("Athenaeum: rebuilding message:", err) end
         end
-        Timing.record("listing: badges", Timing.since(t_decorate), #files .. " items")
+        local dirs, files, readable = orig(self, path, collate)
+        if library and not collate then
+            for _i, book in ipairs(Virtual.books) do
+                if passesFilter(self, book) then
+                    table.insert(files, true) -- counting only, like FileChooser:getPathList()
+                end
+            end
+        elseif library then
+            -- Timed as a whole: timing each book's parts (wrapping three
+            -- calls per book) cost more than some of the parts it measured.
+            local t0 = Timing.start()
+            withCloudDocProps(self.ui, function() addCloudItems(self, path, files, collate) end)
+            local t_decorate = Timing.start()
+            if Virtual.decorateAll then
+                Virtual.decorateAll(files)
+            else
+                for _i, item in ipairs(files) do decorate(item) end
+            end
+            local decorate_ms = Timing.since(t_decorate)
+            Timing.record("listing: add cloud books", Timing.since(t0), #Virtual.books .. " books")
+            Timing.record("listing: badges", decorate_ms, #files .. " items")
+        end
         return dirs, files, readable
     end, "FileChooser:getList")
 end

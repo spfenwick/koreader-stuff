@@ -7,7 +7,6 @@ Settings (settings/athenaeum/settings.lua for the folder, shared.lua for
 the rest; see settings.lua):
   server     { url, username } of one of KOReader's OPDS catalogs
   folder     library folder (default: KOReader's download folder, else home)
-  show       show cloud books (default true)
   quick_sync  automatic quick sync, when the file browser opens, on wake-up
              and when Wi-Fi connects (only while Wi-Fi is on): "never" turns
              it off; anything else (older versions' "1h"... too) is on
@@ -196,7 +195,7 @@ end
 -- What a load depends on, besides the catalog and the folder's files.
 local function loadKey(server, folder, s)
     return table.concat({ server and server.url or "", server and server.username or "",
-        folder or "", tostring(s.show ~= false) }, "\0")
+        folder or "" }, "\0")
 end
 
 --- Reads the catalog, matches local files, and updates the cloud books shown.
@@ -208,7 +207,7 @@ function Library.load()
     Badge.local_enabled = s.badge_local == true
     Badge.noncloud_enabled = s.badge_noncloud == true
     Search.enabled = s.search ~= false
-    if not server or not folder or s.show == false then
+    if not server or not folder then
         Library.stats = {}
         Library.catalog = {}
         Library.matched, Library.on_device, Library.not_in_catalog = {}, {}, {}
@@ -1668,22 +1667,6 @@ function Library.menuEntry(plugin)
                     separator = true,
                 },
                 -- Display
-                {
-                    text = _("Show cloud books"),
-                    help_text = _("Lists catalog books that aren't on this device in the folder, ready to download. Turn this off before removing the plugin, so the file browser forgets the cloud books."),
-                    checked_func = function() return Library.settings().show ~= false end,
-                    check_callback_updates_menu = true,
-                    callback = function(touchmenu_instance)
-                        local show = Library.settings().show == false
-                        Library.save("show", show)
-                        if show then
-                            Library.loadShowingProgress(touchmenu_instance)
-                        else
-                            Library.load()
-                            if touchmenu_instance then touchmenu_instance:updateItems() end
-                        end
-                    end,
-                },
                 {
                     text = _("Mark cloud books"),
                     help_text = _("A cloud on the cover of books that are only in your online library."),

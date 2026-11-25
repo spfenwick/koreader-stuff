@@ -123,22 +123,22 @@ eq(Settings.all().folder, "/mnt/onboard/Books", "device key read back")
 clean()
 do
     local old = LuaSettings:open(Settings.path())
-    old.data = { folder = "/sdcard/Books", badge_local = true, show = false, search = false,
+    old.data = { folder = "/sdcard/Books", badge_local = true, badge_cloud = false, search = false,
         server = { url = "https://books.example" }, updates = { last_check = 9 } }
     old:flush()
 end
 all = Settings.all()
 eq(all.badge_local, true, "0.8.1: badge kept")
-eq(all.show, false, "0.8.1: false value kept")
+eq(all.badge_cloud, false, "0.8.1: false value kept")
 eq(all.folder, "/sdcard/Books", "0.8.1: folder kept")
 device, shared = file(Settings.path()), file(Settings.sharedPath())
 eq(device.badge_local, nil, "0.8.1: badge removed from this device's file")
-eq(device.show, nil, "0.8.1: false value removed from this device's file")
+eq(device.badge_cloud, nil, "0.8.1: false value removed from this device's file")
 eq(device.server, nil, "0.8.1: catalog removed from this device's file")
 eq(device.folder, "/sdcard/Books", "0.8.1: folder stays in this device's file")
 eq(device.updates.last_check, 9, "0.8.1: updater state stays")
 eq(shared.badge_local, true, "0.8.1: badge in the shared file")
-eq(shared.show, false, "0.8.1: false value in the shared file")
+eq(shared.badge_cloud, false, "0.8.1: false value in the shared file")
 eq(shared.search, false, "0.8.1: search in the shared file")
 eq(shared.server.url, "https://books.example", "0.8.1: catalog in the shared file")
 

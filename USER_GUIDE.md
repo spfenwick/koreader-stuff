@@ -73,7 +73,6 @@ Automatic quick syncs can be turned off (**Quick sync automatically**); full syn
 | Quick sync now / Full sync now | Sync immediately |
 | Download missing covers | Fetch every cover not on the device yet, in the background |
 | Refresh all covers | Check every cover with the server and fetch the changed ones |
-| Show cloud books | Turn off before removing the plugin, so the file browser forgets cloud books |
 | Mark cloud books | Cloud badge on cloud-only books (on) |
 | Mark books on this device | Check mark on downloaded catalog books (off) |
 | Mark books not in the catalog | Crossed-out cloud on folder books missing from the catalog (off) |
@@ -228,7 +227,6 @@ Tools → Concordance → **Status** shows how many books are known in more than
 | A cloud book shows an old cover | Athenæum → Refresh all covers |
 | New books on the server don't appear | Athenæum → Quick sync now; for edited or removed books, Full sync now |
 | Athenæum says part of it was turned off | Usually after a KOReader or ZenOS update. Check Athenæum → Status and `crash.log`, then update the plugin |
-| Removing Athenæum | Turn off Show cloud books first, so the file browser forgets them |
 | Statistics missing on a device | Concordance → Troubleshooting → Rebuild from server (adds only, never deletes) |
 | Device restored from another device's backup | Concordance → Troubleshooting → Reset device ID |
 | "Removed highlights waiting for you" in the menu | Choose whether to restore them here or remove them everywhere |

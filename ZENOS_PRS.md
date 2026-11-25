@@ -187,11 +187,15 @@ the bottom-right corner, where ZenOS puts the series number.
 and `BookSources.badge(path)`. A new `common/source_badge.lua` paints the
 icon's dark shapes in ZenOS's badge colours and size (`getBadgeColor`,
 `getBadgeTextColor`, `getBadgeScale`), in a circle in the cover's
-bottom-right corner. The series number moves left of it. Painted on library
-mosaic items (`zen_renderer.lua`), list covers
-(`browser_list_item_layout.lua`), Home strips (`strip_common.lua`: with or
-without the strip's own badges) and the featured book
-(`featured_common.lua`, through `make_cover_widget`'s `decorate`).
+bottom-right corner. When ZenOS's series number is there, it stays in the
+corner and the source badge moves left of it. The source badge never
+covers ZenOS's badges along the bottom (the series number, the page-count
+pill on the left): on a cover too small for it beside them, it's left out. Painted on library mosaic items
+(`zen_renderer.lua`), list covers (`browser_list_item_layout.lua`), Home
+strips (`strip_common.lua`: only when the strip's "Show badges" is on), the
+featured book (`featured_common.lua`) and the book switcher
+(`book_switcher_page.lua`), the last two through `make_cover_widget`'s
+`decorate` (neither shows ZenOS's own badges or has a setting for them).
 `statusChanged()` repaints after a source's badges change.
 
 **Status (2026-11-25):** committed on ZenOS `custom` (f79e8702, "Book
@@ -229,15 +233,27 @@ the date and size sorts. Books with a file (the Kindle library's) are listed
 where they are, as before. `listingKey()` stays: it keys the saved listing
 cache, which outlives a run.
 
-**Status (2026-11-25):** on ZenOS `custom`, uncommitted.
+**Status (2026-11-26):** dropped. Built on ZenOS `custom` and then
+discarded: about 275 lines of ZenOS code, and a rule that any listed item
+may have no file behind it, for a single source. Athenæum 0.10.7 is back to
+adding the cloud books itself (`addCloudItems`, the count padding and
+`withCloudDocProps` in its `getList` hook). The "Include cloud books in
+Authors, Series and Tags" (`zenos_groups`) and "Show cloud books" (`show`)
+settings are gone: cloud books are always listed, and always in the groups.
+It now asks the
+browser's `show_file` too, so the status filter applies to cloud books, in
+the listing and the count. The rest of what the ZenOS change fixed is lost
+again: flat view and folder covers (count, images, "all finished") don't
+see cloud books. The notes below
+describe the discarded version, in case it's revisited.
 
 ZenOS (`common/book_sources.lua` unless noted):
 - `folderBooks(folder)`: `books()` indexed by folder, only books their own
   source `owns()` (so taps, long-presses and file operations go to the
   source; a book without a file never reaches code that needs one). Rebuilt
-  when `revision()` changes or a folder's `listingKey()` does, so listings
-  and the saved listing cache can't disagree when a source forgets
-  `changed()`.
+  when `revision()` changes, so a source must call `changed()` when its
+  books do. A path given twice is listed twice (no dedupe across sources:
+  only one source has books without a file).
 - `visibleFolderBooks(chooser, folder, present)`: the ones without a file
   that pass `show_file`. Every ZenOS scan that lists a folder's books uses
   it: `addToListing` (the `getPathList` wrapper, `installListingIntegration`),

@@ -29,8 +29,6 @@ package.loaded["common/book_sources"] = {
     listingKey = function() end,
     badge = function() end,
     installMetadataIntegration = function() ZenOS.integrated = ZenOS.integrated + 1 return true end,
-    addToListing = function() return 0 end,
-    folderBooks = function() return {} end,
 }
 
 local lfs = require("libs/libkoreader-lfs")
@@ -2268,6 +2266,26 @@ do
     })
     eq(Virtual.by_id.n1.path, "/lib/Ann - T.pdf", "path from the stored name")
     eq(Virtual.by_id.n2.path, "/lib/U.pdf", "a clashing name: renamed (from its title), suffix kept")
+    -- A file turned up at a cloud book's name: listed as itself.
+    local lfc = { getListItem = function(_self, _dir, name, item_path) return { path = item_path, text = name } end }
+    local listed = { { path = "/lib/Ann - T.pdf", text = "Ann - T.pdf" } }
+    Virtual._addCloudItems(lfc, "/lib", listed, {})
+    eq(#listed, 2, "one cloud book added")
+    eq(listed[2].path, "/lib/U.pdf", "the other cloud book")
+    -- The browser's filters apply to cloud books too (status filter...).
+    local asked
+    lfc.show_file = function(_self, name, item_path) asked = { name, item_path } return nil end
+    listed = { { path = "/lib/Ann - T.pdf", text = "Ann - T.pdf" } }
+    Virtual._addCloudItems(lfc, "/lib", listed, {})
+    eq(#listed, 1, "filtered out: not added")
+    check(asked and asked[1] == "U.pdf" and asked[2] == "/lib/U.pdf", "filter asked with name and path")
+    lfc.show_file = function() return true end
+    listed = {}
+    Virtual._addCloudItems(lfc, "/lib", listed, {})
+    eq(#listed, 2, "let through: added")
+    lfc.show_file = function() error("filter bug") end
+    check(Virtual._passesFilter(lfc, Virtual.books[1]), "a failing filter lets the book through")
+    check(Virtual._passesFilter({}, Virtual.books[1]), "no filter: let through")
     Virtual.setCatalog("/lib/", {
         { id = "x1", title = "One" }, { id = "x1", title = "One again" }, { id = "x2", title = "Two" },
         { title = "no id" },
@@ -2282,6 +2300,45 @@ do
         and item.doc_props.display_title == "Third", "list item has the book's series and title")
     fc.getListItem = function(_self, _dir, _name, item_path) return { path = item_path, doc_props = { title = "Own" } } end
     eq(Virtual.listItem(fc, Virtual.books[1]).doc_props.title, "Own", "metadata set by a sort is kept")
+end
+
+-- Metadata sorts get cloud books' metadata from the book sources directly ----------
+
+do
+    Virtual.setCatalog("/lib/", { { id = "m1", title = "Meta" } })
+    local cloud = Virtual.books[1].path
+    local zen = package.loaded["common/book_sources"]
+    local real_info = zen.bookInfo
+    zen.bookInfo = function(path, get_cover)
+        if path == cloud and get_cover == false then
+            return { title = "Edited", authors = "A", series = "S", series_index = 2,
+                language = "en", keywords = "K", description = "D", cover_fetched = "Y" }
+        end
+    end
+    local slow = 0
+    local bookinfo = { getDocProps = function(_self, file) slow = slow + 1 return { title = "db " .. file } end }
+    local ui = { coverbrowser = {}, bookinfo = bookinfo }
+    local got, other
+    Virtual._withCloudDocProps(ui, function()
+        got = ui.bookinfo:getDocProps(cloud)
+        other = ui.bookinfo:getDocProps("/lib/local.epub")
+    end)
+    check(got and got.title == "Edited" and got.display_title == "Edited" and got.series_index == 2
+        and got.description == "D" and got.cover_fetched == nil, "cloud book: the sources' fields")
+    eq(other and other.title, "db /lib/local.epub", "local file: asked as before")
+    eq(slow, 1, "only the local file reached the slow lookup")
+    check(rawget(bookinfo, "getDocProps") ~= nil and bookinfo.getDocProps(bookinfo, cloud).title == "db " .. cloud,
+        "put back after the listing")
+    check(not pcall(Virtual._withCloudDocProps, ui, function() error("boom") end)
+        and bookinfo.getDocProps(bookinfo, cloud).title == "db " .. cloud, "put back after a failed listing too")
+    zen.bookInfo = function() return { authors = "A" } end
+    Virtual._withCloudDocProps(ui, function() got = ui.bookinfo:getDocProps(cloud) end)
+    eq(got.display_title, "Meta", "no title: the file name, as KOReader shows it")
+    local plain = { bookinfo = bookinfo } -- no CoverBrowser: KOReader's own lookup
+    Virtual._withCloudDocProps(plain, function() got = plain.bookinfo:getDocProps(cloud) end)
+    eq(got.title, "db " .. cloud, "without CoverBrowser: not answered")
+    zen.bookInfo = real_info
+    Virtual.setCatalog(nil, {})
 end
 
 -- Cloud books skip the opened (sidecar) and collection (realpath) checks ----------
@@ -2407,13 +2464,6 @@ do
     eq(info.keywords, "x", "tags as keywords")
     eq(info.language, "en", "language")
     check(source.books() == books, "books cached while the catalog is unchanged")
-    -- ZenOS lists them in the library folder too: the date added and size
-    -- stand in for the file's dates and size.
-    local attr = books[1].attr
-    local added = Virtual.books[1].added or 0
-    check(attr and attr.mode == "file" and attr.modification == added
-        and attr.access == added and attr.size == (Virtual.books[1].size or 0),
-        "file attributes from the catalog: " .. tostring(attr and attr.modification))
 
     check(source.owns("/lib/Ann, Bo - Cloud One.epub") and not source.owns("/lib/a.epub"), "owns cloud books only")
 
@@ -2909,7 +2959,7 @@ do
     local items = Library.menuEntry(nil).sub_item_table_func()
     eq(labels(items),
         "Quick sync now | Full sync now | Download missing covers | Refresh all covers | Quick sync automatically | Full sync | Catalog | Folder"
-        .. " | Show cloud books | Mark cloud books | Mark books on this device | Mark books not in the catalog"
+        .. " | Mark cloud books | Mark books on this device | Mark books not in the catalog"
         .. " | Include cloud books in file search | Status | Timings",
         "menu")
     for _i, item in ipairs(items) do
