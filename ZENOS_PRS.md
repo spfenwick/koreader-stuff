@@ -10,6 +10,16 @@ plugins. When one merges, remove the plugin code and update this file.
 
 Suggested order: 1, 3, 4, 5 (2 is no longer needed by the plugins).
 
+Open upstream (2026-11-25):
+- [#911](https://github.com/xZenLabs/zen-os/pull/911) "Ask book sources when
+  opening or long-pressing a book anywhere" (branch `book-source-long-press`):
+  #1.
+- [#912](https://github.com/xZenLabs/zen-os/pull/912) "Refresh open views
+  when book sources report changes" (branch `refresh-views`): #3 and the
+  views half of #4 (without `moved()`).
+
+Next: #5 (badges), once those two are merged.
+
 ## 1. Opens and long-presses ask the book sources everywhere
 
 **In ZenOS:** only Home asks `BookSources.open` / `showContextMenu`
@@ -24,9 +34,10 @@ and `showFileDialog` in `modules/filebrowser/patches/context_menu.lua`. That
 covers every caller. When a source handles an open, ZenOS cancels its own
 opening banner.
 
-**Status (2026-11-24):** committed on ZenOS branch `book-source-long-press`
-(from upstream `dev`; commit a55c77ee, pushed to the fork, PR not opened
-yet) and on `custom` (07553f7a). `BookSources.open` and `showContextMenu`
+**Status (2026-11-25):** PR open upstream,
+[#911](https://github.com/xZenLabs/zen-os/pull/911) (branch
+`book-source-long-press`, from upstream `dev`, with CodeRabbit fixes), and on
+`custom` (986a2ec9). `BookSources.open` and `showContextMenu`
 are asked from the `openFile` and `showFileDialog` wrappers; they guard
 against re-entry (a source's handler that opens a file or shows ZenOS's
 dialog, as the Kindle source does, gets ZenOS's own), and `open` cancels the
@@ -62,7 +73,7 @@ the memo exists to avoid.
 
 **Status (2026-11-25): not needed by the plugins.** #3's
 `BookSources.historyChanged` drops the memo (on the `refresh-views` PR
-branch even with no file browser open, e.g. in the reader; `custom` drops it
+branch, #912, even with no file browser open, e.g. in the reader; `custom` drops it
 only when the file browser exists). Both plugins now call it instead of
 `rh:reload(true)`: Concordance's `refreshAfterHistory` tells ZenOS first and
 leaves the file browser's redraw to it; Athenaeum's `History.reconcile` and
@@ -93,8 +104,9 @@ cache for those paths and rebuild it (now if it's on top, else when it's
 next shown). Add `BookSources.historyChanged(paths)` and a public
 `isHomeOnTop()`. The Kindle source gets Home refreshes for free.
 
-**Status (2026-11-24):** committed on ZenOS `custom` (9b4bf684; no PR
-branch yet). Athenæum and Concordance now use `BookSources.changed`,
+**Status (2026-11-25):** PR open upstream,
+[#912](https://github.com/xZenLabs/zen-os/pull/912) (branch `refresh-views`,
+with CodeRabbit fixes), and on `custom` (3b30448d). Athenæum and Concordance now use `BookSources.changed`,
 `statusChanged`, `historyChanged` and `isHomeOnTop` and assume a ZenOS with
 this change (no feature detection). Removed: Athenæum's `refreshHome`
 (downloads and deletes call `ZenSource.changed(paths)`, "Remove from
@@ -161,8 +173,8 @@ Things to watch:
   as long as the stable key matches, so it shouldn't rebuild. Not checked
   for other sort orders.
 
-**Status (2026-11-24):** the views half is committed on ZenOS `custom`
-(856d8434; no PR branch yet): `BookSources.moved(old, new)` swaps the path
+**Status (2026-11-24):** the views half was committed on ZenOS `custom`
+(856d8434): `BookSources.moved(old, new)` swaps the path
 in ZenOS's open views (group pages and their book lists, To Be Read, other
 open lists) and redraws the file browser when it shows either folder.
 Athenæum assumes a ZenOS with it; its `replaceInViews`, `swapInItem` and
@@ -192,6 +204,12 @@ So the `moved()` half of this PR isn't needed by Athenæum. It's on ZenOS
   is enough. Check whether `changed({ path })` can do it, rather than a
   new call.
 
+**Status (2026-11-25):** the views half is in
+[#912](https://github.com/xZenLabs/zen-os/pull/912) (with #3) as views
+refreshing on `changed(paths)`; `moved()` itself was left out (see the
+update above), and it's gone from `custom` too. The listing half is still to
+do.
+
 **Plugins lose:** `replaceInViews` and `swapInItem` in
 `athenaeum/zenos_source.lua`, which edit ZenOS's private fields
 (`_zen_files`, `series_items`, `_zen_tbr_refresh`), and the full listing
@@ -220,8 +238,9 @@ without the strip's own badges) and the featured book
 (`featured_common.lua`, through `make_cover_widget`'s `decorate`).
 `statusChanged()` repaints after a source's badges change.
 
-**Status (2026-11-24):** written on ZenOS `custom`, uncommitted
-(`common/source_badge.lua`, spec `spec/lua/unit/source_badge_spec.lua`).
+**Status (2026-11-25):** committed on ZenOS `custom` (f79e8702, "Book
+source badges"; no PR branch yet), to be opened once #911 and #912 are
+merged (`common/source_badge.lua`, spec `spec/lua/unit/source_badge_spec.lua`).
 Athenæum 0.9.20 gives `badge()`, assumes a ZenOS with it (Guard's startup
 check turns badges off without it), and has dropped its Home badge hook,
 the stack walk and its cover painting; it paints only KOReader's plain list
