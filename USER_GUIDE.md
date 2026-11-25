@@ -77,7 +77,6 @@ Automatic quick syncs can be turned off (**Quick sync automatically**); full syn
 | Mark cloud books | Cloud badge on cloud-only books (on) |
 | Mark books on this device | Check mark on downloaded catalog books (off) |
 | Mark books not in the catalog | Crossed-out cloud on folder books missing from the catalog (off) |
-| Include cloud books in Authors, Series and Tags | ZenOS tabs (on) |
 | Include cloud books in file search | (on) |
 | Status | Catalog, folder, book and cover counts, last syncs and any problems |
 | Timings | How long each step took, for tracking down slowness |

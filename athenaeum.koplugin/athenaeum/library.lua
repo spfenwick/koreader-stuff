@@ -18,7 +18,6 @@ the rest; see settings.lua):
   badge_local  on-device badge on local catalog books (default false)
   badge_noncloud  badge on books in the folder not in the catalog (default false)
   search     cloud books in file search results (default true)
-  zenos_groups  cloud books in ZenOS's Authors, Series and Tags tabs (default true)
 
 The password stays in KOReader's OPDS settings and is read from there.
 ]]
@@ -57,10 +56,6 @@ Covers.on_arrived = function(books)
         if b.path then paths[#paths + 1] = b.path end
     end
     if #paths > 0 then ZenSource.changed(paths) end
-end
--- Cloud books in ZenOS's groups (setting zenos_groups).
-ZenSource.enabled = function()
-    return Settings.all().zenos_groups ~= false and Guard.ok("zenos")
 end
 -- Badges change how listed items are laid out (see Badge.decorate).
 Virtual.listingExtra = function()
@@ -1717,15 +1712,6 @@ function Library.menuEntry(plugin)
                         Library.save("badge_noncloud", Library.settings().badge_noncloud ~= true)
                         Badge.noncloud_enabled = Library.settings().badge_noncloud == true
                         Library.repaint()
-                    end,
-                },
-                {
-                    text = _("Include cloud books in Authors, Series and Tags"),
-                    help_text = _("Lists cloud books in ZenOS's Authors, Series and Tags tabs, as well as downloaded ones."),
-                    checked_func = function() return Library.settings().zenos_groups ~= false end,
-                    callback = function()
-                        Library.save("zenos_groups", Library.settings().zenos_groups == false)
-                        ZenSource.changed()
                     end,
                 },
                 {

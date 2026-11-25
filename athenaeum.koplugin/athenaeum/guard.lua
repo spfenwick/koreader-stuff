@@ -206,6 +206,8 @@ function Guard.check()
         requires("library", "common/book_sources", {
             register = 2, changed = true, bookInfo = true, listingKey = true,
             installMetadataIntegration = true,
+            -- ZenOS lists the cloud books in the library folder (from books()).
+            addToListing = true, folderBooks = true,
         })
         -- Cover badges are ZenOS's to paint (athenaeum/badge.lua).
         requires("badge", "common/book_sources", { badge = true })

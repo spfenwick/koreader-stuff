@@ -2,7 +2,10 @@
 The plugin's ZenOS side: the cloud books are a ZenOS book source (ZenOS's
 common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   Authors, Series, Languages and Tags tabs (and what ZenOS builds from
-  them: Home rows, end-of-book suggestions), via books()
+  them: Home rows, end-of-book suggestions), via books(); ZenOS also lists
+  them in the library folder (and counts them in the folders above, and
+  in flat view), as books without a file, with books()' attr for the
+  date and size sorts
   Home's reading history strip, book switcher, To Be Read, via owns()
   taps and long-presses everywhere ZenOS opens or long-presses a book (the
   file browser, Home, group views, To Be Read, collections, end-of-book
@@ -38,8 +41,9 @@ showFileDialog and the file browser's onMenuSelect/onMenuHold, for ZenOS
 views that didn't ask the sources; it now needs a ZenOS that does
 (ZENOS_PRS.md, #1). Until 0.9.14 getGroupedByTags was hooked too, to list
 each book once per tag; ZenOS was never found adding a book twice, so it was
-removed.
-Setting "zenos_groups" (default true): cloud books in the groups.
+removed. There's no setting to leave cloud books out of the groups (the
+old "zenos_groups"): books() also gives the library folder's listing, so the
+two can't differ.
 ]]
 
 local logger = require("logger")
@@ -47,7 +51,6 @@ local Guard = require("athenaeum/guard")
 
 local ZenSource = {
     registered = false,
-    enabled = nil, -- function() -> true to list cloud books in groups
     state = nil,   -- function(path) -> { status, rating, finished_at } or nil
     history = nil, -- function() -> { { file, time }, … } waiting to go into the history
 }
@@ -95,14 +98,14 @@ end
 
 -- The source ------------------------------------------------------------------
 
--- db_bookinfo rebuilds a grouping from this; rebuilt with the catalog.
+-- db_bookinfo rebuilds a grouping from this, and ZenOS the library
+-- folder's listing; rebuilt with the catalog.
 local books_cache, books_gen
 local function books()
-    if not (ZenSource.enabled and ZenSource.enabled()) then return {} end
     if books_cache and books_gen == Virtual.generation then return books_cache end
     local out = {}
     for i, book in ipairs(Virtual.books) do
-        out[i] = { file = book.path, info = {
+        out[i] = { file = book.path, attr = Virtual.attributes(book), info = {
             title = book.title,
             authors = joined(book.authors),
             series = book.series,

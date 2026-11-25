@@ -30,7 +30,7 @@ Settings.UPDATES_KEY = "updates"
 --- The keys kept in shared.lua. Everything else is this device's own.
 Settings.SHARED = {
     server = true, badge_cloud = true, badge_local = true, badge_noncloud = true,
-    search = true, zenos_groups = true, show = true,
+    search = true, show = true,
     quick_sync = true, full_sync = true, auto_sync = true,
 }
 
