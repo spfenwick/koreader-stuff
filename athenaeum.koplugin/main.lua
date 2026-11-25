@@ -67,12 +67,12 @@ function Athenaeum:init()
         if Badge.installed then
             local Guard = require("athenaeum/guard")
             Virtual.decorate = function(item)
-                if Guard.ok("badge") then Guard.call("badge", Badge.decorate, item) end
+                if Guard.ok("rows") then Guard.call("rows", Badge.decorate, item) end
             end
             -- One protected call for a listing (2,000 books), not one per item.
             Virtual.decorateAll = function(items)
-                if Guard.ok("badge") then
-                    Guard.call("badge", function()
+                if Guard.ok("rows") then
+                    Guard.call("rows", function()
                         for _i, item in ipairs(items) do Badge.decorate(item) end
                     end)
                 end

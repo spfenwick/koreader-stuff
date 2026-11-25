@@ -58,7 +58,7 @@ Covers.on_arrived = function(books)
 end
 -- Badges change how listed items are laid out (see Badge.decorate).
 Virtual.listingExtra = function()
-    return table.concat({ tostring(Guard.ok("badge")), tostring(Badge.cloud_enabled),
+    return table.concat({ tostring(Guard.ok("rows")), tostring(Badge.cloud_enabled),
         tostring(Badge.local_enabled), tostring(Badge.noncloud_enabled) }, ",")
 end
 

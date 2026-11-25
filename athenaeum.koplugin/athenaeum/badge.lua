@@ -113,6 +113,62 @@ local function plainText(item)
     end
 end
 
+--- Startup check (Guard.check) for the fields paintOn reads from KOReader's
+-- list rows, which are private and change: paints a real Menu with two
+-- rows, one with room made for the badge (entry.indent), finds them as
+-- paintOn does (item_group, entry, dimen, _underline_container), and checks
+-- that the room keeps the row's text clear of where the badge goes.
+-- Returns nil when all is well, else what's wrong.
+function Badge.checkPlainRows()
+    local Blitbuffer = require("ffi/blitbuffer")
+    local Menu = require("ui/widget/menu")
+    local size, slot = Badge.plainSize()
+    local w, h = Screen:scaleBySize(400), Screen:scaleBySize(300)
+    local plain, room = "/athenaeum-check/plain.epub", "/athenaeum-check/room.epub"
+    local menu, bb
+    local ok, problem = pcall(function()
+        menu = Menu:new{
+            item_table = {
+                { text = "WWWW", path = room, indent = slot },
+                { text = "WWWW", path = plain },
+            },
+            width = w, height = h, items_per_page = 2,
+            is_borderless = true, no_title = true, is_popout = false,
+        }
+        bb = Blitbuffer.new(w, h, Blitbuffer.TYPE_BB8)
+        bb:fill(Blitbuffer.COLOR_WHITE)
+        menu:paintTo(bb, 0, 0)
+        local rows = {}
+        eachItem(menu.item_group, function(item, path) rows[path] = item end, 0, {})
+        if not (rows[plain] and rows[room]) then
+            return "list rows not found (item_group, entry, dimen)"
+        end
+        -- Where a row's text starts: its first dark pixel, away from the
+        -- row's top and bottom (separator lines).
+        local function textStart(item)
+            local text = plainText(item)
+            if not text then return nil end
+            local y0 = math.max(0, text.y + math.floor(text.h / 4))
+            local y1 = math.min(h - 1, text.y + math.floor(text.h * 3 / 4))
+            for x = math.max(0, text.x), math.min(w, text.x + text.w) - 1 do
+                for y = y0, y1 do
+                    if bb:getPixel(x, y):getColor8().a < 128 then return x, text end
+                end
+            end
+        end
+        local plain_x = textStart(rows[plain])
+        local room_x, text = textStart(rows[room])
+        if not (plain_x and room_x) then return "row text not found (_underline_container)" end
+        if room_x < text.x + size or room_x <= plain_x then
+            return "room for the badge not kept (entry.indent)"
+        end
+    end)
+    if bb then bb:free() end
+    if menu and type(menu.free) == "function" then pcall(menu.free, menu) end
+    if not ok then return "checking plain list rows failed: " .. tostring(problem) end
+    return problem
+end
+
 --- Which badge a path gets: "cloud", "local", "noncloud" or nil.
 function Badge.kind(path)
     if Badge.cloud_enabled and Badge.isCloud and Badge.isCloud(path) then return "cloud" end
@@ -145,20 +201,20 @@ end
 function Badge.install()
     if Badge.installed then return end
     local Guard = require("athenaeum/guard")
-    if not Guard.ok("badge") then return end -- failed the startup check
+    if not Guard.ok("rows") then return end -- failed the startup check
     Badge.installed = true
     -- FileChooser extends BookList, so wrapping BookList covers both (older
     -- KOReader versions have no BookList: wrap FileChooser there).
     local ok, cls = pcall(require, "ui/widget/booklist")
     if not (ok and type(cls) == "table") then cls = require("ui/widget/filechooser") end
-    Guard.hook("badge", cls, "paintTo", function(orig, self, bb, x, y)
+    Guard.hook("rows", cls, "paintTo", function(orig, self, bb, x, y)
         orig(self, bb, x, y)
         Badge.paintOn(self, bb)
     end, "BookList:paintTo")
     -- BookList now has its own paintTo, so its lists aren't badged twice.
     local ok_menu, Menu = pcall(require, "ui/widget/menu")
     if ok_menu and type(Menu) == "table" and Menu ~= cls and rawget(cls, "paintTo") then
-        Guard.hook("badge", Menu, "paintTo", function(orig, self, bb, x, y)
+        Guard.hook("rows", Menu, "paintTo", function(orig, self, bb, x, y)
             orig(self, bb, x, y)
             Badge.paintOn(self, bb)
         end, "Menu:paintTo")

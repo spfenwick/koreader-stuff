@@ -18,6 +18,9 @@ Features:
            covers); turning it off removes the cloud books
   search   cloud books in file search
   badge    the on-device badge
+  rows     the badge in plain list rows (no covers), painted over
+           KOReader's list rows (athenaeum/badge.lua); ZenOS paints the
+           badge on covers, which this doesn't affect
   zenos    cloud books in ZenOS's Authors, Series and Tags tabs, and the
            open and tag hooks in zenos_source.lua
   history  cloud books in the reading history (history.lua)
@@ -248,13 +251,20 @@ function Guard.check()
         doSearch = true,
     })
     local ok_bl = pcall(require, "ui/widget/booklist")
-    requires("badge", ok_bl and "ui/widget/booklist" or "ui/widget/filechooser", { paintTo = 4 })
+    requires("rows", ok_bl and "ui/widget/booklist" or "ui/widget/filechooser", { paintTo = 4 })
+    requires("rows", "ui/widget/menu", { new = true, paintTo = 4 })
     requires("badge", "ui/widget/iconwidget", { new = true })
     requires("history", "readhistory", {
         _read = 1, clearMissing = 1, _flush = 1, getIndexByFile = 2, getIndexByTime = 2, removeItem = 2,
     })
     requires("history", "apps/filemanager/filemanagerhistory", { onShowHist = 1 })
     requires("metadata", "apps/filemanager/filemanagerbookinfo", { extendProps = 2 })
+    -- The plain-row badge reads private fields of KOReader's list rows: a
+    -- real list is painted to check they're where it expects them.
+    if Guard.ok("rows") then
+        local problem = require("athenaeum/badge").checkPlainRows()
+        if problem then Guard.problem("rows", problem) end
+    end
 
     for feature, problems in pairs(Guard.unavailable) do
         logger.warn("Athenaeum: not starting", feature, "-", table.concat(problems, "; "))
@@ -265,7 +275,7 @@ end
 --- Lines for the Status screen ("" when all is well).
 function Guard.statusText()
     local lines = {}
-    for _i, feature in ipairs({ "library", "search", "badge", "zenos", "history", "metadata", "jobs" }) do
+    for _i, feature in ipairs({ "library", "search", "badge", "rows", "zenos", "history", "metadata", "jobs" }) do
         if Guard.unavailable[feature] then
             table.insert(lines, string.format("%s not started: %s", feature,
                 table.concat(Guard.unavailable[feature], "; ")))

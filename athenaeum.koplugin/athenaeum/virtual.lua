@@ -523,6 +523,34 @@ end
 -- Both are called for every book listed, so they're plain wrappers rather
 -- than Guard.hook (whose pcall per call cost about as much as the checks
 -- left over); the shortcuts are table lookups that can't fail.
+-- The collections shortcut reads ReadCollection.coll directly (a table per
+-- collection, keyed by file path), which is KOReader's own business. At
+-- startup a throwaway collection is built with KOReader's own functions, on
+-- a real file (this one), and checked to have that shape and to be found by
+-- in_collections. Returns nil when all is well, else what's wrong.
+local function checkCollections(ReadCollection, in_collections)
+    local ok, problem = pcall(function()
+        local source = debug.getinfo(1, "S").source
+        local file = type(source) == "string" and source:match("^@(.+)$")
+        file = file and require("ffi/util").realpath(file)
+        if not file then return nil end -- nothing to check with: trust it
+        local name = "athenaeum-check"
+        local probe = setmetatable({ coll = {}, coll_settings = {} }, { __index = ReadCollection })
+        ReadCollection.addCollection(probe, name)
+        ReadCollection.addItem(probe, file, name)
+        local coll = probe.coll[name]
+        if type(coll) ~= "table" or not coll[file] then
+            return "collections aren't tables keyed by file path"
+        end
+        if not in_collections(probe, file, true) then
+            return "isFileInCollections doesn't find a file added to a collection"
+        end
+    end)
+    if not ok then return "checking collections failed: " .. tostring(problem) end
+    return problem
+end
+Virtual._checkCollections = checkCollections -- for tests
+
 local function installCloudShortcuts()
     local BookList = require("ui/widget/booklist")
     local opened = BookList.hasBookBeenOpened
@@ -538,6 +566,14 @@ local function installCloudShortcuts()
     local in_collections = ReadCollection.isFileInCollections
     if type(in_collections) ~= "function" then
         Guard.problem("library", "ReadCollection:isFileInCollections is missing")
+        return
+    end
+    -- Only a shortcut: if collections changed shape, KOReader's own check
+    -- answers for cloud books too (slower, but right).
+    local problem = checkCollections(ReadCollection, in_collections)
+    if problem then
+        logger.warn("Athenaeum: collections shortcut not installed:", problem)
+        Virtual.collections_problem = problem
         return
     end
     ReadCollection.isFileInCollections = function(self, file, ignore_mark, ...)

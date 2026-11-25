@@ -1476,6 +1476,35 @@ do
     package.path = real_path
     package.loaded["common/book_sources"] = zen
     check(Guard.check() and not Guard.zenos_missing, "ZenOS back")
+
+    -- Plain-row badge: a real KOReader list, painted, has the fields it reads.
+    local Badge = require("athenaeum/badge")
+    eq(Badge.checkPlainRows(), nil, "plain rows as the badge expects on this KOReader")
+    -- Room made that's too small for the badge (as if KOReader stopped
+    -- honouring entry.indent): only the plain-row badge is turned off.
+    local real_size = Badge.plainSize
+    Badge.plainSize = function()
+        local size, slot = real_size()
+        return size * 4, slot
+    end
+    check(Guard.check(), "plain-row problem doesn't stop the library")
+    check(not Guard.ok("rows") and Guard.ok("badge"), "only the plain-row badge off")
+    check(Guard.statusText():find("rows not started: room for the badge not kept", 1, true),
+        "plain-row problem described: " .. Guard.statusText())
+    Badge.plainSize = real_size
+    -- Rows not where it looks (as if KOReader renamed _underline_container).
+    local Menu = require("ui/widget/menu")
+    local real_menu_paint = Menu.paintTo
+    Menu.paintTo = function(self, ...)
+        local r = real_menu_paint(self, ...)
+        for _i, item in ipairs(self.item_group or {}) do
+            if type(item) == "table" then item._underline_container = nil end
+        end
+        return r
+    end
+    eq(Badge.checkPlainRows(), "row text not found (_underline_container)", "renamed field noticed")
+    Menu.paintTo = real_menu_paint
+    check(Guard.check() and Guard.ok("rows"), "plain rows back")
     reset()
 end
 
@@ -2270,6 +2299,7 @@ do
     Virtual.setCatalog("/lib/", { { id = "c1", title = "Cloud" } })
     local cloud = Virtual.books[1].path
     Virtual._installCloudShortcuts()
+    asked = {} -- the collections check at install asks once
     check(Guard.ok("library"), "library on")
     eq(BookList.hasBookBeenOpened(cloud), false, "cloud book: never opened")
     eq(BookList.hasBookBeenOpened("/lib/local.epub"), true, "local file: asked as before")
@@ -2281,6 +2311,28 @@ do
     eq(#asked, 2, "only local files reach KOReader's checks")
     BookList.hasBookBeenOpened, ReadCollection.isFileInCollections = real_opened, real_in
     ReadCollection.coll = real_coll
+
+    -- Collections as the shortcut expects on this KOReader (checked with
+    -- KOReader's own functions, on a real file).
+    eq(Virtual._checkCollections(ReadCollection, real_in), nil, "collections keyed by file path")
+    check(next(ReadCollection.coll or {}) == nil or ReadCollection.coll["athenaeum-check"] == nil,
+        "the check leaves the real collections alone")
+    -- KOReader keeping them another way: the shortcut isn't installed.
+    local real_add = ReadCollection.addItem
+    ReadCollection.addItem = function(self, file, name) self.coll[name][#self.coll[name] + 1] = file end
+    eq(Virtual._checkCollections(ReadCollection, real_in), "collections aren't tables keyed by file path",
+        "changed shape noticed")
+    local before = ReadCollection.isFileInCollections
+    Virtual.collections_problem = nil
+    Virtual._installCloudShortcuts()
+    check(ReadCollection.isFileInCollections == before and Virtual.collections_problem ~= nil,
+        "changed shape: KOReader's own check kept")
+    check(Guard.ok("library"), "changed shape: library still on")
+    ReadCollection.addItem = real_add
+    eq(Virtual._checkCollections(ReadCollection, function() return false end),
+        "isFileInCollections doesn't find a file added to a collection", "lookup change noticed")
+    BookList.hasBookBeenOpened, ReadCollection.isFileInCollections = real_opened, real_in
+    Virtual.collections_problem = nil
 end
 
 -- "Rebuilding library…" while the listing is rebuilt after a catalog change ---------------
