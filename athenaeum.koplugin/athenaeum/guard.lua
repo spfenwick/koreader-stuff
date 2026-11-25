@@ -188,10 +188,16 @@ end
 -- (Parameter counts include self.)
 function Guard.check()
     Guard.unavailable = {}
-    requires("library", "ui/widget/filechooser", {
-        getList = 3, getListItem = 6, genItemTable = 3,
+    local fc = requires("library", "ui/widget/filechooser", {
+        getListItem = 6, genItemTable = 3,
         onMenuSelect = 2, onMenuHold = 2, refreshPath = true, updateItems = true,
     })
+    -- The listing hook: getPathList (KOReader 2026.07 and later), else getList.
+    if fc and type(fc.getPathList) == "function" then
+        requires("library", "ui/widget/filechooser", { getPathList = 5 })
+    else
+        requires("library", "ui/widget/filechooser", { getList = 3 })
+    end
     requires("library", "apps/reader/readerui", { showReader = 2 })
     requires("library", "docsettings", { flush = 1 })
     requires("library", "ui/widget/booklist", { hasBookBeenOpened = 1 })

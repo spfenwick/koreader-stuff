@@ -7,7 +7,8 @@ own walk, so they're matched as files are:
   search's subprocess;
 - a whole-word search nothing matches: "No results";
 - ZenOS's search over several home folders, the library under the second;
-- tapping a cloud result shows its details; the search hooks stay on.
+- tapping a cloud result shows its details; the search hooks stay on;
+- a folder count (getList without collate) includes the cloud books.
 
 Use ZenOS's custom branch (git archive custom | tar -x -C <dir>).
 
@@ -67,6 +68,16 @@ EXTRA = r"""
         return { ok = true, open = menu ~= nil, items = out, search_ok = Guard.ok("search"),
             status = Guard.statusText() }
     end
+    if kind == "srch_count" then
+        local fc = require("apps/filemanager/filemanager").instance.file_chooser
+        local Virtual = package.loaded["athenaeum/virtual"]
+        local r = table.pack and table.pack(fc:getList(params.path)) or { fc:getList(params.path) }
+        local files = r[2] or {}
+        local all_true = true
+        for _i, f in ipairs(files) do if f ~= true then all_true = false end end
+        return { ok = true, files = #files, all_true = all_true,
+            placeholders = Virtual.count_placeholders, problem = Virtual.count_problem or false }
+    end
     if kind == "srch_tap" then
         local menu = require("apps/filemanager/filemanager").instance.filesearcher.booklist_menu
         for _i, item in ipairs(menu.item_table) do
@@ -96,6 +107,7 @@ try:
     s.cmd("activate_navbar_tab", id="books")
     time.sleep(6); report["listing_files"] = s.listing().get("files")
     lib = str(s.library)
+    report["count"] = s.cmd("srch_count", path=lib)
     parent = str(Path(lib).parent)
     def run(label, **kw):
         s.cmd("srch", **kw)
@@ -142,9 +154,13 @@ expected = {
 failed = [k for k, v in expected.items() if not isinstance(report.get(k), dict) or report[k]["cloud"] != v]
 if report.get("zen_wholeword_remot") != "no results":
     failed.append("zen_wholeword_remot")
+count = report.get("count") or {}
+if not (count.get("files") == 4 and count.get("all_true") and count.get("placeholders") is True
+        and count.get("problem") is False):
+    failed.append("count")
 if not report.get("tap_details"):
     failed.append("tap_details")
-if any(isinstance(v, dict) and not v.get("search_ok") for v in report.values()) or report.get("status"):
+if any(isinstance(v, dict) and "cloud" in v and not v.get("search_ok") for v in report.values()) or report.get("status"):
     failed.append("search turned off")
 print("FAILED: " + ", ".join(failed) if failed else "all passed")
 sys.exit(1 if failed else 0)

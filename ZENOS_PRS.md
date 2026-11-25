@@ -293,8 +293,14 @@ settings are gone: cloud books are always listed, and always in the groups.
 It now asks the
 browser's `show_file` too, so the status filter applies to cloud books, in
 the listing and the count. The rest of what the ZenOS change fixed is lost
-again: flat view and folder covers (count, images, "all finished") don't
-see cloud books. The notes below
+again: ZenOS's flat view and folder covers (count, images, "all finished")
+don't see cloud books. Since 0.10.10 the hook is on `getPathList` (KOReader
+2026.07 and later; `getList` before that), so KOReader's own flat view lists
+cloud books, but ZenOS's flat view replaces `getPathList` for the home
+folder with its own walk (`scan_flat` in `browser_flat_view_compat.lua`,
+`BookWalker.walk`), which never reaches the hook. A small ZenOS change, with
+`scan_flat` asking the book sources for books without a file in each folder
+it walks, would fix that part on its own. The notes below
 describe the discarded version, in case it's revisited.
 
 ZenOS (`common/book_sources.lua` unless noted):
@@ -425,7 +431,7 @@ it (`browser_item_table_cache.lua` wraps `genItemTableFromPath`, plus its
 rendering, series grouping, flat view, filters and folder covers), but on
 a cache miss it still asks KOReader to build the folder's contents:
 `getList` → `getPathList` → `getListItem`, one item at a time. Every
-KOReader listing hook (ZenOS's from #6, Athenæum's slim `getList` hook and
+KOReader listing hook (ZenOS's from #6, Athenæum's `getPathList` hook and
 its `hasBookBeenOpened` / `isFileInCollections` shortcuts) sits in that
 step.
 

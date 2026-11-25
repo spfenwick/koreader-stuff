@@ -1522,6 +1522,9 @@ function Library.statusText()
     local problems = {}
     local guard_text = Guard.statusText()
     for line in guard_text:gmatch("[^\n]+") do table.insert(problems, "• " .. line) end
+    if Virtual.count_problem then
+        table.insert(problems, "• " .. T(_("folder counts leave cloud books out: %1"), Virtual.count_problem))
+    end
 
     local overview = {}
     if server then

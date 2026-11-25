@@ -2278,6 +2278,116 @@ do
         "metadata set by a sort is kept")
 end
 
+-- The listing hook: every return value passed on; folder counts --------------------
+
+do
+    Virtual.setCatalog("/lib", { { id = "c1", title = "One" }, { id = "c2", title = "Two" } })
+    local real_rebuilding = Virtual.listingRebuilding
+    Virtual.listingRebuilding = function() end
+    local fc = { name = "filemanager", show_file = function() return true end,
+        getListItem = function(_self, _dir, name, item_path) return { path = item_path, text = name } end }
+    local function orig(_self, _path, collate)
+        if collate then return { { path = "/lib/sub" } }, { { path = "/lib/local.epub" } }, true, "extra", nil end
+        return { true }, { true }, false, "extra", nil
+    end
+    local r = { n = select("#", Virtual._listing(orig, fc, "/lib", {})), Virtual._listing(orig, fc, "/lib", {}) }
+    eq(r.n, 5, "listing: every value returned, nils at the end too")
+    check(#r[2] == 3 and r[3] == true and r[4] == "extra", "listing: cloud books added, later values kept")
+    r = { Virtual._listing(orig, fc, "/lib") }
+    check(#r[2] == 3 and r[2][2] == true and r[2][3] == true and r[3] == false and r[4] == "extra",
+        "count: cloud books counted as true, later values kept")
+    r = { Virtual._listing(orig, fc, "/elsewhere") }
+    eq(#r[2], 1, "another folder: nothing added")
+
+    -- getPathList (KOReader 2026.07 and later): fills the lists it's given.
+    local function porig(_self, _path, collate, dirs, files)
+        table.insert(dirs, collate and { path = "/lib/sub" } or true)
+        table.insert(files, collate and { path = "/lib/local.epub" } or true)
+        return true, "extra"
+    end
+    local dirs, files = {}, {}
+    r = { n = select("#", Virtual._pathListing(porig, fc, "/lib", {}, dirs, files)),
+        Virtual._pathListing(porig, fc, "/lib", {}, {}, {}) }
+    check(r.n == 2 and r[1] == true and r[2] == "extra", "getPathList: every value returned")
+    check(#files == 3 and files[2].path and files[3].path, "getPathList: cloud items added to its files")
+    files = {}
+    Virtual._pathListing(porig, fc, "/lib", nil, {}, files)
+    check(#files == 3 and files[2] == true and files[3] == true, "getPathList count: cloud books counted")
+    files = {}
+    Virtual._pathListing(porig, fc, "/lib/sub", {}, {}, files)
+    eq(#files, 1, "getPathList: another folder, nothing added")
+    local shown = 0
+    Virtual.listingRebuilding = function() shown = shown + 1 end
+    fc.path = "/"
+    Virtual._pathListing(porig, fc, "/lib", {}, {}, {})
+    eq(shown, 0, "flat view from a folder above: no rebuilding message")
+    fc.path = "/lib"
+    Virtual._pathListing(porig, fc, "/lib", {}, {}, {})
+    eq(shown, 1, "the library shown: rebuilding message")
+    Virtual._pathListing(porig, fc, "/lib", nil, {}, {})
+    eq(shown, 1, "a count: no message")
+    fc.path = nil
+    Virtual.listingRebuilding = function() end
+
+    -- Counting with something other than true: cloud books left out.
+    eq(Virtual._placeholdersIn({ true }, { true }), true, "true placeholders")
+    eq(Virtual._placeholdersIn({}, {}), nil, "nothing to tell by")
+    eq(Virtual._placeholdersIn({ true }, { { path = "x" } }), false, "an item among them")
+    local items = function() return {}, { { path = "/lib/local.epub" } }, true end
+    r = { Virtual._listing(items, fc, "/lib") }
+    check(#r[2] == 1 and Virtual.count_placeholders == false and Virtual.count_problem,
+        "count with items: cloud books not added, problem noted")
+    r = { Virtual._listing(orig, fc, "/lib") }
+    eq(#r[2], 1, "stays off for the run")
+    check(require("athenaeum/library").statusText():find("folder counts leave cloud books out", 1, true),
+        "problem in Status")
+    Virtual.count_placeholders, Virtual.count_problem = nil, nil
+
+    -- KOReader's own getPathList, with its flat view: walking a folder above
+    -- the library reaches the library folder, and the cloud books are listed
+    -- there (by full path: a file of the same name elsewhere isn't the book).
+    do
+        local FileChooser = require("ui/widget/filechooser")
+        if type(FileChooser.getPathList) == "function" then
+            local top = TMP .. "/flat"
+            local lib = top .. "/lib"
+            lfs.mkdir(top); lfs.mkdir(lib); lfs.mkdir(top .. "/other")
+            local f = io.open(lib .. "/local.epub", "w"); f:write("x"); f:close()
+            Virtual.setCatalog(lib, { { id = "f1", title = "Flat", file_stem = "Same", file_ext = "epub" } })
+            f = io.open(top .. "/other/Same.epub", "w"); f:write("x"); f:close()
+            local probe = setmetatable({ name = "filemanager", is_fm = true, exclude_dirs = {},
+                exclude_files = {}, show_unsupported = true, path = top }, { __index = FileChooser })
+            probe.getPathList = function(self, ...) return Virtual._pathListing(FileChooser.getPathList, self, ...) end
+            local real_flat = FileChooser.show_flat_view
+            FileChooser.show_flat_view = true
+            local fdirs, ffiles = {}, {}
+            local ok_walk, readable = pcall(probe.getPathList, probe, top, {}, fdirs, ffiles)
+            FileChooser.show_flat_view = real_flat
+            local paths = {}
+            for _i, item in ipairs(ok_walk and ffiles or {}) do paths[item.path] = true end
+            check(ok_walk and readable == true, "flat view walk: " .. tostring(readable))
+            check(paths[lib .. "/Same.epub"] and paths[top .. "/other/Same.epub"] and paths[lib .. "/local.epub"],
+                "flat view: the cloud book listed beside a same-named file elsewhere")
+            eq(#ffiles, 3, "flat view: three books")
+            Virtual.setCatalog(nil, {})
+        end
+    end
+
+    -- The startup check, with KOReader's own getList on this plugin's folder.
+    local FileChooser = require("ui/widget/filechooser")
+    eq(Virtual.checkCountPlaceholders(FileChooser), true, "KOReader counts with true")
+    eq(Virtual.count_placeholders, true, "so cloud books are counted")
+    local fake = { getList = function() return { { path = "/x/sub" } }, {} end }
+    eq(Virtual.checkCountPlaceholders(fake, "/x"), false, "a KOReader counting with items: noticed")
+    check(Virtual.count_placeholders == false and Virtual.count_problem, "and cloud books not counted")
+    Virtual.count_placeholders, Virtual.count_problem = nil, nil
+    eq(Virtual.checkCountPlaceholders({ getList = function() error("boom") end }, "/x"), nil,
+        "a failing check: trusted")
+    eq(Virtual.count_placeholders, nil, "nothing changed")
+    Virtual.listingRebuilding = real_rebuilding
+    Virtual.setCatalog(nil, {})
+end
+
 -- Metadata sorts get cloud books' metadata from the book sources directly ----------
 
 do
