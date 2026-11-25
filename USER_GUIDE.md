@@ -46,7 +46,7 @@ Sync first from the device whose settings you want to keep. The catalog is share
 - **Badges** on the cover show where a book is: a cloud for cloud-only books; with Concordance, the cloud carries a check, play or pause mark when the book is finished, being read or on hold on another device.
 - **Reading status**: with Concordance, ZenOS also shows a cloud book's status from your other devices, as it does for a downloaded book: its status badge, the status filters, Home and To Be Read. Changing the status of a cloud book needs the book downloaded; once it is, the status on this device is the one shown.
 - **ZenOS tabs**: cloud books appear in Authors, Series and Tags, on Home, and in the reading history. Books in a series are numbered in the order the server lists them, so a gap or a number such as 2.5 shows as the next whole number.
-- **File search** finds cloud books by title, author or series.
+- **File search** finds cloud books as it finds files (KOReader's search, or ZenOS's when it's on): by file name and, with metadata search on, by title, author, series and tags. They're sorted with the files found; book content search skips them.
 
 ### Downloading
 

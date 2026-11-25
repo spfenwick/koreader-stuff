@@ -190,23 +190,71 @@ icon's dark shapes in ZenOS's badge colours and size (`getBadgeColor`,
 bottom-right corner. When ZenOS's series number is there, it stays in the
 corner and the source badge moves left of it. The source badge never
 covers ZenOS's badges along the bottom (the series number, the page-count
-pill on the left): on a cover too small for it beside them, it's left out. Painted on library mosaic items
-(`zen_renderer.lua`), list covers (`browser_list_item_layout.lua`), Home
-strips (`strip_common.lua`: only when the strip's "Show badges" is on), the
-featured book (`featured_common.lua`) and the book switcher
-(`book_switcher_page.lua`), the last two through `make_cover_widget`'s
-`decorate` (neither shows ZenOS's own badges or has a setting for them).
-`statusChanged()` repaints after a source's badges change.
+pill on the left): on a cover too small for it beside them, it's left out.
+Painted on library mosaic items (`zen_renderer.lua`), list covers
+(`browser_list_item_layout.lua`), Home strips (`strip_common.lua`: only
+when the strip's "Show badges" is on), the featured book
+(`featured_common.lua`) and the book switcher (`book_switcher_page.lua`),
+the last two through `make_cover_widget`'s `decorate` (neither shows
+ZenOS's own badges or has a setting for them). `statusChanged()` repaints
+after a source's badges change.
 
-**Status (2026-11-25):** committed on ZenOS `custom` (f79e8702, "Book
-source badges"; no PR branch yet), to be opened once #911 and #912 are
-merged (`common/source_badge.lua`, spec `spec/lua/unit/source_badge_spec.lua`).
+Details settled in review (2026-11-26):
+- The featured book and book switcher ask for the badge each time a cover
+  is painted (every cover gets `decorate`), so a badge a source gives
+  after Home or the switcher was built still shows.
+- `BookSources.badge` logs a failing `badge()` once and skips that source
+  until it calls `statusChanged()` or is registered again: `badge()` runs
+  on every cover paint, so each failure would otherwise log per cover per
+  repaint.
+- List covers too small for the badge at full size
+  (`SourceBadge.fits()`: the cap of 45% of the cover's shorter side would
+  shrink it) get no badge, rather than one hiding much of the cover.
+- Group and folder covers (several books, or none) get no badge; the API
+  comment says so.
+- In the detailed list, the source badge is the only badge on the cover:
+  the list shows ZenOS's own (series, read status/progress, pages) as row
+  text, and a source badge has no text form. Kept on the cover, rather
+  than as an icon in the row's right column, by choice.
+- No ZenOS setting turns the badges off: sources decide (Athenæum's
+  `badge_cloud`, `badge_local`, `badge_noncloud`). A toggle was tried and
+  removed; say so in the PR description in case a reviewer asks.
+- The mosaic's "Show progress bar" used to sit under the bottom row of
+  badges (the page count, the series number, and so the source badge):
+  an existing ZenOS bug that CodeRabbit flagged on the source badge
+  (2026-11-26). Fixed for the whole row in a separate commit on `custom`,
+  "Lift badges above progress bar" (4a8120a3): while the bar is shown, the
+  row moves up as one, to sit above the bar's top as it would above the
+  cover's bottom edge (`bottom_row_lift()` in `zen_renderer.lua`;
+  `SourceBadge.paint` takes the lift). It fixes ZenOS on its own, so it
+  could go upstream as its own PR, ahead of or with this one.
+- From CodeRabbit (2026-11-26): `SourceBadge.shift`'s gap is the space
+  between the badges' 2px outlines, so the source badge and the series
+  number don't touch on small covers; the book switcher passes its config
+  to `SourceBadge.decorate`.
+- The icon mask cache empties all at once at 64 entries, as ZenOS's other
+  small caches do (`icon_packs.lua`, `folder_cover_files.lua`, …); a few
+  icons × a few cover sizes stays well under that.
+
+Known gaps, not fixed:
+- `statusChanged()` rebuilds groupings and Home's cached data when a
+  badge change only needs a repaint. A lighter `badgesChanged()` could
+  repaint, call `SourceBadge.clear()` and reset the failed sources.
+
+**Status (2026-11-26):** committed on ZenOS `custom` as "Book source
+badges" (77f2e7c8 on 2026-11-26; amended in place, so find it by name; no
+PR branch yet), to be opened once #911 and #912 are merged
+(`common/source_badge.lua`, spec `spec/lua/unit/source_badge_spec.lua`).
+Its specs pass, and luacheck finds nothing in its files (the zen-os
+checkout's two `book_sources.lua` warnings, `reader_settings` shadowing,
+are from 6b81afc2, before it).
 Athenæum 0.9.20 gives `badge()`, assumes a ZenOS with it (Guard's startup
 check turns badges off without it), and has dropped its Home badge hook,
 the stack walk and its cover painting. Since 0.10.8 it paints no badges
 of its own at all: KOReader's plain list rows and other non-ZenOS views
 show none (the `BookList`/`Menu:paintTo` hooks, the row indent and their
-startup check are gone). Not yet checked in the emulator with cloud books.
+startup check are gone). Not yet checked in the emulator with cloud books
+(colour screens, night mode, small list rows).
 
 **Plugins lose:** `Badge.installHome`, `forHome`, `badgeHomeCover`,
 `coverRect` and `Badge.place` in `athenaeum/badge.lua`.
@@ -322,14 +370,25 @@ long-pressing a result with no file does nothing: KOReader's
 doesn't exist, before `filemanagerutil.openFile` / `showFileDialog`, where
 ZenOS asks the sources (#1).
 
-So Athenæum hooks KOReader's search (`athenaeum/search.lua`): it adds the
-matching cloud books (title, authors, series, with KOReader's case and
-wildcard options) after the files found, shows them instead of "No
-results", and shows a cloud result's details on tap and long-press. Those
-are `onShowSearchResults`, `showSearchResultsMessage`, `onMenuSelect` and
-`onMenuHold` hooks, relying on the static `FileSearcher.search_results`,
-`self._manager` and the order of those calls, which KOReader reworks fairly
-often.
+So Athenæum hooks KOReader's search (`athenaeum/search.lua`). Since
+2026-11-26 (0.10.9) it does inside the plugin what the fix below would do in ZenOS:
+its `FileSearcher:getList` hook (inside ZenOS's wrapper, so called once per
+search root) asks the same `isFileMatch` about each cloud book in the
+searched folder and adds those that match in KOReader's result shape, so
+cloud books are matched by KOReader's rules or ZenOS's, whichever is on.
+`doSearch` runs with the cloud books' metadata answered from the book
+sources (`withCloudDocProps`), and drops cached results when the cloud books
+changed; `onShowSearchResults` sets their `doc_props`; `onMenuSelect` /
+`onMenuHold` show a cloud result's details. Before, it matched cloud books
+itself (title, authors, series) and added them after the results, which
+fell behind each change to ZenOS's matching (substring/whole-word setting,
+separators, search roots).
+
+What it relies on: `getList` doing the matching and returning `{ name,
+fullpath, attributes }` entries; getList's preparation of the search text
+(lowercase, wildcards), copied because it's a local; ZenOS calling the
+original `getList` once per root; metadata matching reading
+`getDocProps`.
 
 **Fix:** in ZenOS's `FileManagerFileSearcher:getList` wrapper, for each
 folder searched (with subfolders when the search includes them), add the
@@ -343,16 +402,16 @@ file that a source owns go to `BookSources.open` / `showContextMenu`.
 
 Things to watch:
 - KOReader caches results (`search_hash` / `search_results`): a source's
-  `changed()` should drop them, or a book downloaded since shows twice
-  (Athenæum's hook re-checks cached results today).
+  `changed()` should drop them (Athenæum's `doSearch` hook drops them when
+  its catalog generation changed).
 - `no_metadata_count` ("N files without metadata"): source books have
   metadata, so they shouldn't add to it.
 
 **Plugins lose:** `athenaeum/search.lua` apart from its setting ("Include
 cloud books in file search", which would then have to become a source
-option or go, as `zenos_groups` did in #6), and with it `Virtual.listItem`
-(search's only user) and the `getListItem` dependency in Guard's startup
-check. Every source's books become searchable, not just Athenæum's.
+option or go, as `zenos_groups` did in #6), including the copy of getList's
+search text preparation. Every source's books become searchable, not just
+Athenæum's.
 
 Not started.
 

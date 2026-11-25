@@ -2,7 +2,7 @@
 
 Downloads one small book by an author with several books in the catalog,
 then checks: the badge on its cover (grid and list), and file search for
-that author (the local copy first, then the cloud books), a search only
+that author (the local copy and the cloud books, sorted together), a search only
 cloud books match (shown instead of "No results"), one nothing matches,
 and tapping a cloud result (its details).
 
@@ -172,10 +172,7 @@ def main() -> int:
                 items = []
             local = [i for i in items if not i["cloud"]]
             cloud = [i for i in items if i["cloud"]]
-            first_cloud = next((n for n, i in enumerate(items) if i["cloud"]), len(items))
             out = {"results": len(items), "local": len(local), "cloud": len(cloud),
-                   "local_first": all(not i["cloud"] for i in items[:first_cloud])
-                   and all(i["cloud"] for i in items[first_cloud:]),
                    "message": r.get("top_text") if not r.get("open") else None,
                    "screenshot": s.shot("search-" + label)}
             return out, items

@@ -240,8 +240,8 @@ function Guard.check()
     end
 
     requires("search", "apps/filemanager/filemanagerfilesearcher", {
-        onShowSearchResults = 2, showSearchResultsMessage = 2, onMenuSelect = 2, onMenuHold = 2,
-        doSearch = true,
+        getList = 1, isFileMatch = 5, doSearch = 1,
+        onShowSearchResults = 2, onMenuSelect = 2, onMenuHold = 2,
     })
     requires("history", "readhistory", {
         _read = 1, clearMissing = 1, _flush = 1, getIndexByFile = 2, getIndexByTime = 2, removeItem = 2,

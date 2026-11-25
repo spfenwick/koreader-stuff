@@ -1694,7 +1694,7 @@ function Library.menuEntry(plugin)
                 },
                 {
                     text = _("Include cloud books in file search"),
-                    help_text = _("KOReader's file search also finds cloud books, by title, author or series."),
+                    help_text = _("File search also finds cloud books, matched as it matches files: by file name and, with metadata search on, by title, author, series and tags."),
                     checked_func = function() return Library.settings().search ~= false end,
                     callback = function()
                         Library.save("search", Library.settings().search == false)

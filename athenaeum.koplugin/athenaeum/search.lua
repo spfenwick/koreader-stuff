@@ -1,15 +1,34 @@
 --[[
 Cloud books in KOReader's file search (which ZenOS also uses and styles).
 
-KOReader searches the folder's files; cloud books aren't files, so:
-- matching cloud books (title, authors, series) are added after the files
-  found, when the library folder is within the search;
-- if no files match but cloud books do, those are shown instead of
-  "No results";
-- tapping or long-pressing a cloud result shows its details (KOReader's own
-  handlers ignore paths that don't exist).
+KOReader's search walks the folders (FileSearcher:getList, in a
+subprocess) and asks isFileMatch about each file. Cloud books aren't files,
+so the walk never sees them. They're put into it instead: after the walk,
+each cloud book in the searched folder is asked of the same isFileMatch, and
+those that match are added to the files found, as the walk adds files. So
+cloud books are matched exactly as files are, by KOReader's rules or, with
+ZenOS's search on, by ZenOS's (its isFileMatch: normalized text, whole words
+or substrings, metadata). KOReader then builds, sorts and caches the
+results with the rest, and shows them, or "No results".
 
-Options follow KOReader's search: case sensitivity, and * and ? wildcards.
+ZenOS's search covers the home folder and its additional home folders by
+calling getList once per folder, with FileSearcher.search_path set to it;
+this getList is inside ZenOS's, so each call is checked against its folder.
+
+Also:
+- doSearch runs with cloud books' metadata answered from the book sources
+  (Virtual.withCloudDocProps): isFileMatch's metadata search (in the
+  subprocess, which inherits it) and the items KOReader builds for the
+  results both read it through getDocProps;
+- results are searched again when the cloud books changed since they were
+  cached (KOReader would show the cached ones);
+- results carry the books' metadata (doc_props), as the library's items do;
+- tapping or long-pressing a cloud result shows its details (KOReader's
+  own handlers ignore paths that don't exist).
+
+The search text is prepared as getList prepares it (lowercase unless case
+sensitive; with "Use patterns", wildcards made Lua patterns): getList keeps
+it in a local.
 ]]
 
 local util = require("util")
@@ -19,36 +38,7 @@ local Search = {
     installed = false,
 }
 
---- Returns match(text) for KOReader's search options.
-function Search.matcher(search_string, case_sensitive, use_patterns)
-    if search_string == "*" then return function() return true end end
-    local s = case_sensitive and search_string or util.stringLower(search_string)
-    if use_patterns then
-        s = s:gsub("%.", "%%."):gsub("%*", ".*"):gsub("%?", ".")
-    end
-    return function(text)
-        if type(text) ~= "string" or text == "" then return false end
-        if not case_sensitive then text = util.stringLower(text) end
-        if use_patterns then
-            local ok, found = pcall(string.find, text, s)
-            return ok and found ~= nil
-        end
-        return text:find(s, 1, true) ~= nil
-    end
-end
-
---- Cloud books matching the search, by title, authors or series.
-function Search.cloudMatches(books, search_string, case_sensitive, use_patterns)
-    local match = Search.matcher(search_string, case_sensitive, use_patterns)
-    local out = {}
-    for _i, b in ipairs(books) do
-        if match(b.title) or match(b.series)
-                or (b.authors and #b.authors > 0 and match(table.concat(b.authors, ", "))) then
-            table.insert(out, b)
-        end
-    end
-    return out
-end
+local function pack(...) return { n = select("#", ...), ... } end
 
 --- Is the library folder part of a search of search_path?
 function Search.inScope(folder, search_path, include_subfolders)
@@ -60,6 +50,56 @@ function Search.inScope(folder, search_path, include_subfolders)
     return base == "/" or folder:sub(1, #base + 1) == base .. "/"
 end
 
+--- The search text as FileSearcher:getList hands it to isFileMatch.
+function Search.query(searcher, search_string)
+    if search_string == "*" then return search_string end
+    if not searcher.case_sensitive then search_string = util.stringLower(search_string) end
+    if searcher.use_patterns then
+        search_string = search_string:gsub("%.", "%%%."):gsub("%*", "%.%*"):gsub("%?", "%.")
+    end
+    return search_string
+end
+
+--- The cloud books a search finds, as getList's entries:
+-- { { name, path, attributes }, … }, leaving out paths in found (the walk
+-- found a file there). searcher is the FileSearcher. search: { path,
+-- string } (FileSearcher.search_path and search_string), FileChooser and
+-- DocumentRegistry (the filters the walk applies to files).
+function Search.cloudEntries(Virtual, searcher, found, search)
+    if not (Search.enabled and Virtual.folder and #Virtual.books > 0) then return {} end
+    if not Search.inScope(Virtual.folder, search.path, searcher.include_subfolders) then return {} end
+    local FileChooser, DocumentRegistry = search.FileChooser, search.DocumentRegistry
+    local query = Search.query(searcher, search.string or "")
+    local out = {}
+    -- Content search would open each book; a cloud book has no file. Its
+    -- books add nothing to "N files without metadata": they have metadata,
+    -- unless there's no CoverBrowser, which isn't theirs to report.
+    local content, no_metadata = searcher.include_content, searcher.no_metadata_count
+    searcher.include_content = false
+    local ok, err = pcall(function()
+        for _i, book in ipairs(Virtual.books) do
+            local name, path = book.filename, book.path
+            if name and path and not found[path] and not util.stringStartsWith(name, "._")
+                    and (FileChooser.show_unsupported or DocumentRegistry:hasProvider(path))
+                    and FileChooser:show_file(name)
+                    and searcher:isFileMatch(name, path, query, true) then
+                out[#out + 1] = { name, path, Virtual.attributes(book) }
+            end
+        end
+    end)
+    searcher.include_content, searcher.no_metadata_count = content, no_metadata
+    if not ok then error(err, 0) end
+    return out
+end
+
+--- KOReader reuses cached results for the same search: not once the cloud
+-- books have changed (a book downloaded, deleted, added to the catalog).
+-- generation: Virtual.generation.
+function Search.dropStale(FileSearcher, generation)
+    if Search.generation ~= generation then FileSearcher.search_hash = nil end
+    Search.generation = generation
+end
+
 function Search.install(Virtual)
     if Search.installed then return end
     local Guard = require("athenaeum/guard")
@@ -67,60 +107,45 @@ function Search.install(Virtual)
     local ok, FileSearcher = pcall(require, "apps/filemanager/filemanagerfilesearcher")
     if not ok or type(FileSearcher) ~= "table" then return end
     Search.installed = true
+    local FileChooser = require("ui/widget/filechooser")
+    local DocumentRegistry = require("document/documentregistry")
 
-    local function cloudItems(searcher)
-        if not (Search.enabled and Virtual.folder and #Virtual.books > 0) then return {} end
-        if not Search.inScope(Virtual.folder, FileSearcher.search_path, searcher.include_subfolders) then
-            return {}
+    -- In the search's subprocess, once per folder searched (ZenOS calls it
+    -- for each of its home folders).
+    Guard.hook("search", FileSearcher, "getList", function(orig, self, ...)
+        local r = pack(orig(self, ...))
+        local files = r[2]
+        if type(files) ~= "table" then return unpack(r, 1, r.n) end
+        local found = {}
+        for _i, entry in ipairs(files) do
+            if type(entry) == "table" and type(entry[2]) == "string" then found[entry[2]] = true end
         end
-        local books = Search.cloudMatches(Virtual.books, FileSearcher.search_string or "",
-            searcher.case_sensitive, searcher.use_patterns)
-        if #books == 0 then return {} end
-        local FileChooser = require("ui/widget/filechooser")
-        local fc = searcher.ui and searcher.ui.file_chooser or FileChooser:new{ ui = searcher.ui }
-        local collate = fc:getCollate()
-        local files = {}
-        for _i, b in ipairs(books) do table.insert(files, Virtual.listItem(fc, b, collate)) end
-        return fc:genItemTable({}, files)
-    end
+        local search = { path = FileSearcher.search_path, string = FileSearcher.search_string,
+            FileChooser = FileChooser, DocumentRegistry = DocumentRegistry }
+        for _i, entry in ipairs(Search.cloudEntries(Virtual, self, found, search)) do
+            files[#files + 1] = entry
+        end
+        return unpack(r, 1, r.n)
+    end, "FileSearcher:getList")
 
-    -- Files first (as KOReader sorted them), then cloud books. Results
-    -- shown again from KOReader's cache get the current cloud books: books
-    -- downloaded since are dropped, books deleted since are added. (A
-    -- deleted file itself is dropped by KOReader.)
-    local function augment(searcher, results)
-        if results._athenaeum then
-            local kept = {}
-            for _i, item in ipairs(results) do
-                if not item._athenaeum then table.insert(kept, item) end
+    Guard.hook("search", FileSearcher, "doSearch", function(orig, self, ...)
+        Search.dropStale(FileSearcher, Virtual.generation)
+        if not (Search.enabled and #Virtual.books > 0) then return orig(self, ...) end
+        local args, r = pack(...), nil
+        Virtual.withCloudDocProps(self.ui, function() r = pack(orig(self, unpack(args, 1, args.n))) end)
+        return unpack(r, 1, r.n)
+    end, "FileSearcher:doSearch")
+
+    Guard.hook("search", FileSearcher, "onShowSearchResults", function(orig, self, ...)
+        for _i, item in ipairs(FileSearcher.search_results or {}) do
+            local book = type(item) == "table" and Virtual.by_path[item.path]
+            if book then
+                item._athenaeum = true
+                Virtual.withProps(item, book)
             end
-            for i = #results, 1, -1 do results[i] = nil end
-            for i, item in ipairs(kept) do results[i] = item end
         end
-        for _i, item in ipairs(cloudItems(searcher)) do
-            item._athenaeum = true
-            table.insert(results, item)
-        end
-        results._athenaeum = true
-        return results
-    end
-    Search.augment = augment -- for tests
-
-    local Guard = require("athenaeum/guard")
-    Guard.hook("search", FileSearcher, "onShowSearchResults", function(orig, self, not_cached, ...)
-        if FileSearcher.search_results then augment(self, FileSearcher.search_results) end
-        return orig(self, not_cached, ...)
+        return orig(self, ...)
     end, "FileSearcher:onShowSearchResults")
-
-    Guard.hook("search", FileSearcher, "showSearchResultsMessage", function(orig, self, no_results, ...)
-        if no_results and FileSearcher.search_results then
-            augment(self, FileSearcher.search_results)
-            if #FileSearcher.search_results > 0 then
-                return self:onShowSearchResults(true)
-            end
-        end
-        return orig(self, no_results, ...)
-    end, "FileSearcher:showSearchResultsMessage")
 
     -- Called with the results menu as self (its _manager is the searcher).
     for _i, name in ipairs({ "onMenuSelect", "onMenuHold" }) do

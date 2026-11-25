@@ -198,6 +198,7 @@ local function attributes(book)
         change = added,
     }
 end
+Virtual.attributes = attributes -- file search's entries
 
 -- Covers ----------------------------------------------------------------------
 
@@ -403,11 +404,7 @@ local function withProps(item, book)
     return item
 end
 
---- A file browser item for a virtual book (as in the library folder).
-function Virtual.listItem(fc, book, collate)
-    local dir = book.path:match("^(.*)/[^/]*$")
-    return withProps(fc:getListItem(dir, book.filename, book.path, attributes(book), collate), book)
-end
+Virtual.withProps = withProps -- file search's results
 
 -- getDocProps() fields CoverBrowser keeps (ZenOS's book sources fill them).
 local DOC_PROPS = { "pages", "title", "authors", "series", "series_index",
@@ -442,6 +439,7 @@ local function withCloudDocProps(ui, fn)
     rawset(bookinfo, "getDocProps", own)
     if not ok then error(err, 0) end
 end
+Virtual.withCloudDocProps = withCloudDocProps -- file search
 Virtual._withCloudDocProps = withCloudDocProps -- for tests
 
 -- True when the file browser's filters (its status filter, excluded and
