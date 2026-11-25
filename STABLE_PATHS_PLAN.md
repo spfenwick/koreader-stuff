@@ -24,6 +24,13 @@ Written 2026-11-25. Steps 1-5 done 2026-11-25; step 6 (the Kobo) to do.
   (#4: `moved()` now only for rare path changes; the listing half matters
   more). Little dead code was left after step 4; `book.filename` stays (it's
   the listing's file name).
+- `ZenSource.moved` and `Library.bookMoved` removed 2026-11-25:
+  `Library.booksMoved` tells ZenOS `changed()` with every old and new path,
+  once. Its history and collection moves stay.
+- Migration removed 2026-11-25, once every device was on 0.10.x
+  (`Library.migratePaths`, `History.legacyId`). A `cloud-<id>.epub` entry
+  left over (a book gone from the catalog) is an ordinary missing file now.
+  The e2e script starts from a history at the new paths.
 
 ## The problem
 
@@ -240,7 +247,7 @@ book's path, in one `Library.booksMoved` call. This covers:
 Old entries for books no longer in the catalog stay greyed out, as now.
 Concordance stores no cloud paths (`pathForUuids` is asked on each sync).
 Confirm that while implementing. Keep the migration code for a few
-releases.
+releases. (Removed 2026-11-25: every device had run it.)
 
 ## What goes away
 

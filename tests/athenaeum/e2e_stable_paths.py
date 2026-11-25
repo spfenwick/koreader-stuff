@@ -1,9 +1,8 @@
 """One path per book (STABLE_PATHS_PLAN.md), end to end under ZenOS.
 
 1. A catalog database is seeded (first launch), then KOReader starts again
-   with 0.9's history entries ("<folder>/cloud-<id>.epub"): they must move
-   to the books' paths ("Author - Title.epub", the file for a downloaded
-   book), once.
+   with history entries at the books' paths ("Author - Title.epub"): a
+   cloud book's is shown and doesn't open, a downloaded book's opens it.
 2. Cloud books are listed at their names, in "List (basic)" too.
 3. A download goes to the cloud entry's path; the history entry opens it.
 4. Deleting it from ZenOS's Authors view (long-press, Delete, confirm): the
@@ -34,12 +33,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import proto_b  # noqa: E402
 
-A = "5ab1e000-0000-4000-8000-00000000000a"  # cloud, in 0.9's history; downloaded, then deleted
-B = "5ab1e000-0000-4000-8000-00000000000b"  # cloud, in 0.9's history
-K = "5ab1e000-0000-4000-8000-00000000000c"  # on the device, in 0.9's history as a cloud entry
+A = "5ab1e000-0000-4000-8000-00000000000a"  # cloud, in the history; downloaded, then deleted
+B = "5ab1e000-0000-4000-8000-00000000000b"  # cloud, in the history
+K = "5ab1e000-0000-4000-8000-00000000000c"  # on the device, in the history
 P = "5ab1e000-0000-4000-8000-00000000000d"  # PDF only
 D = "5ab1e000-0000-4000-8000-00000000000e"  # same author and title as A
-GONE = "5ab1e000-0000-4000-8000-0000000000ff"  # in 0.9's history, not in the catalog
 
 
 def epub_bytes(uuid: str, title: str, author: str) -> bytes:
@@ -282,37 +280,33 @@ def main() -> int:
         return next((e for e in s["hist"] if e["file"] == path), None)
 
     lib = str(library)
-    legacy = lambda i: f"{lib}/cloud-{i}.epub"  # noqa: E731
     path_a = f"{lib}/Ann Author - Cloud Story.epub"
     try:
-        # 1. Seed the catalog, then start again with 0.9's history.
+        # 1. Seed the catalog, then start again with a history.
         launch()
         proto_b.wait_for(lambda: st().get("loaded") or None, 60, "first load")
         cmd("sp_seed", books=BOOKS)
         quit_()
         (ko_home / "history.lua").write_text("return " + proto_b.lua([
-            {"time": 1_700_000_900, "file": legacy(A)},
-            {"time": 1_700_000_800, "file": legacy(B)},
-            {"time": 1_700_000_700, "file": legacy(K)},
-            {"time": 1_700_000_600, "file": legacy(GONE)},
+            {"time": 1_700_000_900, "file": path_a},
+            {"time": 1_700_000_800, "file": f"{lib}/Bo Writer - Second Tale.epub"},
+            {"time": 1_700_000_700, "file": f"{lib}/Local Reader - Kept.epub"},
         ]) + "\n")
         launch()
         s = proto_b.wait_for(lambda: (lambda r: r if r.get("loaded") and r["cloud"] else None)(st()),
-                             60, "load with migration")
-        report["after_migration"] = s
+                             60, "load")
+        report["after_load"] = s
         cloud = {c["id"]: c["path"] for c in s["cloud"]}
         checks["names"] = cloud == {
             A: path_a, B: f"{lib}/Bo Writer - Second Tale.epub", P: f"{lib}/Pat Penn - Paper Only.pdf",
             D: f"{lib}/Ann Author - Cloud Story (2).epub"}
         checks["kept_matched"] = s["matched"].get(K) == f"{lib}/Local Reader - Kept.epub"
-        ea, eb, ek, eg = (entry(s, p) for p in (path_a, f"{lib}/Bo Writer - Second Tale.epub",
-                                                f"{lib}/Local Reader - Kept.epub", legacy(GONE)))
-        checks["migrated_cloud_a"] = bool(ea and ea["time"] == 1_700_000_900 and not ea["select_enabled"]
+        ea, eb, ek = (entry(s, p) for p in (path_a, f"{lib}/Bo Writer - Second Tale.epub",
+                                            f"{lib}/Local Reader - Kept.epub"))
+        checks["history_cloud_a"] = bool(ea and ea["time"] == 1_700_000_900 and not ea["select_enabled"]
                                          and not ea["dim"])
-        checks["migrated_cloud_b"] = bool(eb and eb["time"] == 1_700_000_800)
-        checks["migrated_to_file_k"] = bool(ek and ek["select_enabled"] and ek["time"] == 1_700_000_700)
-        checks["gone_left_greyed"] = bool(eg and eg["dim"])
-        checks["no_legacy_left"] = not any(entry(s, legacy(i)) for i in (A, B, K))
+        checks["history_cloud_b"] = bool(eb and eb["time"] == 1_700_000_800 and not eb["dim"])
+        checks["history_file_k"] = bool(ek and ek["select_enabled"] and ek["time"] == 1_700_000_700)
 
         # 2. Listed at their names: List (basic) and the classic list texts.
         cmd("activate_navbar_tab", id="books")

@@ -203,20 +203,6 @@ local function bookSources()
     return type(BookSources) == "table" and BookSources or nil
 end
 
---- A book's path changed: ZenOS's open views list it at new_path, and
--- drop what they cached for both paths (Home refreshes). Rare: a book's
--- path is where its file is or would be, so a download or a delete keeps
--- it (changed() then). Library.booksMoved calls this: a file renamed
--- outside KOReader, one of two copies deleted, a file taking a cloud
--- book's name, the move from 0.9's cloud-<id> paths.
-function ZenSource.moved(old_path, new_path)
-    books_cache = nil
-    local BookSources = bookSources()
-    if not (BookSources and type(BookSources.moved) == "function") then return end
-    local ok, err = pcall(BookSources.moved, old_path, new_path)
-    if not ok then logger.warn("Athenaeum: ZenOS book sources moved():", err) end
-end
-
 --- True when ZenOS's Home is shown, or about to be (ZenOS can start on
 -- Home with the file browser hidden behind it).
 function ZenSource.homeOnTop()

@@ -267,7 +267,6 @@ function Library.load()
     t0 = Timing.start()
     showCatalog(folder, cloud)
     Library.followRenames(folder, renamed)
-    Library.migratePaths()
     Guard.call("history", History.reconcile)
     Timing.record("catalog: show in folder", Timing.since(t0))
     Timing.record("catalog: load", Timing.since(t_load),
@@ -301,15 +300,17 @@ end
 
 --- Catalog books' paths changed (STABLE_PATHS_PLAN.md: another format
 -- downloaded, a file renamed outside KOReader, one of two copies deleted,
--- a file taking a cloud book's name, the move from 0.9's paths): { { old,
--- new }, … }. Their history and collection entries and ZenOS's views follow
--- them. Collections move only to a file: KOReader's collections can't hold
--- a path without one (they drop it when read).
+-- a file taking a cloud book's name): { { old, new }, … }. Their history
+-- and collection entries follow them, and ZenOS is told both paths
+-- changed (its open views are rebuilt). Collections move only to a file:
+-- KOReader's collections can't hold a path without one (they drop it when
+-- read).
 function Library.booksMoved(moves)
     if type(moves) ~= "table" or #moves == 0 then return end
     Guard.call("history", History.moved, moves)
     local lfs = require("libs/libkoreader-lfs")
     local ReadCollection = require("readcollection")
+    local paths = {}
     for _i, m in ipairs(moves) do
         local old, new = m[1], m[2]
         if type(old) == "string" and type(new) == "string" and old ~= new then
@@ -317,21 +318,14 @@ function Library.booksMoved(moves)
                 local ok, err = pcall(ReadCollection.updateItem, ReadCollection, old, new)
                 if not ok then logger.warn("Athenaeum: moving collection entries:", err) end
             end
-            local ok, err = pcall(ZenSource.moved, old, new)
-            if not ok then logger.warn("Athenaeum: telling ZenOS a book moved:", err) end
+            paths[#paths + 1] = old
+            paths[#paths + 1] = new
         end
     end
-end
-
---- One book's path changed: see booksMoved.
-function Library.bookMoved(old, new)
-    Library.booksMoved({ { old, new } })
-end
-
---- A cloud book's path, or nil.
-local function cloudPathFor(id)
-    local book = Virtual.by_id[id]
-    return book and book.path
+    if #paths > 0 then
+        local ok, err = pcall(ZenSource.changed, paths)
+        if not ok then logger.warn("Athenaeum: telling ZenOS books moved:", err) end
+    end
 end
 
 --- The books nameBooks() gave another name (a file took a cloud book's
@@ -346,31 +340,6 @@ function Library.followRenames(folder, changes)
         end
     end
     Library.booksMoved(moves)
-end
-
---- Entries under the cloud paths from before 0.10.0 ("<folder>/cloud-<id>.epub",
--- in the history and the saved cloud entries; collections can't hold
--- them) move to their books' paths. At every load, not once: it's a scan of
--- the history's paths, and an old entry may turn up later (a history file
--- copied from another device). Needs the catalog loaded; entries for books
--- gone from it stay as they are (greyed out).
-function Library.migratePaths()
-    if not History.installed or not (Library.catalog and #Library.catalog > 0) then return end
-    local moves, seen = {}, {}
-    local function consider(path)
-        if type(path) ~= "string" or seen[path] then return end
-        seen[path] = true
-        local id = History.legacyId(path)
-        local new = id and (Library.matched[id] or cloudPathFor(id))
-        if new then moves[#moves + 1] = { path, new } end
-    end
-    for _i, e in ipairs(require("readhistory").hist or {}) do consider(e.file) end
-    for _i, e in ipairs(Library.settings().history_cloud or {}) do
-        if type(e) == "table" then consider(e.file) end
-    end
-    if #moves == 0 then return end
-    Library.booksMoved(moves)
-    logger.info("Athenaeum: moved", #moves, "entries from cloud-<id> paths")
 end
 
 -- Deleting a downloaded book makes it a cloud book again. KOReader sends no
@@ -662,7 +631,6 @@ end
 
 function Library.installHistory()
     History.install{
-        folder = Library.folder,
         matched = function() return Library.matched end,
         save = Library.save,
         saved = function() return Library.settings().history_cloud end,
@@ -1302,7 +1270,7 @@ end
 
 --- Where a download goes: the cloud entry's path, with the format's suffix
 -- if it isn't the one the book's name has; else (a file there meanwhile,
--- or no name) a new name, as before 0.10.0.
+-- or no name) a new name, as KOReader's OPDS downloads are named.
 function Library.downloadName(id, book, ext, folder)
     local named = Virtual.by_id[id]
     if named and named.file_stem then

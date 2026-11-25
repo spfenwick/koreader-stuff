@@ -157,10 +157,16 @@ path is now where its file is or would be ("Author - Title.epub"), so a
 download or a delete keeps the path. Athenæum tells ZenOS `changed({ path
 })` for those, not `moved()`, and calls `moved()` only when a book's path
 really changes: a file renamed outside KOReader, one of two copies
-deleted, a file taking a cloud book's name, and the one-off move from
-0.9's `cloud-<id>` paths. Both are still worth having:
-- `moved()` for those rare cases (and for other sources that move files);
-  it no longer needs to be fast.
+deleted, a file taking a cloud book's name. (Also the one-off move from
+0.9's `cloud-<id>` paths, removed 2026-11-25 once every device had run
+it.)
+
+**Update (2026-11-25, later):** Athenæum no longer calls `moved()` at all.
+Its rare path changes happen during a catalog load, and `changed({ old,
+new, … })` does the rest of what `moved()` does (the views are rebuilt);
+all it loses is a book staying selected in select mode across the move.
+So the `moved()` half of this PR isn't needed by Athenæum. It's on ZenOS
+`custom` already; keep it only if another source (Kindle) wants it.
 - The listing half matters more now. A download still rebuilds the whole
   listing (the folder signature and `listingKey` change as before), but
   the cached entry needn't be swapped for another path: updating the one

@@ -1277,6 +1277,8 @@ do
         end
         return false
     end
+    -- The library's (set when it's loaded), put back at the end.
+    local real_on_device, real_cloud, real_non_cloud = Badge.isOnDevice, Badge.isCloud, Badge.isNonCloud
     Badge.isOnDevice = function(path) return path == "/lib/local.epub" end
     Badge.isCloud = function(path) return path == "/lib/cloud-x.epub" end
     check(Badge.cloud_enabled and not Badge.local_enabled, "defaults: cloud badge on, local badge off")
@@ -1351,9 +1353,8 @@ do
     check(Badge.cloudState == nil, "no reading status for the cloud badge")
     check(Badge.icon(Badge.kind("/lib/cloud-x.epub")) == Badge.icon("cloud"), "plain cloud icon")
 
-    Badge.noncloud_enabled, Badge.isNonCloud = false, nil
-    Badge.cloud_enabled, Badge.local_enabled = true, false
-    Badge.isOnDevice, Badge.isCloud = nil, nil
+    Badge.noncloud_enabled, Badge.local_enabled, Badge.cloud_enabled = false, false, true
+    Badge.isOnDevice, Badge.isCloud, Badge.isNonCloud = real_on_device, real_cloud, real_non_cloud
     bb:free()
 end
 
@@ -2035,7 +2036,7 @@ do
     Virtual.setCatalog(nil, {})
 end
 
--- A book moved (Library.bookMoved) ----------------------------------------------------
+-- Books moved (Library.booksMoved) ---------------------------------------------------
 
 do
     local Library = require("athenaeum/library")
@@ -2044,8 +2045,9 @@ do
     local ZenSourceMod = require("athenaeum/zenos_source")
     local folder = TMP .. "/movedlib"
     rmrf(folder); mkdir(folder)
-    local zen_moves, real_moved = {}, ZenSourceMod.moved
-    ZenSourceMod.moved = function(old, new) table.insert(zen_moves, old .. ">" .. new) end
+    local zen_told, real_changed = {}, ZenSourceMod.changed
+    ZenSourceMod.changed = function(paths) table.insert(zen_told, table.concat(paths or {}, ">")) end
+    local function moved(old, new) Library.booksMoved({ { old, new } }) end
     local function entry(path) return ReadHistory.hist[ReadHistory:getIndexByFile(path) or 0] end
     local function saved()
         local out = {}
@@ -2064,19 +2066,19 @@ do
     }
     ReadHistory:_flush()
     Library.save("history_cloud", { { file = cloud_old, time = 300 } })
-    Library.bookMoved(cloud_old, cloud_new)
+    moved(cloud_old, cloud_new)
     check(not entry(cloud_old), "moved: no entry at the old path")
     local e = entry(cloud_new)
     check(e and e.time == 300 and not e.select_enabled, "moved: cloud entry at the new path, same time")
     eq(ReadHistory:getIndexByFile(cloud_new), 2, "moved: keeps its place by time")
     eq(saved()[cloud_new], 300, "moved: saved cloud entry follows")
     eq(saved()[cloud_old], nil, "moved: old saved entry gone")
-    eq(zen_moves[1], cloud_old .. ">" .. cloud_new, "moved: ZenOS told")
+    eq(zen_told[1], cloud_old .. ">" .. cloud_new, "moved: ZenOS told both paths changed")
 
     -- A cloud entry moved to a file (another format downloaded).
     local pdf = folder .. "/Ann - Cloud (2).pdf"
     touch(pdf)
-    Library.bookMoved(cloud_new, pdf)
+    moved(cloud_new, pdf)
     e = entry(pdf)
     check(e and e.time == 300 and e.select_enabled, "to a file: opens")
     eq(saved()[pdf], nil, "to a file: no longer a saved cloud entry")
@@ -2094,7 +2096,7 @@ do
     ReadCollection:addItem(other, "athenaeum-test")
     ReadCollection:write({ ["athenaeum-test"] = true })
     os.rename(other, renamed)
-    Library.bookMoved(other, renamed)
+    moved(other, renamed)
     eq(#ReadHistory.hist, 1, "renamed: one entry")
     eq(entry(renamed) and entry(renamed).time, 700, "renamed: the newer time")
     check(ReadCollection:isFileInCollection(renamed, "athenaeum-test"), "renamed: collection entry moved")
@@ -2103,25 +2105,33 @@ do
     -- To a path without a file, collections are left alone (KOReader's
     -- collections can't hold one).
     os.remove(renamed)
-    Library.bookMoved(renamed, folder .. "/Bo - Gone.epub")
+    moved(renamed, folder .. "/Bo - Gone.epub")
     check(ReadCollection:isFileInCollection(renamed, "athenaeum-test"), "no file: collections untouched")
     check(entry(folder .. "/Bo - Gone.epub"), "no file: the history entry still moves")
 
     -- Nothing to do.
-    local n = #zen_moves
-    Library.bookMoved(pdf, pdf)
-    Library.bookMoved(nil, pdf)
-    eq(#zen_moves, n, "same path or no path: nothing")
+    local n = #zen_told
+    moved(pdf, pdf)
+    moved(nil, pdf)
+    Library.booksMoved({})
+    eq(#zen_told, n, "same path or no path: nothing")
+    -- Several: ZenOS told once.
+    n = #zen_told
+    touch(pdf)
+    Library.booksMoved({ { folder .. "/a.epub", folder .. "/b.epub" }, { folder .. "/c.epub", pdf } })
+    eq(#zen_told - n, 1, "several moved: ZenOS told once")
+    eq(zen_told[#zen_told], folder .. "/a.epub>" .. folder .. "/b.epub>" .. folder .. "/c.epub>" .. pdf,
+        "several moved: every old and new path")
 
     ReadCollection:removeCollection("athenaeum-test")
     ReadCollection:write()
     ReadHistory.hist = {}
     ReadHistory:_flush()
     Library.save("history_cloud", nil)
-    ZenSourceMod.moved = real_moved
+    ZenSourceMod.changed = real_changed
 end
 
--- One path per book: downloads, renames, and the move from cloud-<id> paths -------------
+-- One path per book: downloads and renames ------------------------------------------------
 
 do
     local Library = require("athenaeum/library")
@@ -2138,7 +2148,6 @@ do
     Library.save("history_cloud", nil)
     local S1 = "bbbbbbbb-0000-4000-8000-000000000001"
     local S2 = "bbbbbbbb-0000-4000-8000-000000000002"
-    local GONE = "bbbbbbbb-0000-4000-8000-000000000009"
     local store = Store.open(Library.dbPath(server), false)
     store:upsertBooks({
         { uuid = S1, title = "Cloud", authors = { "Ann" },
@@ -2148,38 +2157,25 @@ do
     store:close()
     local held = folder .. "/Bo - Held.epub"
     local f = io.open(held, "w"); f:write("x"); f:close()
-    local function legacy(id) return folder .. "/cloud-" .. id .. ".epub" end
     local function entry(path) return ReadHistory.hist[ReadHistory:getIndexByFile(path) or 0] end
     Library.installHistory()
+    Library.load()
 
-    -- 0.9's entries: a cloud book, one downloaded since, one gone from the catalog.
+    -- A cloud book's entry (as Concordance puts one in) and a downloaded one's.
+    local cloud = folder .. "/Ann - Cloud.epub"
     ReadHistory.hist = {
-        { time = 300, file = legacy(S1), text = "x", dim = false, select_enabled = false },
-        { time = 200, file = legacy(S2), text = "x", dim = false, select_enabled = false },
-        { time = 100, file = legacy(GONE), text = "x", dim = false, select_enabled = false },
+        { time = 300, file = cloud, text = "x", dim = false, select_enabled = false },
+        { time = 200, file = held, text = "x", dim = false, select_enabled = true },
     }
     ReadHistory:_flush()
-    eq(#(Library.settings().history_cloud or {}), 3, "0.9's cloud entries saved")
-    Library.load()
-    local cloud = folder .. "/Ann - Cloud.epub"
-    local e = entry(cloud)
-    check(e and e.time == 300 and not e.select_enabled and not e.dim, "migrated: cloud book at its new path")
-    e = entry(held)
-    check(e and e.time == 200 and e.select_enabled, "migrated: downloaded book at its file")
-    check(not entry(legacy(S1)) and not entry(legacy(S2)), "old paths gone")
-    e = entry(legacy(GONE))
-    check(e and e.dim, "book gone from the catalog: left, greyed out")
     local saved = {}
     for _i, se in ipairs(Library.settings().history_cloud or {}) do saved[se.file] = se end
     check(saved[cloud] and saved[cloud].id == S1 and saved[cloud].time == 300, "saved cloud entry with its ID")
-    check(not saved[legacy(S1)] and not saved[held], "saved list follows")
-    -- An old entry turning up later (a history from another device) moves too.
-    table.insert(ReadHistory.hist, { time = 50, file = legacy(S1), text = "x", dim = false, select_enabled = false })
-    ReadHistory:_flush()
-    Library.load()
-    check(not entry(legacy(S1)), "a later old entry: moved")
-    e = entry(cloud)
-    check(e and e.time == 300, "merged with the book's entry, the newer time kept")
+    check(not saved[held], "a file isn't saved")
+    -- 0.9's paths aren't known any more: an entry at one is a missing file.
+    local old = folder .. "/cloud-" .. S1 .. ".epub"
+    check(not History.isCloudPath(old), "a cloud-<id> path isn't a cloud entry")
+    local e
 
     -- A cloud entry before the catalog is loaded: known by the saved list.
     Virtual.setCatalog(nil, {})
@@ -2532,13 +2528,7 @@ do
     -- ZenOS's tag groups are left alone.
     check(db.getGroupedByTags == orig_tags, "tags not hooked")
 
-    -- A download: ZenOS is told the book moved to its file (its views and
-    -- Home show the file).
-    local cloud, file = "/lib/Cloud Two.epub", "/lib/Ann - Cloud Two.epub"
-    ZenOS.moves = {}
-    ZenSource.moved(cloud, file)
-    check(#ZenOS.moves == 1 and ZenOS.moves[1][1] == cloud and ZenOS.moves[1][2] == file,
-        "ZenOS told the book moved to its file")
+    check(ZenSource.moved == nil, "ZenOS's moved() isn't used")
 
     package.loaded["common/db_bookinfo"] = nil
     Virtual.setCatalog(nil, {})

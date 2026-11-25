@@ -39,29 +39,13 @@ local Virtual = require("athenaeum/virtual")
 
 local History = {
     installed = false,
-    folder = nil,       -- function() -> library folder
     matched = nil,      -- function() -> { [id] = path }
     save = nil,         -- function(key, value)
     saved = nil,        -- function() -> saved cloud entries
 }
 
--- Cloud entries' paths before 0.10.0: "<folder>/cloud-<id>.epub". Only
--- Library.migratePaths still meets them.
-local LEGACY_PREFIX = "cloud-"
-
 local function isFile(path)
     return lfs.attributes(path, "mode") == "file"
-end
-
---- The catalog ID in a path from before 0.10.0, or nil.
-function History.legacyId(path)
-    if type(path) ~= "string" then return nil end
-    local folder = History.folder and History.folder()
-    if not folder then return nil end
-    local dir, name = path:match("^(.*)/([^/]+)$")
-    if dir ~= folder:gsub("/+$", "") then return nil end
-    if name:sub(1, #LEGACY_PREFIX) ~= LEGACY_PREFIX then return nil end
-    return name:sub(#LEGACY_PREFIX + 1):match("^(.+)%.epub$")
 end
 
 -- The saved cloud entries by path, rebuilt when the saved list changes.
@@ -79,11 +63,11 @@ end
 
 --- Is this a cloud entry's path (whether or not the catalog is loaded)? A
 -- catalog book's entry, else one saved as a cloud entry (with its catalog
--- ID) that still has no file, else one from before 0.10.0.
+-- ID) that still has no file.
 function History.isCloudPath(path)
     if type(path) ~= "string" then return false end
     if Virtual.by_path[path] then return true end
-    if not (savedEntry(path) or History.legacyId(path)) then return false end
+    if not savedEntry(path) then return false end
     return not isFile(path)
 end
 
@@ -91,7 +75,7 @@ local function idOf(path)
     local book = Virtual.by_path[path]
     if book then return book.id end
     local e = savedEntry(path)
-    return e and e.id or History.legacyId(path)
+    return e and e.id
 end
 
 -- An entry's name, as KOReader gives it: the file's (a cloud entry's path
@@ -238,11 +222,11 @@ function History.wrapHistoryMenu(manager)
     end
 end
 
---- Installs the hooks. opts: folder(), matched(), save(key, value), saved().
+--- Installs the hooks. opts: matched(), save(key, value), saved().
 function History.install(opts)
     if History.installed then return end
     History.installed = true
-    History.folder, History.matched = opts.folder, opts.matched
+    History.matched = opts.matched
     History.save, History.saved = opts.save, opts.saved
     if not Guard.ok("history") then return end
     local ReadHistory = require("readhistory")
