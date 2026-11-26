@@ -16,6 +16,9 @@ Guard.check()
 Features:
   library  cloud books in the folder (also: tapping them, settings guard,
            covers); turning it off removes the cloud books
+  listing  extras while the library is listed: the "Rebuilding library…"
+           message and the hasBookBeenOpened / isFileInCollections
+           shortcuts; turning it off only loses those (the library stays)
   search   cloud books in file search (ZenOS puts them there; only checked)
   badge    the cover badges (ZenOS paints them, from the source's badge())
   zenos    cloud books in ZenOS's Authors, Series and Tags tabs, and the
@@ -54,7 +57,8 @@ function Guard.fail(feature, where, err)
     end
     if feature == "library" then
         -- Everything else depends on the library.
-        for other in pairs({ search = true, badge = true, zenos = true, history = true, metadata = true }) do
+        for other in pairs({ listing = true, search = true, badge = true, zenos = true, history = true,
+                metadata = true }) do
             if not Guard.failed[other] then Guard.failed[other] = "library turned off" end
         end
     end
@@ -192,12 +196,12 @@ function Guard.check()
     -- The "Rebuilding library…" message: getPathList (KOReader 2026.07 and
     -- later), else getList.
     if not (fc and type(fc.getPathList) == "function") then
-        requires("library", "ui/widget/filechooser", { getList = 3 })
+        requires("listing", "ui/widget/filechooser", { getList = 3 })
     end
     requires("library", "apps/reader/readerui", { showReader = 2 })
     requires("library", "docsettings", { flush = 1 })
-    requires("library", "ui/widget/booklist", { hasBookBeenOpened = 1 })
-    requires("library", "readcollection", { isFileInCollections = 2 })
+    requires("listing", "ui/widget/booklist", { hasBookBeenOpened = 1 })
+    requires("listing", "readcollection", { isFileInCollections = 2 })
     requires("library", "apps/filemanager/filemanager", { openFile = true })
     -- ZenOS's book sources (the plugin is ZenOS-only).
     local ok_zen, zen = pcall(require, "common/book_sources")
@@ -259,7 +263,8 @@ end
 --- Lines for the Status screen ("" when all is well).
 function Guard.statusText()
     local lines = {}
-    for _i, feature in ipairs({ "library", "search", "badge", "zenos", "history", "metadata", "jobs" }) do
+    for _i, feature in ipairs({ "library", "listing", "search", "badge", "zenos", "history", "metadata",
+            "jobs" }) do
         if Guard.unavailable[feature] then
             table.insert(lines, string.format("%s not started: %s", feature,
                 table.concat(Guard.unavailable[feature], "; ")))

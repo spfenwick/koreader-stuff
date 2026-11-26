@@ -1337,10 +1337,18 @@ do
     local t4 = { f = function() return 1 end }
     Guard.hook("library", t4, "f", function() error("boom") end)
     t4:f()
-    check(not Guard.ok("library") and not Guard.ok("search") and not Guard.ok("badge"),
-        "library failure turns off search and badge too")
+    check(not Guard.ok("library") and not Guard.ok("search") and not Guard.ok("badge")
+        and not Guard.ok("listing"), "library failure turns off search, badge and listing too")
     Virtual.setCatalog("/lib", { { id = "a", title = "A" } })
     eq(#Virtual.books, 0, "no cloud books once the library is off")
+
+    -- A listing extra failing (the "Rebuilding library…" message, the
+    -- shortcuts) leaves the library on.
+    reset()
+    local t6 = { f = function() return 1 end }
+    Guard.hook("listing", t6, "f", function() error("message bug") end)
+    eq(t6:f(), 1, "listing extra fails: KOReader's original runs")
+    check(not Guard.ok("listing") and Guard.ok("library"), "only the listing extras turn off")
 
     -- Background tasks: errors reported, tasks keep running.
     reset()
@@ -1389,6 +1397,13 @@ do
     check(Guard.check(), "a ZenOS without cloud books in search doesn't stop the library")
     check(Guard.unavailable.search ~= nil and not Guard.ok("search"), "search reported as not started")
     zen.searchResults = real_search
+    local BookList = require("ui/widget/booklist")
+    local real_opened = BookList.hasBookBeenOpened
+    BookList.hasBookBeenOpened = nil
+    check(Guard.check(), "a KOReader without hasBookBeenOpened doesn't stop the library")
+    check(Guard.unavailable.listing ~= nil and Guard.statusText():find("listing not started", 1, true),
+        "listing extras reported as not started: " .. Guard.statusText())
+    BookList.hasBookBeenOpened = real_opened
     local zen = package.loaded["common/book_sources"]
     package.loaded["common/book_sources"] = nil
     local real_path = package.path
@@ -1947,6 +1962,92 @@ do
     Library.server, UIManager.nextTick = real_server, real_tick
     Library.save("folder", nil)
     Virtual.setCatalog(nil, {})
+end
+
+-- History safeguards: KOReader's clearMissing, sharp drops ------------------------
+
+do
+    local Library = require("athenaeum/library")
+    local History = require("athenaeum/history")
+    local ReadHistory = require("readhistory")
+    local folder = TMP .. "/guardhist"
+    rmrf(folder); mkdir(folder)
+    local books = {}
+    for i = 1, 12 do books[i] = { id = "g" .. i, title = "Book " .. i } end
+    Virtual.setCatalog(folder, books)
+    local local_file, gone = folder .. "/Local.epub", folder .. "/Gone.epub"
+    local f = io.open(local_file, "w"); f:write("x"); f:close()
+    local function fresh()
+        ReadHistory.hist = { { time = 1000, file = local_file, text = "Local.epub", dim = false,
+            select_enabled = true } }
+        for i, b in ipairs(Virtual.books) do
+            table.insert(ReadHistory.hist, { time = 900 - i, file = b.path, text = b.filename, dim = false,
+                select_enabled = false })
+        end
+        table.insert(ReadHistory.hist, { time = 10, file = gone, text = "Gone.epub", dim = true,
+            select_enabled = false })
+        Library.save("history_cloud_set_aside", nil)
+        ReadHistory:_flush()
+    end
+    local function cloudCount()
+        local n = 0
+        for _i, e in ipairs(ReadHistory.hist) do if Virtual.by_path[e.file] then n = n + 1 end end
+        return n
+    end
+    local function inOrder()
+        for i = 2, #ReadHistory.hist do
+            if ReadHistory.hist[i - 1].time < ReadHistory.hist[i].time then return false end
+        end
+        return true
+    end
+
+    -- KOReader's own clearMissing runs, without the cloud entries.
+    fresh()
+    eq(#(Library.settings().history_cloud or {}), 12, "cloud entries saved")
+    local removed, real_remove = {}, ReadHistory.removeItem
+    ReadHistory.removeItem = function(self, item, ...)
+        removed[#removed + 1] = item.file
+        return real_remove(self, item, ...)
+    end
+    ReadHistory:clearMissing()
+    ReadHistory.removeItem = real_remove
+    eq(table.concat(removed, "|"), gone, "KOReader's clearMissing removed only the missing file")
+    check(cloudCount() == 12 and #ReadHistory.hist == 13 and inOrder(), "cloud entries put back, in order")
+    eq(#(Library.settings().history_cloud or {}), 12, "the saved list keeps them")
+    eq(Library.settings().history_cloud_set_aside, nil, "not a sharp drop")
+
+    -- Something else drops them all at once (a KOReader change): kept aside,
+    -- put back at the next startup.
+    fresh()
+    for i = #ReadHistory.hist, 1, -1 do
+        if Virtual.by_path[ReadHistory.hist[i].file] then table.remove(ReadHistory.hist, i) end
+    end
+    ReadHistory:_flush()
+    eq(#(Library.settings().history_cloud_set_aside or {}), 12, "sharp drop: kept aside")
+    History.restore(ReadHistory)
+    check(cloudCount() == 12 and inOrder(), "put back at startup, in order")
+    eq(Library.settings().history_cloud_set_aside, nil, "put back once")
+    eq(#(Library.settings().history_cloud or {}), 12, "saved again, for later startups")
+
+    -- One removed by hand: not a sharp drop.
+    fresh()
+    ReadHistory:removeItemByPath(Virtual.books[1].path)
+    eq(Library.settings().history_cloud_set_aside, nil, "one removed: not kept aside")
+    eq(#(Library.settings().history_cloud or {}), 11, "one removed: saved list follows")
+
+    -- Athenaeum moving them (Library.booksMoved): not a sharp drop.
+    fresh()
+    local moves = {}
+    for i, b in ipairs(Virtual.books) do moves[i] = { b.path, folder .. "/Moved " .. i .. ".epub" } end
+    History.moved(moves)
+    eq(Library.settings().history_cloud_set_aside, nil, "moved: not kept aside")
+
+    ReadHistory.hist = {}
+    ReadHistory:_flush()
+    Library.save("history_cloud", nil)
+    Library.save("history_cloud_set_aside", nil)
+    Virtual.setCatalog(nil, {})
+    rmrf(folder)
 end
 
 -- Books moved (Library.booksMoved) ---------------------------------------------------

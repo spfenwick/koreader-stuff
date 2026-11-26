@@ -620,6 +620,7 @@ function Library.installHistory()
         matched = function() return Library.matched end,
         save = Library.save,
         saved = function() return Library.settings().history_cloud end,
+        set_aside = function() return Library.settings().history_cloud_set_aside end,
     }
 end
 

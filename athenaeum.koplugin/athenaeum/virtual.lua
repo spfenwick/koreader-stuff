@@ -405,7 +405,7 @@ end
 
 -- "Rebuilding library…", when the library is the folder being shown (not
 -- when it's walked for a flat view of a folder above it). Only a message: a
--- failure mustn't turn the library off.
+-- failure mustn't turn the library off (its hook is Guard's "listing").
 local function rebuildingMessage(fc)
     if type(fc.path) == "string" and normalize(fc.path) ~= Virtual.folder then return end
     local ok, err = pcall(Virtual.listingRebuilding)
@@ -423,7 +423,7 @@ Virtual._messageOnly = messageOnly -- for tests
 local function installListing()
     local FileChooser = require("ui/widget/filechooser")
     local name = type(FileChooser.getPathList) == "function" and "getPathList" or "getList"
-    Guard.hook("library", FileChooser, name, messageOnly, "FileChooser:" .. name)
+    Guard.hook("listing", FileChooser, name, messageOnly, "FileChooser:" .. name)
 end
 
 --- Downloads the covers of the cloud books among paths (they have no file
@@ -557,20 +557,22 @@ end
 Virtual._checkCollections = checkCollections -- for tests
 
 local function installCloudShortcuts()
+    -- Guard's "listing": without them listings are slower, not wrong.
+    if not Guard.ok("listing") then return end
     local BookList = require("ui/widget/booklist")
     local opened = BookList.hasBookBeenOpened
     if type(opened) ~= "function" then
-        Guard.problem("library", "BookList.hasBookBeenOpened is missing")
+        Guard.problem("listing", "BookList.hasBookBeenOpened is missing")
     else
         BookList.hasBookBeenOpened = function(file, ...)
-            if Virtual.by_path[file] and Guard.ok("library") then return false end
+            if Virtual.by_path[file] and Guard.ok("listing") then return false end
             return opened(file, ...)
         end
     end
     local ReadCollection = require("readcollection")
     local in_collections = ReadCollection.isFileInCollections
     if type(in_collections) ~= "function" then
-        Guard.problem("library", "ReadCollection:isFileInCollections is missing")
+        Guard.problem("listing", "ReadCollection:isFileInCollections is missing")
         return
     end
     -- Only a shortcut: if collections changed shape, KOReader's own check
@@ -583,7 +585,7 @@ local function installCloudShortcuts()
     end
     ReadCollection.isFileInCollections = function(self, file, ignore_mark, ...)
         if not (Virtual.by_path[file] and type(self) == "table" and type(self.coll) == "table"
-                and Guard.ok("library")) then
+                and Guard.ok("listing")) then
             return in_collections(self, file, ignore_mark, ...)
         end
         if not (ignore_mark or G_reader_settings:nilOrTrue("collection_show_mark")) then return false end

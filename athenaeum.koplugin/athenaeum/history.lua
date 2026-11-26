@@ -9,12 +9,19 @@ keeps those entries working:
   ReadHistory:_read         cloud entries aren't greyed out like missing files
                             (their select_enabled stays false, so KOReader
                             never reopens one on startup)
-  ReadHistory:clearMissing  with "auto-remove deleted files" on, cloud
-                            entries are kept
+  ReadHistory:clearMissing  cloud entries are set aside while KOReader's
+                            own clearMissing runs (at startup with
+                            "auto-remove deleted files" on, or "Clear
+                            history of deleted files"), then put back
   ReadHistory:_flush        remembers the cloud entries: KOReader reads the
                             history (and, with auto-remove on, drops
                             missing files) before plugins load, so they're
-                            put back at startup
+                            put back at startup. If one flush drops many of
+                            them at once (something other than the hooks
+                            above removed them, e.g. after a KOReader
+                            change), the saved copy isn't trusted to
+                            follow: those are kept aside and put back at
+                            the next startup
   FileManagerHistory:onShowHist
                             tapping or long-pressing a cloud entry shows
                             the book's details (long-press adds "Remove
@@ -43,7 +50,13 @@ local History = {
     matched = nil,      -- function() -> { [id] = path }
     save = nil,         -- function(key, value)
     saved = nil,        -- function() -> saved cloud entries
+    set_aside = nil,    -- function() -> entries kept aside (SHARP_DROP)
 }
+
+-- A flush that drops at least this many saved cloud entries at once, and at
+-- least half of them, isn't a person removing entries (KOReader removes them
+-- one at a time; cloud books can't be selected for a bulk delete).
+History.SHARP_DROP = 10
 
 local function isFile(path)
     return lfs.attributes(path, "mode") == "file"
@@ -145,11 +158,43 @@ local function signature(list)
     return table.concat(parts, "\n")
 end
 
+-- While KOReader's clearMissing runs with the cloud entries set aside, its
+-- flush mustn't be remembered: it would be without them.
+local hiding, flushed_while_hiding = false, false
+-- While Athenaeum itself moves entries (History.moved): what leaves the
+-- saved list then isn't a sharp drop.
+local moving = false
+
 local function remember(rh)
     if not History.save then return end
+    if hiding then
+        flushed_while_hiding = true
+        return
+    end
     local list = cloudEntries(rh)
     local old = History.saved and History.saved() or {}
-    if signature(list) ~= signature(old) then History.save("history_cloud", list) end
+    if signature(list) == signature(old) then return end
+    -- Saved entries gone from the history whose books are still cloud books
+    -- (a downloaded book's entry leaves the cloud list by itself).
+    local now = {}
+    for _i, e in ipairs(list) do now[e.file] = true end
+    local dropped = {}
+    for _i, e in ipairs(old) do
+        if type(e) == "table" and type(e.file) == "string" and not now[e.file]
+                and History.isCloudPath(e.file) then
+            dropped[#dropped + 1] = e
+        end
+    end
+    if not moving and #dropped >= History.SHARP_DROP and #dropped * 2 >= #old
+            and #(rh.hist or {}) > 0 then
+        logger.warn("Athenaeum:", #dropped, "of", #old,
+            "cloud books left the history at once; keeping them to put back at startup")
+        local aside = {}
+        for _i, e in ipairs(History.set_aside and History.set_aside() or {}) do aside[#aside + 1] = e end
+        for _i, e in ipairs(dropped) do aside[#aside + 1] = e end
+        History.save("history_cloud_set_aside", aside)
+    end
+    History.save("history_cloud", list)
 end
 
 local function copy(t)
@@ -170,15 +215,39 @@ end
 --- With auto-remove on, KOReader dropped the cloud entries at startup:
 -- put back the ones there were.
 function History.restore(rh)
-    if not G_reader_settings:isTrue("autoremove_deleted_items_from_history") then return end
-    local saved = History.saved and History.saved() or {}
     local n = 0
-    for _i, e in ipairs(saved) do
-        if type(e) == "table" and type(e.file) == "string" and tonumber(e.time)
-                and History.isCloudPath(e.file) and not rh:getIndexByFile(e.file) then
-            insertAt(rh, e.file, tonumber(e.time))
-            n = n + 1
+    local function putBack(list, any)
+        for _i, e in ipairs(list) do
+            if type(e) == "table" and type(e.file) == "string" and tonumber(e.time)
+                    and (any or History.isCloudPath(e.file)) and not rh:getIndexByFile(e.file) then
+                insertAt(rh, e.file, tonumber(e.time))
+                n = n + 1
+            end
         end
+    end
+    if G_reader_settings:isTrue("autoremove_deleted_items_from_history") then
+        putBack(History.saved and History.saved() or {})
+    end
+    -- Entries a sharp drop kept aside (remember): put back once. They were
+    -- cloud entries then; they're no longer in the saved list, which is how
+    -- isCloudPath knows one before the catalog is loaded.
+    local aside = History.set_aside and History.set_aside()
+    if type(aside) == "table" and #aside > 0 then
+        -- Back in the saved list too, so later startups keep them.
+        local merged, seen = {}, {}
+        for _i, e in ipairs(History.saved and History.saved() or {}) do
+            if type(e) == "table" and type(e.file) == "string" and not seen[e.file] then
+                merged[#merged + 1], seen[e.file] = e, true
+            end
+        end
+        for _i, e in ipairs(aside) do
+            if type(e) == "table" and type(e.file) == "string" and not seen[e.file] then
+                merged[#merged + 1], seen[e.file] = e, true
+            end
+        end
+        History.save("history_cloud", merged)
+        putBack(aside, true)
+        History.save("history_cloud_set_aside", nil)
     end
     if n > 0 then
         logger.info("Athenaeum: put back", n, "cloud books in the history")
@@ -228,7 +297,7 @@ function History.install(opts)
     if History.installed then return end
     History.installed = true
     History.matched = opts.matched
-    History.save, History.saved = opts.save, opts.saved
+    History.save, History.saved, History.set_aside = opts.save, opts.saved, opts.set_aside
     if not Guard.ok("history") then return end
     local ReadHistory = require("readhistory")
     Guard.hook("history", ReadHistory, "_read", function(orig, self, ...)
@@ -236,17 +305,24 @@ function History.install(opts)
         if r then undim(self) end
         return r
     end, "ReadHistory:_read")
-    Guard.hook("history", ReadHistory, "clearMissing", function(_orig, self)
-        -- KOReader's, keeping cloud entries.
-        local updated = false
+    Guard.hook("history", ReadHistory, "clearMissing", function(orig, self, ...)
+        -- KOReader's own, with the cloud entries set aside (it would drop
+        -- them: they have no file), then put back where they were by time.
+        local aside = {}
         for i = #self.hist, 1, -1 do
-            local file = self.hist[i].file
-            if not History.isCloudPath(file) and (file == nil or not isFile(file)) then
-                self:removeItem(self.hist[i], i, true)
-                updated = true
+            if History.isCloudPath(self.hist[i].file) then
+                table.insert(aside, 1, table.remove(self.hist, i))
             end
         end
-        if updated then self:_flush() end
+        if #aside == 0 then return orig(self, ...) end
+        hiding, flushed_while_hiding = true, false
+        local ok, err = pcall(orig, self, ...)
+        hiding = false
+        for _i, e in ipairs(aside) do
+            table.insert(self.hist, self:getIndexByTime(e.time, nameOf(e.file)) or (#self.hist + 1), e)
+        end
+        if flushed_while_hiding then self:_flush() end
+        if not ok then error(err, 0) end
     end, "ReadHistory:clearMissing")
     Guard.hook("history", ReadHistory, "_flush", function(orig, self, ...)
         local r = orig(self, ...)
@@ -315,7 +391,10 @@ function History.moved(moves)
         end
     end
     if #changed > 0 then
-        rh:_flush()
+        moving = true
+        local ok, err = pcall(rh._flush, rh)
+        moving = false
+        if not ok then error(err, 0) end
         ZenSource.historyChanged(changed) -- see reconcile
     end
     if saved_changed and History.save then History.save("history_cloud", list) end
