@@ -43,6 +43,7 @@ changes and devices without the groups carry on as before.
 
 local AnnFormat = require("concordance/annformat")
 local BookFormat = require("concordance/bookformat")
+local Schema = require("concordance/schema")
 
 local BookStore = {}
 BookStore.__index = BookStore
@@ -50,6 +51,9 @@ BookStore.__index = BookStore
 local BUSY_TIMEOUT_MS = 5000
 
 -- (No semicolons in SQL comments: ljsqlite3's exec splits on them.)
+-- Databases this store's schema is known to be in (see schema.lua).
+local schema_known = {}
+
 local SCHEMA = [[
     CREATE TABLE IF NOT EXISTS book_merged (
         md5     TEXT NOT NULL,
@@ -126,7 +130,7 @@ end
 function BookStore:open()
     local conn = self.SQ3.open(self.state_path)
     conn:set_busy_timeout(BUSY_TIMEOUT_MS)
-    conn:exec(SCHEMA)
+    Schema.ensure(conn, self.state_path, SCHEMA, schema_known)
     return conn
 end
 

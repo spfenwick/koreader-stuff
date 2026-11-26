@@ -832,4 +832,49 @@ do
     check(b:merged(MD, "rating") == 3, "B's incognito rating never recorded")
 end
 
+-- Schema run once, again when the database changes under it ----------------------------------
+do
+    local dir = TMP .. "/schema"
+    S.mkdirp(dir)
+    local path = dir .. "/state.sqlite3"
+    local SQ3 = S.SQ3
+    local execs = 0
+    local counting = setmetatable({ open = function(p, ...)
+        local conn = SQ3.open(p, ...)
+        local exec = conn.exec
+        return setmetatable({ exec = function(c, sql, ...)
+            if sql:find("CREATE TABLE IF NOT EXISTS", 1, true) then execs = execs + 1 end
+            return exec(conn, sql, ...)
+        end }, { __index = function(_, k)
+            local v = conn[k]
+            if type(v) == "function" then return function(_, ...) return v(conn, ...) end end
+            return v
+        end })
+    end }, { __index = SQ3 })
+    local store = BookStore.new{ sq3 = counting, state_path = path, md5 = digest }
+
+    check(store:counts().books == 0, "schema: a new database works")
+    check(execs == 1, "schema: run on the first open")
+    store:counts(); store:counts()
+    check(execs == 1, "schema: not run again while the database is unchanged")
+
+    -- Another store's schema in the same database (a CREATE) means looking again.
+    IdStore.new{ sq3 = SQ3, state_path = path }:uuids({})
+    store:counts()
+    check(execs == 2, "schema: run again after another store changed the schema")
+    store:counts()
+    check(execs == 2, "schema: and then not again")
+
+    -- A dropped table is made again.
+    local conn = SQ3.open(path)
+    conn:exec("DROP TABLE book_outbox;")
+    conn:close()
+    check(store:counts().outbox == 0, "schema: a dropped table is made again")
+
+    -- A deleted database is made again.
+    os.remove(path)
+    check(store:counts().books == 0, "schema: a deleted database is made again")
+    check(execs == 4, "schema: run for each of those")
+end
+
 S.finish("concordance book data tests")

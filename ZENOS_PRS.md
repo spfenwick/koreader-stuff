@@ -9,7 +9,7 @@ Each entry: what's wrong in ZenOS, the fix, and what goes away in the
 plugins. When one merges, remove the plugin code and update this file.
 
 Suggested order: 1, 3, 4, 5, 6, 7, then 8 after talking to the maintainer (2 is no longer
-needed by the plugins).
+needed by the plugins). 9 is a speed fix that stands alone: any time.
 
 Open upstream (2026-11-25):
 - [#911](https://github.com/xZenLabs/zen-os/pull/911) "Ask book sources when
@@ -640,6 +640,44 @@ not replace it. Probably a few hundred lines plus specs, mostly in
 `browser_item_table_cache.lua` and a new item builder.
 
 Not started.
+
+## 9. Sorting by last read doesn't look up books that have no file
+
+**In ZenOS:** with the Library sorted by last read ("access"),
+`browser_item_table_cache.lua`'s `apply_history_order` finds each listed
+book's read time with `HistoryIndex.fileTime`. A book whose path isn't in
+the history as given (most of them) goes through `canonical_path`, which
+calls `realpath()`. For a fileless source's book there's no file, so
+`realpath()` fails and the path is used as it was, but on the Kobo a
+look-up of a missing name in a big FAT folder costs about 1 ms when it
+isn't cached, `realpath()`'s or a `stat`'s alike. With 2,027 cloud books
+that was 2.8 s of a 4.9 s cold Library open (measured on the user's Kobo
+2026-11-26, cold cache; the same folder sorted by title opened in 1.8 s).
+`HistoryIndex.load` normalises every history entry the same way, so
+history entries for deleted books pay it too.
+
+**Fix:** `BookSources.isFileless(path)` (new, `common/book_sources.lua`): true
+when a fileless source owns the path, which by the `fileless` contract
+means there's no file there; it asks the source's `owns` and nothing on
+disk. `canonical_path` asks it first and leaves those paths as given, with
+no look-up at all (the result `realpath()`'s failure gave before). Other
+paths get a `stat` before `realpath()` (a deleted book's history entry: no
+`realpath()`, and the `stat` is fast once cached); listed folders, known to
+be there, get neither, as before.
+
+**Status (2026-11-26):** on `custom`, uncommitted (both files plus specs:
+`isFileless` in `book_sources_spec.lua`; "resolves only paths that are
+there for last-read sorting" in `filebrowser_item_table_cache_spec.lua`).
+`./spec/run lua` passes apart from the two updater specs that always fail.
+On the Kobo, cold, sorted by last read: 4.89 s → 2.13 s
+(`HistoryIndex.fileTime` 2,853 ms → 122 ms; `isFileless` 28 ms for 2,001
+paths). A `stat` in front of `realpath()` alone (tried first) only moved the
+cost: 4.44 s, `lfs.attributes` 2.5 s. Not yet a PR: base it on upstream
+`dev`.
+
+**Plugins lose:** nothing; Athenæum's `owns` is a table look-up, so
+`isFileless` costs about 14 µs a book. It's here because Athenæum's cloud
+books are what make it slow.
 
 ## Not worth a PR
 

@@ -30,6 +30,7 @@ Tables:
 --]]
 
 local IdFormat = require("concordance/idformat")
+local Schema = require("concordance/schema")
 
 local IdStore = {}
 IdStore.__index = IdStore
@@ -44,6 +45,9 @@ IdStore.MAX_GROUP = 32
 IdStore.MAX_CARRIERS = 200
 
 -- (No semicolons in SQL comments: ljsqlite3's exec splits on them.)
+-- Databases this store's schema is known to be in (see schema.lua).
+local schema_known = {}
+
 local SCHEMA = [[
     CREATE TABLE IF NOT EXISTS id_facts (
         md5     TEXT NOT NULL,
@@ -120,7 +124,7 @@ local has_n = {}
 function IdStore:open()
     local conn = self.SQ3.open(self.state_path)
     conn:set_busy_timeout(BUSY_TIMEOUT_MS)
-    conn:exec(SCHEMA)
+    Schema.ensure(conn, self.state_path, SCHEMA, schema_known)
     if not has_n[self.state_path] then
         local found = false
         local stmt = conn:prepare("PRAGMA table_info(id_facts);")

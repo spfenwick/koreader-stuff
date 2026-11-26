@@ -31,6 +31,7 @@ server changes and devices without the groups carry on as before.
 --]]
 
 local AnnFormat = require("concordance/annformat")
+local Schema = require("concordance/schema")
 
 local AnnStore = {}
 AnnStore.__index = AnnStore
@@ -38,6 +39,9 @@ AnnStore.__index = AnnStore
 local BUSY_TIMEOUT_MS = 5000
 
 -- (No semicolons in SQL comments: ljsqlite3's exec splits on them.)
+-- Databases this store's schema is known to be in (see schema.lua).
+local schema_known = {}
+
 local SCHEMA = [[
     CREATE TABLE IF NOT EXISTS ann_merged (
         md5     TEXT NOT NULL,
@@ -116,7 +120,7 @@ end
 function AnnStore:open()
     local conn = self.SQ3.open(self.state_path)
     conn:set_busy_timeout(BUSY_TIMEOUT_MS)
-    conn:exec(SCHEMA)
+    Schema.ensure(conn, self.state_path, SCHEMA, schema_known)
     return conn
 end
 

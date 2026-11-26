@@ -14,6 +14,7 @@ doesn't depend on order).
 --]]
 
 local Codec = require("concordance/codec")
+local Schema = require("concordance/schema")
 
 local Store = {}
 Store.__index = Store
@@ -34,6 +35,9 @@ Store.BOOK_TOTALS_QUERY = [[
 -- devices. While KOReader hasn't touched one (last_open unchanged), its title
 -- and authors follow the newest remote record, otherwise they're local.
 -- (No semicolons in SQL comments: ljsqlite3's exec splits on them.)
+-- Databases the state schema is known to be in (see schema.lua).
+local schema_known = {}
+
 local STATE_SCHEMA = [[
     CREATE TABLE IF NOT EXISTS exported (
         md5        TEXT    NOT NULL,
@@ -103,7 +107,7 @@ end
 
 function Store:openState()
     local conn = self:_open(self.state_path)
-    conn:exec(STATE_SCHEMA)
+    Schema.ensure(conn, self.state_path, STATE_SCHEMA, schema_known)
     return conn
 end
 
