@@ -19,6 +19,11 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   covers and ZenOS's flat view, via fileless and books() (with attr for the
   date and size sorts): ZenOS lists the books without a file that their
   source owns (BookSources.booksWithoutFile)
+  ZenOS's file search results (with its Search feature on), via fileless:
+  ZenOS's search matches the cloud books in the folders searched as it
+  matches files (BookSources.searchResults), gives the results their
+  metadata, and sends taps and long-presses on them to open() and
+  showContextMenu()
   cached folder listings, via listingKey(): a listing is rebuilt when the
   cloud books in it change, and one saved before the plugin was removed
   isn't reused
@@ -115,7 +120,8 @@ local function books()
                 and table.concat(book.tags, "\n") or nil,
         },
         -- Size and dates (the date added) for the date and size sorts, where
-        -- ZenOS lists the book itself (its flat view).
+        -- ZenOS lists the book itself (the library folder, its flat view and
+        -- search results).
         attr = Virtual.attributes(book) }
     end
     books_cache, books_gen = out, Virtual.generation

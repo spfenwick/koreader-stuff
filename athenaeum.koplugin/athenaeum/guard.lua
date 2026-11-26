@@ -16,7 +16,7 @@ Guard.check()
 Features:
   library  cloud books in the folder (also: tapping them, settings guard,
            covers); turning it off removes the cloud books
-  search   cloud books in file search
+  search   cloud books in file search (ZenOS puts them there; only checked)
   badge    the cover badges (ZenOS paints them, from the source's badge())
   zenos    cloud books in ZenOS's Authors, Series and Tags tabs, and the
            open and tag hooks in zenos_source.lua
@@ -212,6 +212,8 @@ function Guard.check()
         })
         -- Cover badges are ZenOS's to paint (athenaeum/badge.lua).
         requires("badge", "common/book_sources", { badge = true })
+        -- ZenOS's search puts the cloud books into its results (fileless sources).
+        requires("search", "common/book_sources", { searchResults = 4 })
     end
     requires("library", "ffi/util", {
         runInSubProcess = 2, isSubProcessDone = 1, readAllFromFD = 1, writeToFD = 2,
@@ -242,10 +244,6 @@ function Guard.check()
         end
     end
 
-    requires("search", "apps/filemanager/filemanagerfilesearcher", {
-        getList = 1, isFileMatch = 5, doSearch = 1,
-        onShowSearchResults = 2, onMenuSelect = 2, onMenuHold = 2,
-    })
     requires("history", "readhistory", {
         _read = 1, clearMissing = 1, _flush = 1, getIndexByFile = 2, getIndexByTime = 2, removeItem = 2,
     })

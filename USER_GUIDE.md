@@ -31,7 +31,7 @@ Downloaded books show the catalog's current title, authors, series and tags, so 
 
 ### Same settings on every device
 
-Athenæum keeps the settings that can be the same everywhere in `settings/athenaeum/shared.lua`: the catalog, badges, search, ZenOS tabs, showing cloud books and the sync schedule. The library folder and the updater stay in `settings/athenaeum/settings.lua`, one per device. To share them with Concordance's settings sync, add this line to `settings/concordance/sync.txt`:
+Athenæum keeps the settings that can be the same everywhere in `settings/athenaeum/shared.lua`: the catalog, badges, ZenOS tabs, showing cloud books and the sync schedule. The library folder and the updater stay in `settings/athenaeum/settings.lua`, one per device. To share them with Concordance's settings sync, add this line to `settings/concordance/sync.txt`:
 
 ```
 /settings/athenaeum/shared.lua
@@ -46,7 +46,7 @@ Sync first from the device whose settings you want to keep. The catalog is share
 - **Badges** on the cover show where a book is: a cloud for cloud-only books; with Concordance, the cloud carries a check, play or pause mark when the book is finished, being read or on hold on another device.
 - **Reading status**: with Concordance, ZenOS also shows a cloud book's status from your other devices, as it does for a downloaded book: its status badge, the status filters, Home and To Be Read. Changing the status of a cloud book needs the book downloaded; once it is, the status on this device is the one shown.
 - **ZenOS tabs**: cloud books appear in Authors, Series and Tags, on Home, and in the reading history. Books in a series are numbered in the order the server lists them, so a gap or a number such as 2.5 shows as the next whole number.
-- **File search** finds cloud books as it finds files (KOReader's search, or ZenOS's when it's on): by file name and, with metadata search on, by title, author, series and tags. They're sorted with the files found; book content search skips them.
+- **File search** finds cloud books as it finds files when ZenOS's Search is on: by file name and, with metadata search on, by title, author, series and tags. They're sorted with the files found. ZenOS does this itself, so it needs a ZenOS version that includes it; KOReader's own search (ZenOS's Search off) finds files only.
 
 ### Downloading
 
@@ -76,7 +76,6 @@ Automatic quick syncs can be turned off (**Quick sync automatically**); full syn
 | Mark cloud books | Cloud badge on cloud-only books (on) |
 | Mark books on this device | Check mark on downloaded catalog books (off) |
 | Mark books not in the catalog | Crossed-out cloud on folder books missing from the catalog (off) |
-| Include cloud books in file search | (on) |
 | Status | Catalog, folder, book and cover counts, last syncs and any problems |
 | Timings | How long each step took, for tracking down slowness |
 | Check for updates / Automatic updates | Handled together with Concordance when it's installed |

@@ -3,7 +3,7 @@ The plugin's settings, in two files in settings/athenaeum/ (with the
 catalog databases and covers), not in KOReader's settings.reader.lua:
 
 - shared.lua: what can be the same on every device: the catalog, the
-  badges, search, ZenOS groups, showing cloud books, the sync schedule.
+  badges, ZenOS groups, showing cloud books, the sync schedule.
   The catalog is kept as its URL and username, looked up in each device's
   own OPDS catalogs (the password stays there), so a device whose OPDS
   catalog has a different URL or username finds no catalog.
@@ -30,7 +30,6 @@ Settings.UPDATES_KEY = "updates"
 --- The keys kept in shared.lua. Everything else is this device's own.
 Settings.SHARED = {
     server = true, badge_cloud = true, badge_local = true, badge_noncloud = true,
-    search = true,
     quick_sync = true, full_sync = true, auto_sync = true,
 }
 

@@ -364,7 +364,7 @@ view of the library and of the folder above it, select mode and search.
 
 **Plugins lose:** done in Athenæum as above, once this ZenOS is released.
 
-Still not covered: search (#7; Athenæum's injection handles it). ZenOS
+Search is #7 (built on top of this). ZenOS
 lists items with no file behind them, for sources that ask; the paths that
 need a file are taps and long-presses (#911), file operations (the
 selection guard) and folder scans (the scan spec).
@@ -496,7 +496,83 @@ option or go, as `zenos_groups` did in #6), including the copy of getList's
 search text preparation. Every source's books become searchable, not just
 Athenæum's.
 
-Not started.
+**Status (2026-11-26):** built on `custom`, uncommitted, on top of #6
+(bc964b14); no PR branch yet. It needs #6 (`fileless`, `booksWithoutFile`)
+and should land after #911, like #6. No new hooks: the books are added
+where ZenOS's search patch (`modules/filebrowser/patches/search.lua`)
+already calls or overrides KOReader's search, so it only works with ZenOS's
+Search feature on. With it off, KOReader's own search finds files only
+(decided 2026-11-26: KOReader's `doSearch` is the only other caller of
+`getList`, and reaching it would need a hook).
+- `common/book_sources.lua`, no hooks:
+  - `searchResults(searcher, root, search_string, found)`: the fileless
+    sources' books a search of root finds, as getList's `{ name, fullpath,
+    attr }` entries. Folders as KOReader's walk covers them (root; with
+    subfolders, every folder below it reached through shown, non-hidden
+    folders, not its skipped system folders), paths in `found` left out,
+    the walk's filters (`._`, `hasProvider` unless unsupported files are
+    shown, `show_file`), and the searcher's own `isFileMatch` with the text
+    getList would pass. Content search off and `no_metadata_count` put
+    back while they're matched. Fileless sources only, as in folder
+    listings: a non-fileless source's books may have files the walk skipped
+    on purpose (the Kindle library is under `/mnt/base-us`).
+  - `prepareFolderIndex()`; `booksWithoutFile` also
+    takes a function for `folders`.
+- `search.lua`, at its existing call points:
+  - its `getList` loop over the home folders: after each folder's
+    `orig_getList`, `searchResults` for that folder (a failure leaves the
+    files found);
+  - its search dialog's `_doSearch`: `prepareFolderIndex()` before the
+    search's subprocess forks (it already drops cached results each time);
+  - its `onShowSearchResults` override: results a source owns with no file
+    (`ownsWithoutFile`, as the tap check) get `doc_props`
+    (`BookSources.docProps`);
+  - its results menu `onMenuSelect` override: a result a source owns with
+    no file goes to `BookSources.open` (long-press already goes to
+    `showFileDialog`, which asks the sources since #911). Search's select
+    mode is left alone.
+Specs: 5 in `book_sources_spec.lua`, 3 in `filebrowser_search_spec.lua`,
+and 8 in `integration/book_sources_search_spec.lua`. The integration spec
+runs KOReader's real `FileSearcher:getList` (UI dependencies stubbed) over
+a temporary folder tree and checks that `searchResults` covers the same
+folders (with and without subfolders, hidden folders shown or not, an
+excluded folder) and prepares the same search text (plain, patterns, `*`);
+it reads getList's `sys_folders` from KOReader's source and checks that
+those are skipped. That covers what `searchResults` copies from getList's
+locals: a KOReader change there fails it when ZenOS's pinned KOReader is
+updated (checked by breaking each copied rule in turn). Lua suite 3198 pass
+(the 2 updater specs fail without it too); luacheck finds nothing new.
+
+Timing (desktop emulator, i5-8259U; 2,150 fileless books in the home
+folder, a third in series, with tags; ZenOS's search, substring; best of 3;
+scratch script):
+
+| | Athenæum's hook (`custom` HEAD) | ZenOS (this change) |
+|---|---|---|
+| getList, metadata on, no match | 92 ms | 74 ms |
+| getList, metadata on, "river" (256 results) | 77 ms | 72 ms |
+| getList, metadata on, author (105 results) | 86 ms | 78 ms |
+| getList, file names only, no match | 26 ms | 33 ms |
+| Folder index, after a catalog change | – | 11 ms |
+| Whole search (subprocess, results shown) | 139–154 ms | 136–157 ms |
+
+The whole search takes 142–154 ms with no cloud books at all, so the
+subprocess and showing the results cost more than the cloud books do, and
+the difference is lost in noise here. The cloud books cost what Athenæum's
+hook did: about 75 ms with metadata on, roughly 0.75–1.5 s on a Kobo by the
+10–20× factor assumed for #6 (not measured on the device). The folder index
+is built once per catalog change, before the subprocess, and reused.
+
+Athenæum 0.10.13 dropped `athenaeum/search.lua` (its `getList`, `doSearch`,
+`onShowSearchResults`, `onMenuSelect` / `onMenuHold` hooks and the copy of
+the search text preparation), `Virtual.withProps`, and the "Include cloud
+books in file search" setting (as `zenos_groups` went in #6: `books()`
+decides). Guard's "search" feature now only checks for `searchResults`; a
+ZenOS without it leaves cloud books out of search and says so in Status,
+and the library still works. `tests/athenaeum/e2e_search.py` passes
+against `custom` plus this change (its KOReader-search cases now expect
+files only, and its ZenOS cases set `_zen_search_paths` as ZenOS's dialog
+does).
 
 ## 8. ZenOS builds the Library's folder contents itself
 

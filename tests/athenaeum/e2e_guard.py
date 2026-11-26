@@ -4,8 +4,8 @@ catalog (no server):
 1. runtime: a KOReader function used inside the listing hook starts failing
    for cloud books. The library folder must keep working (local books
    only), with a notification and the reason in Status.
-2. startup: a user patch changes FileSearcher:onShowSearchResults's
-   parameters. Search isn't started; cloud books in the folder still work.
+
+(The startup check of ZenOS's functions is in test_athenaeum.lua.)
 
     python3 tests/athenaeum/e2e_guard.py --koreader <emulator>/koreader \
         --zenos ~/Documents/GitHub/zen_os.koplugin --out /tmp/e2e-guard
@@ -39,13 +39,12 @@ EXTRA = """
         local Guard = package.loaded["athenaeum/guard"]
         local Library = package.loaded["athenaeum/library"]
         local Virtual = package.loaded["athenaeum/virtual"]
-        local Search = package.loaded["athenaeum/search"]
         local texts = {}
         for _i, w in ipairs(UIManager._window_stack) do
             if w.widget and type(w.widget.text) == "string" then table.insert(texts, w.widget.text) end
         end
         return { ok = true, status = Guard.statusText(), library_ok = Guard.ok("library"),
-            search_ok = Guard.ok("search"), search_installed = Search.installed,
+            search_ok = Guard.ok("search"),
             cloud_books = #Virtual.books, dialogs = texts }
     end
     if kind == "cl_refresh" then
@@ -61,12 +60,6 @@ EXTRA = """
         local ok, err = pcall(Virtual.refresh)
         return { ok = ok, error = err and tostring(err) or nil }
     end
-"""
-
-PATCH = """-- Test: FileSearcher:onShowSearchResults with different parameters.
-local FileSearcher = require("apps/filemanager/filemanagerfilesearcher")
-local real = FileSearcher.onShowSearchResults
-FileSearcher.onShowSearchResults = function(self) return real(self, true) end
 """
 
 
@@ -103,20 +96,6 @@ def main() -> int:
         s.cmd("athenaeum_close_top")
         report["still_works"] = s.cmd("cl_refresh")
         report["open_local"] = s.driver.open_book(s.local[0])
-    finally:
-        s.close()
-
-    # 2. The startup check finds a changed function.
-    s = proto_c.Session(args, zd, fx, "guard-startup")
-    try:
-        virtual = s.set_fixture(proto_c.small_catalog(["Cloud Atlas", "Brave Remote World"]))
-        patches = s.ko_home / "patches"
-        patches.mkdir(parents=True, exist_ok=True)
-        (patches / "2-athenaeum-test-changed-search.lua").write_text(PATCH)
-        s.start()
-        s.wait_listing(lambda r: all(p in r["files"] for p in virtual), "cloud books listed")
-        report["startup"] = s.cmd("cl_guard_state")
-        report["startup"]["cloud_listed"] = proto_c.summary(s.listing(), virtual, [])["has_expected"]
     finally:
         s.close()
 

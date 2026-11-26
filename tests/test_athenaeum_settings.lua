@@ -123,7 +123,7 @@ eq(Settings.all().folder, "/mnt/onboard/Books", "device key read back")
 clean()
 do
     local old = LuaSettings:open(Settings.path())
-    old.data = { folder = "/sdcard/Books", badge_local = true, badge_cloud = false, search = false,
+    old.data = { folder = "/sdcard/Books", badge_local = true, badge_cloud = false, badge_noncloud = true,
         server = { url = "https://books.example" }, updates = { last_check = 9 } }
     old:flush()
 end
@@ -139,7 +139,7 @@ eq(device.folder, "/sdcard/Books", "0.8.1: folder stays in this device's file")
 eq(device.updates.last_check, 9, "0.8.1: updater state stays")
 eq(shared.badge_local, true, "0.8.1: badge in the shared file")
 eq(shared.badge_cloud, false, "0.8.1: false value in the shared file")
-eq(shared.search, false, "0.8.1: search in the shared file")
+eq(shared.badge_noncloud, true, "0.8.1: another badge in the shared file")
 eq(shared.server.url, "https://books.example", "0.8.1: catalog in the shared file")
 
 -- A shared file pulled from another device wins over this device's old keys.
@@ -162,12 +162,12 @@ eq(file(Settings.sharedPath()).badge_cloud, false, "moved key written to the sha
 clean()
 do
     local sh = LuaSettings:open(Settings.sharedPath())
-    sh.data = { folder = "/elsewhere", search = false }
+    sh.data = { folder = "/elsewhere", badge_noncloud = true }
     sh:flush()
 end
 Settings.save("folder", "/here")
 eq(Settings.all().folder, "/here", "folder only read from this device's file")
-eq(Settings.all().search, false, "shared key read")
+eq(Settings.all().badge_noncloud, true, "shared key read")
 
 clean()
 lfs.rmdir(root .. "/athenaeum")

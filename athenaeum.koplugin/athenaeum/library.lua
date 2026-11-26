@@ -16,7 +16,6 @@ the rest; see settings.lua):
   badge_cloud  cloud badge on cloud-only books (default true)
   badge_local  on-device badge on local catalog books (default false)
   badge_noncloud  badge on books in the folder not in the catalog (default false)
-  search     cloud books in file search results (default true)
 
 The password stays in KOReader's OPDS settings and is read from there.
 ]]
@@ -39,7 +38,6 @@ local Guard = require("athenaeum/guard")
 local History = require("athenaeum/history")
 local Matcher = require("athenaeum/matcher")
 local Names = require("athenaeum/names")
-local Search = require("athenaeum/search")
 local Settings = require("athenaeum/settings")
 local Store = require("athenaeum/store")
 local Timing = require("athenaeum/timing")
@@ -201,7 +199,6 @@ function Library.load()
     Badge.cloud_enabled = s.badge_cloud ~= false
     Badge.local_enabled = s.badge_local == true
     Badge.noncloud_enabled = s.badge_noncloud == true
-    Search.enabled = s.search ~= false
     if not server or not folder then
         Library.stats = {}
         Library.catalog = {}
@@ -1690,15 +1687,6 @@ function Library.menuEntry(plugin)
                         Library.save("badge_noncloud", Library.settings().badge_noncloud ~= true)
                         Badge.noncloud_enabled = Library.settings().badge_noncloud == true
                         Library.repaint()
-                    end,
-                },
-                {
-                    text = _("Include cloud books in file search"),
-                    help_text = _("File search also finds cloud books, matched as it matches files: by file name and, with metadata search on, by title, author, series and tags."),
-                    checked_func = function() return Library.settings().search ~= false end,
-                    callback = function()
-                        Library.save("search", Library.settings().search == false)
-                        Search.enabled = Library.settings().search ~= false
                     end,
                 },
             }

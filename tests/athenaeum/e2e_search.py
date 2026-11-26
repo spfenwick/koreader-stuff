@@ -1,13 +1,15 @@
 """Cloud books in file search, in the real app (KOReader + ZenOS), with the
-test catalog (no server). athenaeum/search.lua puts them into the search's
-own walk, so they're matched as files are:
+test catalog (no server). ZenOS's search adds its fileless book sources'
+books to each home folder's results (BookSources.searchResults, after
+KOReader's walk), so they're matched as files are:
 
-- KOReader's rules (ZenOS's search off) and ZenOS's (substring, whole
-  words), by file name and by metadata only (a tag), which is read in the
-  search's subprocess;
+- ZenOS's rules (substring, whole words), by file name and by metadata only
+  (a tag), which is read in the search's subprocess; with ZenOS's search
+  off, KOReader's search finds files only;
 - a whole-word search nothing matches: "No results";
 - ZenOS's search over several home folders, the library under the second;
-- tapping a cloud result shows its details; the search hooks stay on;
+- tapping a cloud result shows its details (ZenOS asks the source); Guard
+  reports search as working;
 - ZenOS lists the cloud books: a folder count (getList without collate)
   includes them, and so does the library folder's cover (count, cover
   images);
@@ -15,9 +17,10 @@ own walk, so they're matched as files are:
   and the folder above it show and count its cloud books once;
 - select mode: cloud books can't be selected (tapped, or "select all").
 
-Needs a ZenOS that lists book sources' books without a file (its
-booksWithoutFile): ZenOS's custom branch with the fileless books change
-(git archive custom | tar -x -C <dir>, plus that change if uncommitted).
+Needs a ZenOS that lists book sources' books without a file
+(booksWithoutFile) and whose search adds them (searchResults):
+ZenOS's custom branch with those changes (git archive custom | tar -x -C
+<dir>, plus the changes if uncommitted).
 
     python3 tests/athenaeum/e2e_search.py --koreader <emulator>/koreader \\
         --zenos <zen-os export> --out /tmp/e2e-search
@@ -54,6 +57,10 @@ EXTRA = r"""
         if params.roots then
             fs._zen_search_paths = params.roots
             FileSearcher.search_path = params.roots[1]
+        elseif params.zen then
+            -- As ZenOS's search dialog sets them (its getList searches each).
+            fs._zen_search_paths = { params.path }
+            FileSearcher.search_path = params.path
         else
             fs._zen_search_paths = nil
             FileSearcher.search_path = params.path
@@ -223,11 +230,16 @@ finally:
 (args.out / "report.json").write_text(json.dumps(report, indent=2))
 print(json.dumps(report, indent=2))
 expected = {
-    "ko_title": ["Cloud Atlas"], "zen_substring_remote": ["Brave Remote World"],
+    "zen_substring_remote": ["Brave Remote World"],
     "zen_substring_remot": ["Brave Remote World"], "zen_tag_only": ["Brave Remote World"],
-    "ko_tag_only": ["Brave Remote World"], "zen_roots": ["Cloud Atlas"],
+    "zen_roots": ["Cloud Atlas"],
 }
 failed = [k for k, v in expected.items() if not isinstance(report.get(k), dict) or report[k]["cloud"] != v]
+# ZenOS's search off: KOReader's search, files only.
+for k in ("ko_title", "ko_tag_only"):
+    v = report.get(k)
+    if isinstance(v, dict) and v["cloud"]:
+        failed.append(k)
 if report.get("zen_wholeword_remot") != "no results":
     failed.append("zen_wholeword_remot")
 count = report.get("count") or {}

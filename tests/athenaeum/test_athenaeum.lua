@@ -30,6 +30,7 @@ package.loaded["common/book_sources"] = {
     badge = function() end,
     installMetadataIntegration = function() ZenOS.integrated = ZenOS.integrated + 1 return true end,
     booksWithoutFile = function() return {} end,
+    searchResults = function(_searcher, _root, _text, _found) return {} end,
 }
 
 local lfs = require("libs/libkoreader-lfs")
@@ -63,7 +64,7 @@ end
 
 do
     for _i, name in ipairs({ "badge", "covers", "downloads", "feed", "guard", "history", "http", "library", "matcher",
-            "search", "store", "sync", "timing", "virtual", "zenos_source" }) do
+            "store", "sync", "timing", "virtual", "zenos_source" }) do
         local ok, err = pcall(require, "athenaeum/" .. name)
         check(ok, "module " .. name .. " loads: " .. tostring(err))
     end
@@ -1236,82 +1237,6 @@ do
     eq(attr.modification, 1600000000, "file dated when the book was added")
 end
 
--- Search ----------------------------------------------------------------------------------
-
-do
-    local Search = require("athenaeum/search")
-    local FileSearcher = require("apps/filemanager/filemanagerfilesearcher")
-    check(Search.inScope("/mnt/onboard/Books", "/mnt/onboard/Books/", false), "same folder")
-    check(Search.inScope("/mnt/onboard/Books", "/mnt/onboard", true), "folder below, with subfolders")
-    check(not Search.inScope("/mnt/onboard/Books", "/mnt/onboard", false), "folder below, no subfolders")
-    check(not Search.inScope("/mnt/onboard/Books", "/mnt/onboard/Bo", true), "prefix isn't a parent")
-    check(Search.inScope("/x", "/", true), "root")
-
-    -- The search text as getList prepares it.
-    eq(Search.query({ case_sensitive = false }, "Cloud.A"), "cloud.a", "lowercased, plain")
-    eq(Search.query({ case_sensitive = true }, "Cloud"), "Cloud", "case-sensitive: as typed")
-    eq(Search.query({ use_patterns = true }, "c*d a?l.s"), "c.*d a.l%.s", "patterns: wildcards")
-    eq(Search.query({ use_patterns = true }, "*"), "*", "* alone shows everything")
-
-    Virtual.setCatalog("/lib", {
-        { id = "q1", title = "Sharpe's Tiger", authors = { "Bernard Cornwell" }, series = "Sharpe" },
-        { id = "q2", title = "Security", authors = { "Poul Anderson" } },
-    })
-    local tiger, security = Virtual.books[1], Virtual.books[2]
-    local FC = { show_file = function() return true end }
-    local DR = { hasProvider = function() return true end }
-    local function search(searcher, text, path, found)
-        return Search.cloudEntries(Virtual, searcher, found or {},
-            { path = path or "/lib", string = text, FileChooser = FC, DocumentRegistry = DR })
-    end
-    local function names(entries)
-        local out = {}
-        for i, e in ipairs(entries) do out[i] = e[1] end
-        table.sort(out)
-        return table.concat(out, "|")
-    end
-
-    -- KOReader's own isFileMatch: by file name, plain text.
-    local ko = setmetatable({ case_sensitive = false, use_patterns = false, include_metadata = false,
-        include_subfolders = true, no_metadata_count = 0 }, { __index = FileSearcher })
-    eq(names(search(ko, "cornwell")), tiger.filename, "KOReader's matching: file name")
-    eq(names(search(ko, "*")), names({ { tiger.filename }, { security.filename } }), "* finds them all")
-    local entries = search(ko, "anderson")
-    check(entries[1][2] == security.path and entries[1][3].mode == "file", "entry: name, path, attributes")
-    eq(#search(ko, "cornwell", "/elsewhere"), 0, "library folder not searched: nothing")
-    eq(#search(ko, "cornwell", "/"), 1, "library below the searched folder, with subfolders")
-    ko.include_subfolders = false
-    eq(#search(ko, "cornwell", "/"), 0, "library below, without subfolders: nothing")
-    ko.include_subfolders = true
-    eq(#search(ko, "cornwell", "/lib", { [tiger.path] = true }), 0, "a file found at the path: not again")
-    FC.show_file = function(_self, name) return name ~= tiger.filename end
-    eq(#search(ko, "cornwell"), 0, "the browser's filter applies")
-    FC.show_file = function() return true end
-
-    -- Whatever isFileMatch is (ZenOS's, with its search on), it decides,
-    -- with the prepared text; content search is off for cloud books, and
-    -- they don't count as files without metadata.
-    local asked = {}
-    local zen = { case_sensitive = false, include_subfolders = true, include_content = true,
-        no_metadata_count = 3 }
-    function zen:isFileMatch(name, path, text, is_file)
-        asked[#asked + 1] = text
-        check(is_file and self.include_content == false, "asked as a file, without content search")
-        self.no_metadata_count = self.no_metadata_count + 1
-        return path == security.path
-    end
-    eq(names(search(zen, "Moby Dick")), security.filename, "the searcher's isFileMatch decides")
-    eq(asked[1], "moby dick", "with the text getList would pass")
-    check(zen.include_content == true and zen.no_metadata_count == 3, "content search and count put back")
-    zen.isFileMatch = function() error("matcher bug") end
-    check(not pcall(search, zen, "x") and zen.include_content == true, "put back after an error too")
-
-    Search.enabled = false
-    eq(#search(ko, "*"), 0, "setting off: nothing")
-    Search.enabled = true
-    Virtual.setCatalog(nil, {})
-end
-
 -- Badge ----------------------------------------------------------------------------------
 
 do
@@ -1459,12 +1384,11 @@ do
     check(not Guard.check() and Guard.statusText():find("booksWithoutFile is missing", 1, true),
         "needs a ZenOS that lists the cloud books: " .. Guard.statusText())
     zen.booksWithoutFile = real_bwf
-    local FileSearcher = require("apps/filemanager/filemanagerfilesearcher")
-    local real_show = FileSearcher.onShowSearchResults
-    FileSearcher.onShowSearchResults = nil
-    check(Guard.check(), "search missing doesn't stop the library")
-    check(Guard.unavailable.search ~= nil and not Guard.ok("search"), "search not started")
-    FileSearcher.onShowSearchResults = real_show
+    local real_search = zen.searchResults
+    zen.searchResults = nil
+    check(Guard.check(), "a ZenOS without cloud books in search doesn't stop the library")
+    check(Guard.unavailable.search ~= nil and not Guard.ok("search"), "search reported as not started")
+    zen.searchResults = real_search
     local zen = package.loaded["common/book_sources"]
     package.loaded["common/book_sources"] = nil
     local real_path = package.path
@@ -1488,11 +1412,11 @@ do
     os.remove(Settings.sharedPath())
     Settings.reset()
     Library.save("folder", "/books")
-    Library.save("search", false)
+    Library.save("badge_local", true)
     Updater.setMode("off")
     check(lfs.attributes(Settings.path(), "mode") == "file", "settings file written: " .. Settings.path())
     Settings.reset()
-    eq(Library.settings().search, false, "saved setting read back from the file")
+    eq(Library.settings().badge_local, true, "saved setting read back from the file")
     eq(Library.settings().folder, "/books", "folder read back from the file")
     eq(Updater.getMode(), "off", "updater mode read back from the file")
 
@@ -1505,7 +1429,6 @@ end
 
 do
     local Library = require("athenaeum/library")
-    local Search = require("athenaeum/search")
     local UIManager = require("ui/uimanager")
     local FileManager = require("apps/filemanager/filemanager")
     local folder = TMP .. "/deleted"
@@ -1650,7 +1573,6 @@ do
     -- A cloud entry is where its book's file is or would be.
     local cloud_path = path
 
-    Search.install(Virtual)
     Library.installDeleteHooks()
     Library.load()
     check(not Virtual.isVirtual(cloud_path), "downloaded book isn't a cloud book")
@@ -1680,34 +1602,9 @@ do
         Library.server = real_server
     end
 
-    -- Search through the hooks: KOReader's getList walk, then the cloud
-    -- books; cached results are dropped once the cloud books changed.
-    local FileSearcher = require("apps/filemanager/filemanagerfilesearcher")
-    FileSearcher.search_path, FileSearcher.search_string = folder, "book"
-    local searcher = setmetatable({ include_subfolders = true, case_sensitive = false, use_patterns = false,
-        include_metadata = false, ui = {} }, { __index = FileSearcher })
-    local function found()
-        local _dirs, files = searcher:getList()
-        local out = {}
-        for _i, entry in ipairs(files) do out[#out + 1] = entry[2] end
-        table.sort(out)
-        return out
-    end
-    local before = found()
-    eq(#before, 2, "search before deleting: the file and the other cloud book")
-    eq(before[1], path, "the file, found by the walk")
-    Search.dropStale(FileSearcher, Virtual.generation)
-    FileSearcher.search_hash = "cached"
-    Search.dropStale(FileSearcher, Virtual.generation)
-    eq(FileSearcher.search_hash, "cached", "cloud books unchanged: cached results kept")
     check(FileManager.deleteFile(FileManager, path, true), "file deleted")
     check(Virtual.isVirtual(cloud_path), "deleted book is a cloud book again")
     eq(#Virtual.books, 2, "two cloud books after deleting")
-    Search.dropStale(FileSearcher, Virtual.generation)
-    eq(FileSearcher.search_hash, nil, "cloud books changed: cached results dropped")
-    local after = found()
-    eq(#after, 2, "new search: both, now cloud books")
-    check(after[1] == path and Virtual.isVirtual(after[1]), "the deleted book, at its path")
 
     -- The cloud entry is back as soon as the delete returns (the caller
     -- redraws then), before the reload; the reload then changes nothing.
@@ -2255,14 +2152,6 @@ do
         { title = "no id" },
     })
 
-    -- List items carry the book's metadata (ZenOS's series grouping reads
-    -- CoverBrowser's database for items without it, where cloud books aren't).
-    Virtual.setCatalog("/lib/", { { id = "s1", title = "Third", series = "Saga", series_index = 3 } })
-    local item = Virtual.withProps({ path = Virtual.books[1].path }, Virtual.books[1])
-    check(item.doc_props and item.doc_props.series == "Saga" and item.doc_props.series_index == 3
-        and item.doc_props.display_title == "Third", "list item has the book's series and title")
-    eq(Virtual.withProps({ doc_props = { title = "Own" } }, Virtual.books[1]).doc_props.title, "Own",
-        "metadata set by a sort is kept")
 end
 
 -- The listing hook: only "Rebuilding library…" (ZenOS lists the books) ----------
@@ -2912,11 +2801,11 @@ do
     eq(labels(items),
         "Quick sync now | Full sync now | Download missing covers | Refresh all covers | Quick sync automatically | Full sync | Catalog | Folder"
         .. " | Mark cloud books | Mark books on this device | Mark books not in the catalog"
-        .. " | Include cloud books in file search | Status | Timings",
+        .. " | Status | Timings",
         "menu")
     for _i, item in ipairs(items) do
-        if item.text == "Include cloud books in file search" then
-            check(item.separator, "display group ends after file search")
+        if item.text == "Mark books not in the catalog" then
+            check(item.separator, "display group ends after the badges")
         end
     end
 end

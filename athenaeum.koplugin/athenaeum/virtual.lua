@@ -199,7 +199,7 @@ local function attributes(book)
         change = added,
     }
 end
-Virtual.attributes = attributes -- file search's entries
+Virtual.attributes = attributes -- zenos_source.lua's books()
 
 -- Covers ----------------------------------------------------------------------
 
@@ -392,24 +392,9 @@ function Virtual.showDetails(path, opts)
     }
 end
 
--- The book's metadata on its list item, as KOReader's title, authors and
--- series sorts leave it. Code that reads metadata from CoverBrowser's
--- database itself when an item has none (ZenOS's series grouping in the
--- Library view) would find nothing for a cloud book, so it's always set.
-local function withProps(item, book)
-    if type(item) == "table" and type(item.doc_props) ~= "table" then
-        local props = docProps(book)
-        props.display_title = book.title or (book.filename and book.filename:gsub("%.[^.]*$", ""))
-        item.doc_props = props
-    end
-    return item
-end
-
-Virtual.withProps = withProps -- file search's results
-
 -- ZenOS lists the cloud books in the library folder, counts them in the
--- folders above it, and shows them on folder covers and in its flat view
--- (Athenaeum's source is fileless: common/book_sources.lua's
+-- folders above it, and shows them on folder covers, in its flat view and
+-- in file search (Athenaeum's source is fileless: common/book_sources.lua's
 -- booksWithoutFile). The plugin only shows "Rebuilding library…" while
 -- the library folder is listed.
 
