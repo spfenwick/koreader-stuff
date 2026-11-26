@@ -2448,6 +2448,34 @@ do
     Virtual.setCatalog("/lib", { { id = "r3", title = "Three" } })
     check(Virtual.listingRebuilding(), "Home not on top: message")
     eq(#shown, 2, "two messages in all")
+
+    -- Loading from the catalog menu: its "Loading cloud books…" stays up
+    -- through ZenOS's redraw (a task the load scheduled, so it runs before
+    -- the close), with no second message drawn where the first just was.
+    local Library = require("athenaeum/library")
+    local real_load = Library.load
+    shown, closed, ticks = {}, {}, {}
+    Library.load = function()
+        Virtual.setCatalog("/lib", { { id = "r4", title = "Four" } })
+        UIManager:nextTick(function() Virtual.listingRebuilding() end) -- ZenOS's refreshPath
+    end
+    Library.loadShowingProgress()
+    eq(#shown, 1, "progress: one message")
+    eq(shown[1] and shown[1].text, "Loading cloud books…", "progress: the loading message")
+    eq(#closed, 0, "progress: up after the load")
+    for _i, fn in ipairs(ticks) do fn() end
+    eq(#shown, 1, "progress: no rebuilding message over it")
+    check(closed[1] == shown[1], "progress: closed after the redraw's task")
+    check(not Virtual.progress_shown, "progress: flag cleared")
+    check(not Virtual.listingRebuilding(), "progress: counts as the rebuild")
+    -- A failed load closes it at once.
+    shown, closed, ticks = {}, {}, {}
+    Library.load = function() error("boom") end
+    check(not pcall(Library.loadShowingProgress), "progress: error passed on")
+    check(closed[1] == shown[1] and #ticks == 0, "progress: closed at once on error")
+    check(not Virtual.progress_shown, "progress: flag cleared on error")
+    Library.load = real_load
+
     FileManager.instance = real_fm
     for k, fn in pairs(saved) do UIManager[k] = fn end
     Virtual.setCatalog(nil, {})

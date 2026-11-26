@@ -205,16 +205,20 @@ end
 -- catalog changed, that can take seconds: "Rebuilding library…" is shown
 -- until the folder is drawn. Not while ZenOS's Home is on top: the listing
 -- is then rebuilt out of sight (and the Library tab opens without it).
--- True if the message was shown.
+-- Not while Library.loadShowingProgress's message is up either (it stays
+-- until the listing is drawn). True if the message was shown.
 function Virtual.listingRebuilding()
     if not Virtual.rebuild_pending then return false end
     Virtual.rebuild_pending = false
-    if ZenSource.homeOnTop() then return false end
+    if Virtual.progress_shown or ZenSource.homeOnTop() then return false end
     local UIManager = require("ui/uimanager")
     local InfoMessage = require("ui/widget/infomessage")
     local msg = InfoMessage:new{ text = _("Rebuilding library…"), dismissable = false }
     UIManager:show(msg)
     UIManager:forceRePaint()
+    -- Let the e-ink controller take the message before the listing, when
+    -- quick to build, is drawn over it.
+    UIManager:yieldToEPDC()
     -- Tasks run before the next repaint, which draws the new listing.
     UIManager:nextTick(function() UIManager:close(msg) end)
     return true

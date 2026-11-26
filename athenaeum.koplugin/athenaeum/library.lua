@@ -158,15 +158,29 @@ end
 
 --- Library.load() with a message up, for when it's slow (many cloud books
 -- to list): closes the menu first, so the screen doesn't look stuck.
+-- The message stays up through ZenOS's redraw of the library (on the next
+-- tick, scheduled during the load, so it runs before the close), which
+-- then shows no "Rebuilding library…" of its own: closing one message and
+-- drawing another in the same place straight away races the e-ink
+-- controller, which may still be reading that part of the screen.
 function Library.loadShowingProgress(touchmenu_instance)
     if touchmenu_instance then touchmenu_instance:closeMenu() end
     local InfoMessage = require("ui/widget/infomessage")
     local msg = InfoMessage:new{ text = _("Loading cloud books…"), dismissable = false }
     UIManager:show(msg)
     UIManager:forceRePaint()
+    UIManager:yieldToEPDC()
+    Virtual.progress_shown = true
     local ok, err = pcall(Library.load)
-    UIManager:close(msg)
-    if not ok then error(err, 0) end
+    if not ok then
+        Virtual.progress_shown = false
+        UIManager:close(msg)
+        error(err, 0)
+    end
+    UIManager:nextTick(function()
+        Virtual.progress_shown = false
+        UIManager:close(msg)
+    end)
 end
 
 -- path -> catalog ID for the library's files of catalog books (matched files
