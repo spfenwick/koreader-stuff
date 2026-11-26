@@ -379,4 +379,55 @@ do
     check(H.rh.flushes == flushes + 1, "the history saved once")
 end
 
+-- Looked at once a sync when unchanged ---------------------------------------------------------
+do
+    local J, K = newDev("J"), newDev("K")
+    local j1, j2 = J:book("one"), J:book("two")
+    local k1 = K:book("one")
+    K:book("two")
+    J.rh:open(j1, clock); tick(10)
+    round(J, K)
+    -- Counts the store's history lookups from here.
+    local looks = 0
+    local observeMany = J.store.observeMany
+    J.store.observeMany = function(...) looks = looks + 1; return observeMany(...) end
+
+    J:before()
+    J:send(K)
+    J:after()
+    check(looks == 1, "unchanged since the export: looked at once a sync, not twice (" .. looks .. ")")
+
+    -- Opened while the sync was away: recorded at the end of the same sync.
+    J:before()
+    tick(10); J.rh:open(j2, clock); tick(10)
+    J:send(K)
+    J:after()
+    check(looks == 3, "changed since the export: looked at again (" .. looks .. ")")
+    round(J, K)
+    check(K.rh:files() == "two,one" and K.rh:timeOf(K.dir .. "/books/two.epub") == J.rh:timeOf(j2),
+        "the book opened mid-sync reaches the other device: " .. K.rh:files())
+
+    -- A retry later looks again (it isn't the same moment as the export).
+    looks = 0
+    J:before()
+    J:send(K)
+    J.idle = false
+    J.sync:afterSync()
+    J.idle = true
+    J:run()
+    check(looks == 2, "a retry looks at the history again (" .. looks .. ")")
+
+    -- Books already in the history get marked seen: their local copies change,
+    -- so what the export recorded doesn't count afterwards.
+    K.rh:open(k1, clock); tick(10)
+    round(K, J)
+    looks = 0
+    J.sync.observed = nil
+    J:before()
+    check(J.sync.observed ~= nil, "the export's look is remembered")
+    J.sync:_finishPut(J.rh, 0, { { md5 = digest(S.readFile(j1)), values = { hist = J.rh:timeOf(j1) } } }, {})
+    check(J.sync.observed == nil, "marking books seen forgets it")
+    J.store.observeMany = observeMany
+end
+
 S.finish("concordance history tests")

@@ -132,6 +132,34 @@ end
 
 local function packn(...) return { n = select("#", ...), ... } end
 
+-- Prepared statements, kept for the rest of a connection's call (_tx or
+-- _read) so a call over many books prepares each one once: on a Kobo a
+-- prepare costs about as much as the lookup it's for. conn -> { sql -> stmt }.
+local stmt_cache = setmetatable({}, { __mode = "k" })
+
+--- The statement for sql on conn, ready to bind (kept: don't close it).
+local function prep(conn, sql)
+    local c = stmt_cache[conn]
+    if not c then
+        c = {}
+        stmt_cache[conn] = c
+    end
+    local stmt = c[sql]
+    if stmt then
+        stmt:reset()
+        stmt:clearbind()
+    else
+        stmt = conn:prepare(sql)
+        c[sql] = stmt
+    end
+    return stmt
+end
+
+local function closeConn(conn)
+    stmt_cache[conn] = nil
+    conn:close() -- closes its statements too
+end
+
 function BookStore:_tx(fn)
     local conn = self:open()
     conn:exec("BEGIN IMMEDIATE;")
@@ -141,7 +169,7 @@ function BookStore:_tx(fn)
         if not ok then res = { false, err, n = 2 } end
     end
     if not res[1] then pcall(conn.exec, conn, "ROLLBACK;") end
-    conn:close()
+    closeConn(conn)
     if not res[1] then error(res[2], 0) end
     return unpack(res, 2, res.n)
 end
@@ -149,11 +177,12 @@ end
 function BookStore:_read(fn)
     local conn = self:open()
     local res = packn(pcall(fn, conn))
-    conn:close()
+    closeConn(conn)
     if not res[1] then error(res[2], 0) end
     return unpack(res, 2, res.n)
 end
 
+--- Every row of stmt; closes it.
 local function rows(stmt)
     local out = {}
     local r = stmt:step()
@@ -162,6 +191,17 @@ local function rows(stmt)
         r = stmt:step()
     end
     stmt:close()
+    return out
+end
+
+--- Every row of a statement from prep() (left open, for the next use).
+local function cachedRows(stmt)
+    local out = {}
+    local r = stmt:step()
+    while r do
+        out[#out + 1] = r
+        r = stmt:step()
+    end
     return out
 end
 
@@ -174,35 +214,38 @@ function BookStore.wins(a, b)
     return a.hash > b.hash
 end
 
+local function mergedRecord(r, first)
+    return { updated = num(r[first]), device = r[first + 1], deleted = num(r[first + 2]) == 1,
+             hash = r[first + 3], value = r[first + 4] }
+end
+
 local function loadMerged(conn, md5)
-    local stmt = conn:prepare("SELECT prop, updated, device, deleted, hash, value FROM book_merged WHERE md5 = ?;")
+    local stmt = prep(conn, "SELECT prop, updated, device, deleted, hash, value FROM book_merged WHERE md5 = ?;")
     stmt:bind(md5)
     local map = {}
-    for _, r in ipairs(rows(stmt)) do
-        map[r[1]] = { updated = num(r[2]), device = r[3], deleted = num(r[4]) == 1, hash = r[5], value = r[6] }
-    end
+    for _, r in ipairs(cachedRows(stmt)) do map[r[1]] = mergedRecord(r, 2) end
     return map
 end
 
 --- The MD5s of the book's versions, its own first.
 local function groupOf(conn, md5)
-    local stmt = conn:prepare([[
+    local stmt = prep(conn, [[
         SELECT g.md5 FROM id_groups g JOIN id_groups me ON me.grp = g.grp
         WHERE me.md5 = ? AND g.md5 <> me.md5 ORDER BY g.md5;]])
     stmt:bind(md5)
     local out = { md5 }
-    for _, r in ipairs(rows(stmt)) do out[#out + 1] = r[1] end
+    for _, r in ipairs(cachedRows(stmt)) do out[#out + 1] = r[1] end
     return out
 end
 
 --- The versions of the book whose positions match this one's.
 local function positionPeers(conn, md5)
-    local stmt = conn:prepare([[
+    local stmt = prep(conn, [[
         SELECT g.md5 FROM id_pos me JOIN id_pos g ON g.grp = me.grp AND g.md5 <> me.md5
         WHERE me.md5 = ?;]])
     stmt:bind(md5)
     local out = {}
-    for _, r in ipairs(rows(stmt)) do out[r[1]] = true end
+    for _, r in ipairs(cachedRows(stmt)) do out[r[1]] = true end
     return out
 end
 
@@ -227,37 +270,33 @@ local function loadEffective(conn, md5)
 end
 
 local function loadLocal(conn, md5)
-    local stmt = conn:prepare("SELECT prop, hash FROM book_local WHERE md5 = ?;")
+    local stmt = prep(conn, "SELECT prop, hash FROM book_local WHERE md5 = ?;")
     stmt:bind(md5)
     local map = {}
-    for _, r in ipairs(rows(stmt)) do map[r[1]] = r[2] end
+    for _, r in ipairs(cachedRows(stmt)) do map[r[1]] = r[2] end
     return map
 end
 
 local function putMerged(conn, md5, prop, rec)
-    local stmt = conn:prepare([[
+    prep(conn, [[
         INSERT OR REPLACE INTO book_merged (md5, prop, updated, device, deleted, hash, value)
         VALUES (?, ?, ?, ?, ?, ?, ?);]])
-    stmt:bind(md5, prop, rec.updated, rec.device, rec.deleted and 1 or 0, rec.hash, rec.value):step()
-    stmt:close()
+        :bind(md5, prop, rec.updated, rec.device, rec.deleted and 1 or 0, rec.hash, rec.value):step()
 end
 
 local function putOutbox(conn, md5, prop, updated)
-    local stmt = conn:prepare("INSERT OR REPLACE INTO book_outbox (md5, prop, updated) VALUES (?, ?, ?);")
-    stmt:bind(md5, prop, updated):step()
-    stmt:close()
+    prep(conn, "INSERT OR REPLACE INTO book_outbox (md5, prop, updated) VALUES (?, ?, ?);")
+        :bind(md5, prop, updated):step()
 end
 
 local function putLocal(conn, md5, prop, hash)
-    local stmt = conn:prepare("INSERT OR REPLACE INTO book_local (md5, prop, hash) VALUES (?, ?, ?);")
-    stmt:bind(md5, prop, hash):step()
-    stmt:close()
+    prep(conn, "INSERT OR REPLACE INTO book_local (md5, prop, hash) VALUES (?, ?, ?);")
+        :bind(md5, prop, hash):step()
 end
 
 local function ensureBook(conn, md5, info)
-    local stmt = conn:prepare("INSERT OR IGNORE INTO book_books (md5, title, authors) VALUES (?, ?, ?);")
-    stmt:bind(md5, info and info.title, info and info.authors):step()
-    stmt:close()
+    prep(conn, "INSERT OR IGNORE INTO book_books (md5, title, authors) VALUES (?, ?, ?);")
+        :bind(md5, info and info.title, info and info.authors):step()
 end
 
 --- Does the merged record differ from this device's copy (hash, "" for none)?
@@ -275,9 +314,8 @@ local function updateWrite(conn, md5, merged, loc)
             break
         end
     end
-    local stmt = conn:prepare("UPDATE book_books SET write = ? WHERE md5 = ?;")
-    stmt:bind(write and 1 or 0, md5):step()
-    stmt:close()
+    local flag = write and 1 or 0
+    prep(conn, "UPDATE book_books SET write = ? WHERE md5 = ? AND write <> ?;"):bind(flag, md5, flag):step()
     return write
 end
 
@@ -358,14 +396,12 @@ function BookStore:_observeIn(conn, opts)
     local times = opts.times or {}
     ensureBook(conn, md5, opts)
     if opts.title or opts.authors then
-        local up = conn:prepare("UPDATE book_books SET title = coalesce(?, title), authors = coalesce(?, authors) WHERE md5 = ?;")
-        up:bind(opts.title, opts.authors, md5):step()
-        up:close()
+        prep(conn, "UPDATE book_books SET title = coalesce(?, title), authors = coalesce(?, authors) WHERE md5 = ?;")
+            :bind(opts.title, opts.authors, md5):step()
     end
     if opts.path then
-        local f = conn:prepare("INSERT OR REPLACE INTO book_files (path, md5, sig) VALUES (?, ?, ?);")
-        f:bind(opts.path, md5, opts.sig):step()
-        f:close()
+        prep(conn, "INSERT OR REPLACE INTO book_files (path, md5, sig) VALUES (?, ?, ?);")
+            :bind(opts.path, md5, opts.sig):step()
     end
     local merged = loadMerged(conn, md5)
     local eff = loadEffective(conn, md5)
@@ -415,7 +451,8 @@ function BookStore:_observeIn(conn, opts)
             end
             record(prop, { updated = upd, device = device, deleted = false, hash = s.hash, value = s.json })
         end
-        putLocal(conn, md5, prop, s.hash)
+        -- Unchanged: no write (a sync with nothing new writes nothing).
+        if prev ~= s.hash then putLocal(conn, md5, prop, s.hash) end
         loc[prop] = s.hash
     end
     res.write = updateWrite(conn, md5, eff, loc)
@@ -606,26 +643,57 @@ end
 -- for every book with a record and every version of one. seen is this
 -- device's copy (hash) as last seen or applied, nil if none; group the
 -- book's MD5s, its own first.
+-- Read in three queries, not a few for each book and version (that took
+-- about half a second on a Kobo, on every sync). The history is a property
+-- about the book (BookFormat.GROUP_PROPS), so what applies to a book is the
+-- winning record across its versions, as loadEffective has it.
+assert(BookFormat.isGroupProp(BookFormat.HISTORY) and not BookFormat.isPositionProp(BookFormat.HISTORY),
+    "BookStore:history() takes the history as a property about the book")
 function BookStore:history()
     local HIST = BookFormat.HISTORY
     return self:_read(function(conn)
-        local md5s = {}
-        local stmt = conn:prepare("SELECT md5 FROM book_merged WHERE prop = ? AND deleted = 0;")
+        local recs = {} -- md5 -> its own record (cleared ones too: one can still win)
+        local stmt = conn:prepare("SELECT md5, updated, device, deleted, hash, value FROM book_merged WHERE prop = ?;")
         stmt:bind(HIST)
-        for _, r in ipairs(rows(stmt)) do
-            for _, m in ipairs(groupOf(conn, r[1])) do md5s[m] = true end
+        for _, r in ipairs(rows(stmt)) do recs[r[1]] = mergedRecord(r, 2) end
+
+        local grp_of, members = {}, {}
+        for _, r in ipairs(rows(conn:prepare("SELECT md5, grp FROM id_groups;"))) do
+            grp_of[r[1]] = r[2]
+            members[r[2]] = members[r[2]] or {}
+            table.insert(members[r[2]], r[1])
         end
-        local loc = conn:prepare("SELECT hash FROM book_local WHERE md5 = ? AND prop = ?;")
-        local out = {}
-        for md5 in pairs(md5s) do
-            local m = loadEffective(conn, md5)[HIST]
-            local t = m and not m.deleted and tonumber(AnnFormat.decodeValue(m.value))
-            if t then
-                local seen = loc:reset():bind(md5, HIST):step()
-                out[md5] = { time = t, hash = m.hash, seen = seen and seen[1] or nil, group = groupOf(conn, md5) }
+        for _, list in pairs(members) do table.sort(list) end
+        -- As groupOf: its own MD5 first, then the others in order.
+        local function group(md5)
+            local out = { md5 }
+            for _, m in ipairs(members[grp_of[md5]] or {}) do
+                if m ~= md5 then out[#out + 1] = m end
+            end
+            return out
+        end
+
+        local seen = {}
+        stmt = conn:prepare("SELECT md5, hash FROM book_local WHERE prop = ?;")
+        stmt:bind(HIST)
+        for _, r in ipairs(rows(stmt)) do seen[r[1]] = r[2] end
+
+        local md5s = {}
+        for md5, rec in pairs(recs) do
+            if not rec.deleted then
+                for _, m in ipairs(group(md5)) do md5s[m] = true end
             end
         end
-        loc:close()
+        local out = {}
+        for md5 in pairs(md5s) do
+            local g = group(md5)
+            local m = recs[md5]
+            for i = 2, #g do
+                if BookStore.wins(recs[g[i]], m) then m = recs[g[i]] end
+            end
+            local t = m and not m.deleted and tonumber(AnnFormat.decodeValue(m.value))
+            if t then out[md5] = { time = t, hash = m.hash, seen = seen[md5], group = g } end
+        end
         return out
     end)
 end

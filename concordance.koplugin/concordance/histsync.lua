@@ -122,7 +122,13 @@ end
 
 --- Records when this device last opened each book in its history. Returns
 -- the number of changes recorded.
-function HistSync:observe()
+--- Records changes to this device's history. unless: what an earlier
+-- observe() recorded (self.observed): if the history is still that,
+-- nothing is looked at again (on a Kobo that's about 0.1 s for 100 books).
+-- Only this file writes the history's local copies (observe and
+-- appliedMany), so it's still in the store unless appliedMany ran since,
+-- which forgets self.observed. Returns the number of changes recorded.
+function HistSync:observe(unless)
     local rh = self:_rh()
     local paths, times = self:_files(rh)
     local md5s = self.deps.finder:md5s(paths)
@@ -134,14 +140,19 @@ function HistSync:observe()
     local keys = {}
     for md5 in pairs(by) do keys[#keys + 1] = md5 end
     table.sort(keys)
-    local device, list = self.deps.getDeviceId(), {}
-    for _, md5 in ipairs(keys) do
+    local device, list, sig = self.deps.getDeviceId(), {}, {}
+    for i, md5 in ipairs(keys) do
         local t = by[md5]
         -- Dated when the book was opened, whether it's new to the sync or not.
         list[#list + 1] = { md5 = md5, values = { [HIST] = t }, times = { [HIST] = t }, now = t, device = device }
+        sig[i] = md5 .. "=" .. t
     end
+    sig = tostring(device) .. "\n" .. table.concat(sig, "\n")
+    if unless ~= nil and unless == sig then return 0 end
+    self.observed = nil
     local changed = 0
     for _, r in ipairs(self.deps.store:observeMany(list)) do changed = changed + r.changed end
+    self.observed = sig
     if changed > 0 then self.log.dbg("Concordance: history:", changed, "changes recorded") end
     return changed
 end
@@ -184,7 +195,7 @@ end
 -- were read. Records local changes first. Unless `force`, does nothing
 -- while a menu or dialog is open (KOReader's History view keeps its own
 -- copy). Returns the number of entries changed, or nil and why.
-function HistSync:apply(force)
+function HistSync:apply(force, unless)
     if not force and not self:_idle() then
         -- Waiting: ZenOS can show them meanwhile (worked out once per sync).
         if self.pending_stale then
@@ -197,7 +208,7 @@ function HistSync:apply(force)
         end
         return nil, "busy"
     end
-    self:observe()
+    self:observe(unless)
     local todo, order = self:_plan()
     if not todo then
         self:_setPending({})
@@ -429,14 +440,20 @@ function HistSync:_finishPut(rh, n, seen, moved)
         end
         self.log.info("Concordance: put", n, "books read elsewhere into the history")
     end
-    store:appliedMany(seen)
+    if #seen > 0 then
+        self.observed = nil -- the local copies have changed
+        store:appliedMany(seen)
+    end
     if n > 0 then self:observe() end -- what's there now is this device's copy
 end
 
---- After a sync: apply, or retry while the user is busy.
+--- After a sync: apply, or retry while the user is busy. The history
+-- isn't looked at again if it's what the sync's export recorded.
 function HistSync:afterSync()
     self.pending_stale = true -- the sync may have brought more
-    local ok, n, why = pcall(self.apply, self)
+    local since = self.observed
+    self.observed = nil -- used once: a retry later looks again
+    local ok, n, why = pcall(self.apply, self, nil, since)
     if not ok then
         self.log.warn("Concordance: applying the history failed:", n)
         Problems.report("hist:apply", "Applying the reading history failed", n)

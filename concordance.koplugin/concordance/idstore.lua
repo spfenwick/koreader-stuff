@@ -774,8 +774,16 @@ end
 --- Brings id_groups and id_pos in line with the facts. Returns the MD5s
 -- whose group or position set changed (joined, left, or its members
 -- changed): { [md5] = true }.
+-- The groups depend only on the facts (and MAX_GROUP, MAX_CARRIERS), and
+-- facts are only ever added, so with as many as when this last brought the
+-- groups in line, nothing has changed: they aren't worked out again (on a
+-- Kobo that's about 0.15 s on every sync, for some 800 facts).
 function IdStore:refreshGroups()
-    return self:_tx(function(conn)
+    local key
+    local changed = self:_tx(function(conn)
+        key = string.format("%d/%d/%d", num(conn:rowexec("SELECT count(*) FROM id_facts;")) or 0,
+            IdStore.MAX_GROUP, IdStore.MAX_CARRIERS)
+        if key == self.grouped then return {} end
         local groups, group_sets = {}, {}
         for _, g in ipairs(computeGroups(conn)) do
             if g.ok then
@@ -801,6 +809,8 @@ function IdStore:refreshGroups()
         end
         return changed
     end)
+    self.grouped = key -- in line with this many facts (committed)
+    return changed
 end
 
 --- The other MD5s whose positions match this one's (level 2: same joined

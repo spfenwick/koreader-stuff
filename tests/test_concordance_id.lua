@@ -365,6 +365,36 @@ do
     local changed = G:refreshGroups()
     check(changed.side and changed.x1 and not changed.e1, "a signature arriving later: its group is refreshed")
     check(same(G:positionPeers("side"), "x1,x2,x3,x4"), "peers: now with the signature")
+
+    -- Not worked out again while the facts are the same. (A row put in
+    -- by hand shows whether it was: working them out removes it.)
+    local function tamper()
+        local conn = S.SQ3.open(TMP .. "/G.sqlite3")
+        conn:exec("INSERT INTO id_groups (md5, grp) VALUES ('stray', 'e1');")
+        conn:close()
+    end
+    local function stray()
+        local conn = S.SQ3.open(TMP .. "/G.sqlite3")
+        local n = tonumber(conn:rowexec("SELECT count(*) FROM id_groups WHERE md5 = 'stray';"))
+        conn:close()
+        return n > 0
+    end
+    tamper()
+    check(next(G:refreshGroups()) == nil and stray(), "same facts: the groups aren't worked out again")
+    fact("late", { U[5] }, "s6", "Solo", "Sol")
+    changed = G:refreshGroups()
+    check(not stray() and changed.stray and changed.late and changed.solo, "a new fact: worked out again")
+    tamper()
+    local max = IdStore.MAX_GROUP
+    IdStore.MAX_GROUP = max + 1
+    G:refreshGroups()
+    IdStore.MAX_GROUP = max
+    check(not stray(), "other limits: worked out again")
+    G:refreshGroups()
+    tamper()
+    G:refreshGroups()
+    check(stray(), "(same facts and limits again: not)")
+    check(newStore("G"):refreshGroups().stray and not stray(), "after a restart: worked out once")
 end
 
 -- Progress sync hook ---------------------------------------------------------------------------
