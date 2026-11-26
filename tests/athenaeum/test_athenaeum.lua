@@ -1349,6 +1349,22 @@ do
     Guard.hook("listing", t6, "f", function() error("message bug") end)
     eq(t6:f(), 1, "listing extra fails: KOReader's original runs")
     check(not Guard.ok("listing") and Guard.ok("library"), "only the listing extras turn off")
+    -- A fallback runs instead of the original while the feature is off.
+    reset()
+    local t7 = { f = function(_self, list) return "orig:" .. table.concat(list, ",") end }
+    local function keepOut(orig, self, list)
+        local out = {}
+        for _i, v in ipairs(list) do if v ~= "secret" then out[#out + 1] = v end end
+        return orig(self, out)
+    end
+    Guard.hook("covers", t7, "f", function() error("cover bug") end, "f", keepOut)
+    eq(t7:f({ "a", "secret" }), "orig:a", "plugin fails: the fallback runs, not the original")
+    eq(t7:f({ "secret", "b" }), "orig:b", "feature off: the fallback still runs")
+    check(Guard.ok("library"), "covers failing leaves the library on")
+    reset()
+    local t8 = { f = function() return "orig" end }
+    Guard.hook("covers", t8, "f", function() error("cover bug") end, "f", function() error("fallback bug") end)
+    eq(t8:f(), "orig", "fallback fails too: the original runs")
     -- So do opening and delete handling.
     for _i, feature in ipairs({ "open", "delete" }) do
         reset()
@@ -1403,6 +1419,19 @@ do
     check(Guard.unavailable.open ~= nil and Guard.statusText():find("open not started", 1, true),
         "opening reported as not started: " .. Guard.statusText())
     ReaderUI.showReader = real
+    -- CoverBrowser's extraction changed: the library starts, cover
+    -- downloads on request don't.
+    local real_bim = package.loaded["bookinfomanager"]
+    package.loaded["bookinfomanager"] = {
+        getBookInfo = function(_self, _path, _get_cover) return { cover_fetched = "Y" } end,
+        isCachedCoverInvalid = function(_info, _specs) return false end,
+        extractInBackground = function(_self) end, -- lost its files parameter
+        isExtractingInBackground = function(_self) return false end,
+    }
+    check(Guard.check(), "a changed extractInBackground doesn't stop the library: " .. Guard.statusText())
+    check(Guard.unavailable.covers ~= nil and Guard.statusText():find("covers not started", 1, true),
+        "covers reported as not started: " .. Guard.statusText())
+    package.loaded["bookinfomanager"] = real_bim
     -- No subprocesses: the library starts, syncs and downloads don't.
     local ffiutil = require("ffi/util")
     local real_sub = ffiutil.runInSubProcess
@@ -2478,6 +2507,32 @@ do
         check(Virtual.by_path["/lib/Ann, Bo - Cloud One.epub"].cover_retry_at ~= nil
             and #ZenOS.changes == 1, "offline: retried later, ZenOS told")
         Virtual.by_path["/lib/Ann, Bo - Cloud One.epub"].cover_retry_at = nil
+
+        -- The hook failing: only covers turn off, and CoverBrowser still
+        -- never gets a cloud book (it would save it as unreadable).
+        local Guard = require("athenaeum/guard")
+        local real_can = Virtual.canFetchCovers
+        Virtual.canFetchCovers = function() return true end
+        local cloud = Virtual.by_path["/lib/Ann, Bo - Cloud One.epub"]
+        local real_cover, real_href = cloud.cover, cloud.cover_href
+        cloud.cover, cloud.cover_href = nil, "/opds/cover/9"
+        eq(Virtual.coverState(cloud), "pending", "covers on: pending")
+        Virtual.requestCovers = function() error("cover bug") end
+        stub.extracted = nil
+        eq(stub:extractInBackground({ "/lib/Ann, Bo - Cloud One.epub", "/lib/a.epub" }), "started",
+            "cover hook fails: the other path still extracted")
+        check(not Guard.ok("covers") and Guard.ok("library"), "cover hook fails: only covers turn off")
+        check(#stub.extracted == 1 and stub.extracted[1] == "/lib/a.epub", "the cloud book kept from CoverBrowser")
+        stub.extracted = nil
+        check(stub:extractInBackground({ { filepath = "/lib/Ann, Bo - Cloud One.epub" } }) == true
+            and stub.extracted == nil, "covers off: cloud books alone, nothing extracted")
+        eq(Virtual.coverState(cloud), "none", "covers off: no longer pending, so not asked for")
+        busy = true
+        check(not stub:isExtractingInBackground(), "covers off: CoverBrowser doesn't wait for downloads")
+        busy = false
+        Guard.failed.covers = nil
+        cloud.cover, cloud.cover_href = real_cover, real_href
+        Virtual.canFetchCovers = real_can
         Virtual.requestCovers, Virtual.coversBusy = real_request, real_busy
         package.loaded["bookinfomanager"] = bim
     end

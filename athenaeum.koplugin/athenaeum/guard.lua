@@ -3,7 +3,7 @@ Keeps KOReader working if KOReader, CoverBrowser or ZenOS change under the
 plugin. The plugin needs ZenOS with book sources (common/book_sources.lua):
 without it, the library doesn't start.
 
-Guard.hook(feature, target, name, fn)
+Guard.hook(feature, target, name, fn, label, fallback)
     replaces target[name] with fn(orig, ...). If fn throws, the original
     runs instead and the feature is turned off: the plugin never breaks
     the function it hooks.
@@ -22,6 +22,9 @@ Features:
            history place); off: it comes back at the next catalog load
   sync     syncs, downloads and cover downloads (KOReader's subprocess and
            network functions); off: the cached catalog is still shown
+  covers   a cloud book's cover downloaded when CoverBrowser asks to extract
+           it; off: CoverBrowser is never given cloud books (fail-closed),
+           which show covers already downloaded, else none
   listing  extras while the library is listed: the "Rebuilding library…"
            message and the hasBookBeenOpened / isFileInCollections
            shortcuts; turning it off only loses those (the library stays)
@@ -63,8 +66,8 @@ function Guard.fail(feature, where, err)
     end
     if feature == "library" then
         -- Everything else depends on the library.
-        for other in pairs({ listing = true, open = true, delete = true, sync = true, search = true,
-                badge = true, zenos = true, history = true, metadata = true }) do
+        for other in pairs({ listing = true, open = true, delete = true, sync = true, covers = true,
+                search = true, badge = true, zenos = true, history = true, metadata = true }) do
             if not Guard.failed[other] then Guard.failed[other] = "library turned off" end
         end
     end
@@ -88,16 +91,27 @@ local function traceback(err)
 end
 
 --- Hooks target[name]. fn(orig, ...) does the work; returns the wrapper, or
--- nil if there's nothing to hook.
-function Guard.hook(feature, target, name, fn, label)
+-- nil if there's nothing to hook. fallback(orig, ...), if given, runs
+-- instead of the original whenever the feature is off (after a failure, or
+-- the startup check), for a hook whose original mustn't see what the plugin
+-- normally keeps from it (fail-closed). It should be trivial; if it fails
+-- too, the original runs.
+function Guard.hook(feature, target, name, fn, label, fallback)
     local orig = target[name]
     if type(orig) ~= "function" then
         Guard.problem(feature, (label or name) .. " is missing")
         return nil
     end
     label = label or name
+    local function off(...)
+        if not fallback then return orig(...) end
+        local r = pack(pcall(fallback, orig, ...))
+        if r[1] then return unpack(r, 2, r.n) end
+        logger.err("Athenaeum: fallback for", label, "(" .. feature .. ") failed:", r[2])
+        return orig(...)
+    end
     local wrapper = function(...)
-        if not Guard.ok(feature) then return orig(...) end
+        if not Guard.ok(feature) then return off(...) end
         -- Errors from the original itself aren't ours: pass them on as if
         -- the plugin weren't there, rather than turning the feature off.
         local orig_error, orig_done
@@ -117,7 +131,7 @@ function Guard.hook(feature, target, name, fn, label)
         -- The original already ran before our code failed: its results
         -- stand. Running it again would delete, or open, twice.
         if orig_done then return unpack(orig_done, 2, orig_done.n) end
-        return orig(...)
+        return off(...)
     end
     target[name] = wrapper
     return wrapper
@@ -234,10 +248,8 @@ function Guard.check()
     -- is fine (no covers anywhere then); a changed one isn't.
     local ok_bim, bim = pcall(require, "bookinfomanager")
     if ok_bim and type(bim) == "table" then
-        requires("library", "bookinfomanager", {
-            getBookInfo = 3, isCachedCoverInvalid = 2,
-            extractInBackground = 2, isExtractingInBackground = 1,
-        })
+        requires("library", "bookinfomanager", { getBookInfo = 3, isCachedCoverInvalid = 2 })
+        requires("covers", "bookinfomanager", { extractInBackground = 2, isExtractingInBackground = 1 })
         -- The shape of what getBookInfo returns, on a folder (no database read).
         local DataStorage = require("datastorage")
         local okc, info = pcall(bim.getBookInfo, bim, DataStorage:getDataDir(), false)
@@ -269,8 +281,8 @@ end
 --- Lines for the Status screen ("" when all is well).
 function Guard.statusText()
     local lines = {}
-    for _i, feature in ipairs({ "library", "listing", "open", "delete", "sync", "search", "badge", "zenos",
-            "history", "metadata", "jobs" }) do
+    for _i, feature in ipairs({ "library", "listing", "open", "delete", "sync", "covers", "search", "badge",
+            "zenos", "history", "metadata", "jobs" }) do
         if Guard.unavailable[feature] then
             table.insert(lines, string.format("%s not started: %s", feature,
                 table.concat(Guard.unavailable[feature], "; ")))

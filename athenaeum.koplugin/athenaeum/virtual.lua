@@ -226,9 +226,11 @@ function Virtual.coverState(book)
         end
         if book.cover_w then return "ready" end
     end
+    -- "pending" makes CoverBrowser ask for it (installBookInfo): not while
+    -- that hook is off (Guard's "covers").
     if book.cover_href and not book.cover_failed and not book.cover
             and not (book.cover_retry_at and book.cover_retry_at > os.time())
-            and Virtual.canFetchCovers and Virtual.canFetchCovers() then
+            and Guard.ok("covers") and Virtual.canFetchCovers and Virtual.canFetchCovers() then
         return "pending"
     end
     return "none"
@@ -447,7 +449,22 @@ function Virtual.fetchCovers(paths)
 end
 
 -- Cloud books are never extracted by CoverBrowser: their covers are
--- downloaded (Virtual.fetchCovers), and it waits while they are.
+-- downloaded (Virtual.fetchCovers), and it waits while they are. Never,
+-- even with the hook off (fail-closed): extracting a book with no file
+-- saves a CoverBrowser row calling it unreadable, with its cover fetched,
+-- which the real book would inherit once downloaded.
+local function withoutCloudBooks(orig, self, files, ...)
+    if type(files) ~= "table" then return orig(self, files, ...) end
+    local real = {}
+    for _i, file in ipairs(files) do
+        local path = type(file) == "table" and file.filepath or file
+        if not Virtual.by_path[path] then real[#real + 1] = file end
+    end
+    if #real == 0 then return true end
+    return orig(self, real, ...)
+end
+Virtual._withoutCloudBooks = withoutCloudBooks -- for tests
+
 local function installBookInfo()
     local ok, BookInfoManager = pcall(require, "bookinfomanager")
     if not ok or type(BookInfoManager) ~= "table"
@@ -455,7 +472,7 @@ local function installBookInfo()
         logger.warn("Athenaeum: CoverBrowser unavailable, no covers for cloud books")
         return false
     end
-    Guard.hook("library", BookInfoManager, "extractInBackground", function(orig, self, files, ...)
+    Guard.hook("covers", BookInfoManager, "extractInBackground", function(orig, self, files, ...)
         if type(files) ~= "table" then return orig(self, files, ...) end
         local real, wanted = {}, {}
         for _i, file in ipairs(files) do
@@ -469,8 +486,8 @@ local function installBookInfo()
         -- error otherwise, and stops waiting once
         -- isExtractingInBackground() is false.
         return true
-    end, "BookInfoManager:extractInBackground")
-    Guard.hook("library", BookInfoManager, "isExtractingInBackground", function(orig, self, ...)
+    end, "BookInfoManager:extractInBackground", withoutCloudBooks)
+    Guard.hook("covers", BookInfoManager, "isExtractingInBackground", function(orig, self, ...)
         return orig(self, ...) or (Virtual.coversBusy and Virtual.coversBusy()) or false
     end, "BookInfoManager:isExtractingInBackground")
     return true
@@ -612,6 +629,15 @@ function Virtual.install()
         local folder = Virtual.folder
         Virtual.setCatalog(folder, {})
         Virtual.forgetDecodedCovers()
+    end
+    -- Covers off: cloud books without one are drawn again as having none
+    -- (no longer "pending"), so CoverBrowser stops asking for them.
+    Guard.on_failure.covers = function()
+        local paths = {}
+        for _i, book in ipairs(Virtual.books) do
+            if not book.cover then paths[#paths + 1] = book.path end
+        end
+        if #paths > 0 then ZenSource.changed(paths) end
     end
     -- Before the file browser lists the folder (plugins start first), so
     -- ZenOS's saved listing is used.
