@@ -8,7 +8,11 @@ own walk, so they're matched as files are:
 - a whole-word search nothing matches: "No results";
 - ZenOS's search over several home folders, the library under the second;
 - tapping a cloud result shows its details; the search hooks stay on;
-- a folder count (getList without collate) includes the cloud books.
+- a folder count (getList without collate) includes the cloud books;
+- ZenOS's flat view ("Show all files from subfolders"): the library folder
+  shows and counts its cloud books once; a folder above it does too when
+  ZenOS lists book sources' books in its flat view (booksWithoutFile), else
+  not (a known gap).
 
 Use ZenOS's custom branch (git archive custom | tar -x -C <dir>).
 
@@ -78,6 +82,29 @@ EXTRA = r"""
         return { ok = true, files = #files, all_true = all_true,
             placeholders = Virtual.count_placeholders, problem = Virtual.count_problem or false }
     end
+    if kind == "flat" then
+        local fc = require("apps/filemanager/filemanager").instance.file_chooser
+        local FileChooser = require("ui/widget/filechooser")
+        local cfg = require("config/manager").get()
+        cfg.browser_flat_view = cfg.browser_flat_view or {}
+        cfg.browser_flat_view.enabled = params.on
+        if params.home then G_reader_settings:saveSetting("home_dir", params.home) end
+        for _i, p in ipairs(params.invalidate or {}) do
+            if type(FileChooser._zen_invalidate_item_table_path) == "function" then
+                pcall(FileChooser._zen_invalidate_item_table_path, fc, p)
+            end
+        end
+        fc:changeToPath(params.path)
+        local Virtual = package.loaded["athenaeum/virtual"]
+        local cloud = {}
+        for _i, item in ipairs(fc.item_table or {}) do
+            if item.is_file and Virtual.isVirtual(item.path) then cloud[#cloud + 1] = item.path end
+        end
+        local counted = { fc:getList(params.path) }
+        local BookSources = package.loaded["common/book_sources"]
+        return { ok = true, cloud = #cloud, count = #(counted[2] or {}),
+            zenos_lists = type(BookSources) == "table" and type(BookSources.booksWithoutFile) == "function" }
+    end
     if kind == "srch_tap" then
         local menu = require("apps/filemanager/filemanager").instance.filesearcher.booklist_menu
         for _i, item in ipairs(menu.item_table) do
@@ -142,6 +169,11 @@ try:
         report["tap_shot"] = s.shot("tap")
         s.cmd("athenaeum_close_top")
     report["status"] = s.cmd("srch_results").get("status")
+    # ZenOS's flat view: the library folder, then (as home) the folder above it.
+    parent = str(Path(lib).parent)
+    report["flat_library"] = s.cmd("flat", on=True, path=lib, invalidate=[lib, parent])
+    report["flat_parent"] = s.cmd("flat", on=True, home=parent, path=parent, invalidate=[lib, parent])
+    report["flat_off"] = s.cmd("flat", on=False, home=lib, path=lib, invalidate=[lib, parent])
 finally:
     s.close()
 (args.out / "report.json").write_text(json.dumps(report, indent=2))
@@ -158,9 +190,18 @@ count = report.get("count") or {}
 if not (count.get("files") == 4 and count.get("all_true") and count.get("placeholders") is True
         and count.get("problem") is False):
     failed.append("count")
+flat = report.get("flat_library") or {}
+if not (flat.get("cloud") == 2 and flat.get("count") == 4):
+    failed.append("flat_library")
+parent_flat = report.get("flat_parent") or {}
+if parent_flat.get("cloud") != (2 if parent_flat.get("zenos_lists") else 0):
+    failed.append("flat_parent")
+off = report.get("flat_off") or {}
+if not (off.get("cloud") == 2 and off.get("count") == 4):
+    failed.append("flat_off")
 if not report.get("tap_details"):
     failed.append("tap_details")
-if any(isinstance(v, dict) and "cloud" in v and not v.get("search_ok") for v in report.values()) or report.get("status"):
+if any(isinstance(v, dict) and "search_ok" in v and not v["search_ok"] for v in report.values()) or report.get("status"):
     failed.append("search turned off")
 print("FAILED: " + ", ".join(failed) if failed else "all passed")
 sys.exit(1 if failed else 0)

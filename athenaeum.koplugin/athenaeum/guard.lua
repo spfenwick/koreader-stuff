@@ -192,9 +192,10 @@ function Guard.check()
         getListItem = 6, genItemTable = 3,
         onMenuSelect = 2, onMenuHold = 2, refreshPath = true, updateItems = true,
     })
-    -- The listing hook: getPathList (KOReader 2026.07 and later), else getList.
+    -- The listing hook: getPathList (KOReader 2026.07 and later, with getList
+    -- for ZenOS's flat view), else getList.
     if fc and type(fc.getPathList) == "function" then
-        requires("library", "ui/widget/filechooser", { getPathList = 5 })
+        requires("library", "ui/widget/filechooser", { getPathList = 5, getList = 3 })
     else
         requires("library", "ui/widget/filechooser", { getList = 3 })
     end

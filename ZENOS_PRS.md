@@ -296,11 +296,19 @@ the listing and the count. The rest of what the ZenOS change fixed is lost
 again: ZenOS's flat view and folder covers (count, images, "all finished")
 don't see cloud books. Since 0.10.10 the hook is on `getPathList` (KOReader
 2026.07 and later; `getList` before that), so KOReader's own flat view lists
-cloud books, but ZenOS's flat view replaces `getPathList` for the home
-folder with its own walk (`scan_flat` in `browser_flat_view_compat.lua`,
-`BookWalker.walk`), which never reaches the hook. A small ZenOS change, with
-`scan_flat` asking the book sources for books without a file in each folder
-it walks, would fix that part on its own. The notes below
+cloud books, but ZenOS's flat view replaces `getPathList` for the folders
+in its home folders with its own walk (`scan_flat` in
+`browser_flat_view_compat.lua`, `BookWalker.walk`), which never reaches the
+hook. 0.10.10 lost the cloud books from the library folder itself in
+ZenOS's flat view that way (0.10.9's `getList` hook was outside ZenOS's
+walk); since 0.10.11 a `getList` hook adds them when the `getPathList` hook
+didn't run for the library and ZenOS doesn't list them itself. Folders
+above the library in ZenOS's flat view still don't show them. A small
+ZenOS change, with `scan_flat` asking the book sources for books without a
+file in each folder it walks (`BookSources.booksWithoutFile`, drafted
+uncommitted on `custom` 2026-11-26 and checked in the emulator by
+`tests/athenaeum/e2e_search.py`), fixes that; Athenæum's `getList` hook
+then steps aside. The notes below
 describe the discarded version, in case it's revisited.
 
 ZenOS (`common/book_sources.lua` unless noted):

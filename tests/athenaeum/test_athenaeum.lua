@@ -2329,6 +2329,41 @@ do
     fc.path = nil
     Virtual.listingRebuilding = function() end
 
+    -- getList beside getPathList: ZenOS's flat view walks the library itself
+    -- (getPathList never runs for it); the books are added then, once.
+    local function zen_flat(_self, _path, collate)
+        return {}, { collate and { path = "/lib/local.epub" } or true }, true, "extra"
+    end
+    local function through_path(self, path, collate)
+        local d, f = {}, {}
+        local ok_p = Virtual._pathListing(porig, self, path, collate, d, f)
+        return d, f, ok_p, "extra"
+    end
+    r = { Virtual._flatFallback(zen_flat, fc, "/lib", {}) }
+    check(#r[2] == 3 and r[2][2].path and r[4] == "extra", "flat fallback: ZenOS's walk, cloud books added")
+    r = { Virtual._flatFallback(zen_flat, fc, "/lib") }
+    eq(#r[2], 3, "flat fallback: counted too")
+    r = { Virtual._flatFallback(through_path, fc, "/lib", {}) }
+    eq(#r[2], 3, "getPathList ran: added there only, not again")
+    r = { Virtual._flatFallback(through_path, fc, "/lib") }
+    eq(#r[2], 3, "getPathList ran: counted once")
+    r = { Virtual._flatFallback(zen_flat, fc, "/elsewhere") }
+    eq(#r[2], 1, "flat fallback: another folder, nothing added")
+    -- A count of the library inside another folder's getList.
+    local function nested(self, _path, collate)
+        local inner = { Virtual._flatFallback(zen_flat, self, "/lib") }
+        local d, f = {}, {}
+        Virtual._pathListing(porig, self, "/lib", collate, d, f)
+        return d, f, #inner[2]
+    end
+    r = { Virtual._flatFallback(nested, fc, "/lib", {}) }
+    check(#r[2] == 3 and r[3] == 3, "nested getList: each counted once")
+    local zen_sources = package.loaded["common/book_sources"]
+    zen_sources.booksWithoutFile = function() return {} end
+    r = { Virtual._flatFallback(zen_flat, fc, "/lib", {}) }
+    eq(#r[2], 1, "ZenOS lists source books in its flat view: not added")
+    zen_sources.booksWithoutFile = nil
+
     -- Counting with something other than true: cloud books left out.
     eq(Virtual._placeholdersIn({ true }, { true }), true, "true placeholders")
     eq(Virtual._placeholdersIn({}, {}), nil, "nothing to tell by")

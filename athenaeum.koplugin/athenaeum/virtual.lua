@@ -18,8 +18,11 @@ Virtual.listingKey(). The KOReader and CoverBrowser functions changed here:
   FileChooser:getPathList          adds the entries to the library folder
                                    (and counts them in the folder above,
                                    and lists them in KOReader's flat view),
-                                   with the "Rebuilding library..." message;
-                                   FileChooser:getList instead on a KOReader
+                                   with the "Rebuilding library..." message
+  FileChooser:getList              the same, for the library folder shown
+                                   in ZenOS's flat view (its walk replaces
+                                   getPathList), unless ZenOS lists them;
+                                   instead of getPathList on a KOReader
                                    before 2026.07, which has no getPathList
   BookInfoManager:extractInBackground / :isExtractingInBackground
                                    covers not downloaded yet are fetched when
@@ -579,8 +582,10 @@ end
 -- 2026.07 and later). It walks one folder into the dirs and files it's
 -- given: for a listing, a count, and each folder of KOReader's flat view.
 -- Every value it returns is passed on.
+local path_listed = false -- the hook below ran for the library (see flatFallback)
 local function pathListing(orig, self, path, collate, dirs, files, ...)
     local library = isLibrary(self, path)
+    if library then path_listed = true end
     if library and collate then rebuildingMessage(self) end
     local r = pack(orig(self, path, collate, dirs, files, ...))
     if library then addToListing(self, path, collate, dirs, files) end
@@ -599,13 +604,42 @@ local function listing(orig, self, path, collate, ...)
 end
 Virtual._listing = listing -- for tests
 
---- getPathList where KOReader has it (getList, around it, then isn't
--- hooked: the books would be added twice), else getList.
+-- Whether ZenOS lists the book sources' books without a file in its own
+-- flat view (common/book_sources.lua's booksWithoutFile, asked by its walk).
+local function zenosListsSourceBooks()
+    local BookSources = package.loaded["common/book_sources"]
+    return type(BookSources) == "table" and type(BookSources.booksWithoutFile) == "function"
+end
+
+--- FileChooser:getList, alongside the getPathList hook: ZenOS's flat view
+-- ("Show all files from subfolders") replaces getPathList for the folders
+-- in its home folders with its own walk, which never calls it, so the
+-- library folder shown in it would have no cloud books. They're added
+-- here then: when the getPathList hook didn't run for the library during
+-- this getList, unless ZenOS lists them itself. (Folders above the library
+-- in ZenOS's flat view are only covered by a ZenOS that does.)
+local function flatFallback(orig, self, path, collate, ...)
+    if not isLibrary(self, path) then return orig(self, path, collate, ...) end
+    local outer = path_listed -- a getList inside a getList (a folder's count)
+    path_listed = false
+    local r = pack(orig(self, path, collate, ...))
+    local ran = path_listed
+    path_listed = outer
+    if not ran and not zenosListsSourceBooks() then
+        addToListing(self, path, collate, r[1], r[2])
+    end
+    return unpack(r, 1, r.n)
+end
+Virtual._flatFallback = flatFallback -- for tests
+
+--- getPathList where KOReader has it, with getList for ZenOS's flat view
+-- (flatFallback); else getList.
 local function installListing()
     local FileChooser = require("ui/widget/filechooser")
     Virtual.checkCountPlaceholders(FileChooser)
     if type(FileChooser.getPathList) == "function" then
         Guard.hook("library", FileChooser, "getPathList", pathListing, "FileChooser:getPathList")
+        Guard.hook("library", FileChooser, "getList", flatFallback, "FileChooser:getList")
     else
         Guard.hook("library", FileChooser, "getList", listing, "FileChooser:getList")
     end
