@@ -631,7 +631,7 @@ function Library.installDeleteHooks()
     -- The book keeps its history entry: it's a cloud entry again at the
     -- same path (History.keep, afterDelete), before the caller redraws, so a
     -- "last read" sort keeps the book in its place.
-    Guard.hook("library", FileManager, "deleteFile", function(orig, self, file, ...)
+    Guard.hook("delete", FileManager, "deleteFile", function(orig, self, file, ...)
         local path = libraryPath(file)
         local kept = path and idForPath(path) and History.keep({ path }) or {}
         local ok = orig(self, file, ...)
@@ -645,7 +645,7 @@ function Library.installDeleteHooks()
     end, "FileManager:deleteFile")
     -- deleteSelectedFiles() redraws the listing itself, so the cloud entries
     -- go back first; those for files it couldn't delete are taken out again.
-    Guard.hook("library", FileManager, "deleteSelectedFiles", function(orig, self, ...)
+    Guard.hook("delete", FileManager, "deleteSelectedFiles", function(orig, self, ...)
         local paths = {}
         for path in pairs(self.selected_files or {}) do
             if inLibrary(path) then paths[#paths + 1] = path end
@@ -945,10 +945,22 @@ local function describeResult(r)
     return _("Athenæum is up to date.")
 end
 
+-- Syncs, downloads and cover downloads need KOReader's subprocess and
+-- network functions (Guard's "sync"). Without them the cached catalog is
+-- still shown. True (and, unless quiet, a message) when they're off.
+local function syncOff(quiet)
+    if Guard.ok("sync") then return false end
+    if not quiet then
+        notify(_("Athenæum: syncing and downloads are off after a KOReader change. See Athenæum → Status."))
+    end
+    return true
+end
+
 --- Starts a sync in a subprocess. mode: "quick", "full", "scan" (local
 -- files only), "covers" (all missing covers) or "prefetch" (some). quiet: no notifications unless something changed or failed.
 -- opts: carried from one cover batch to the next (see pollJob).
 function Library.sync(mode, quiet, opts)
+    if syncOff(quiet) then return false end
     if Library.job then
         if not quiet then
             notify(T(_("Athenæum: a %1 is already running."), jobName(Library.job.mode)))
@@ -1223,6 +1235,7 @@ end
 --- Downloads a cloud book into the library folder. opts: { ext = format to
 -- use (default: the best one), open = open it when done }.
 function Library.download(id, opts)
+    if syncOff(false) then return false end
     opts = opts or {}
     local server, folder = Library.server(), Library.folder()
     local book = server and Library.bookDetails(id)

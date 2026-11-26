@@ -259,6 +259,8 @@ end
 
 function Covers.canFetch()
     if not (Covers.config and Covers.config.server) then return false end
+    -- Guard's "sync": KOReader's subprocess and network functions.
+    if not require("athenaeum/guard").ok("sync") then return false end
     local NetworkMgr = require("ui/network/manager")
     return NetworkMgr:isConnected() and true or false
 end

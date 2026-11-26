@@ -14,8 +14,14 @@ Guard.check()
     before hooking: checks that what each feature relies on is still there.
 
 Features:
-  library  cloud books in the folder (also: tapping them, settings guard,
-           covers); turning it off removes the cloud books
+  library  cloud books in the folder (also: the settings guard, covers);
+           turning it off removes the cloud books
+  open     a cloud book opened from outside ZenOS's book sources (ReaderUI)
+           shows its details; off: KOReader says the file isn't there
+  delete   a deleted download is a cloud book again at once (and keeps its
+           history place); off: it comes back at the next catalog load
+  sync     syncs, downloads and cover downloads (KOReader's subprocess and
+           network functions); off: the cached catalog is still shown
   listing  extras while the library is listed: the "Rebuilding library…"
            message and the hasBookBeenOpened / isFileInCollections
            shortcuts; turning it off only loses those (the library stays)
@@ -57,8 +63,8 @@ function Guard.fail(feature, where, err)
     end
     if feature == "library" then
         -- Everything else depends on the library.
-        for other in pairs({ listing = true, search = true, badge = true, zenos = true, history = true,
-                metadata = true }) do
+        for other in pairs({ listing = true, open = true, delete = true, sync = true, search = true,
+                badge = true, zenos = true, history = true, metadata = true }) do
             if not Guard.failed[other] then Guard.failed[other] = "library turned off" end
         end
     end
@@ -198,7 +204,7 @@ function Guard.check()
     if not (fc and type(fc.getPathList) == "function") then
         requires("listing", "ui/widget/filechooser", { getList = 3 })
     end
-    requires("library", "apps/reader/readerui", { showReader = 2 })
+    requires("open", "apps/reader/readerui", { showReader = 2 })
     requires("library", "docsettings", { flush = 1 })
     requires("listing", "ui/widget/booklist", { hasBookBeenOpened = 1 })
     requires("listing", "readcollection", { isFileInCollections = 2 })
@@ -219,10 +225,10 @@ function Guard.check()
         -- ZenOS's search puts the cloud books into its results (fileless sources).
         requires("search", "common/book_sources", { searchResults = 4 })
     end
-    requires("library", "ffi/util", {
+    requires("sync", "ffi/util", {
         runInSubProcess = 2, isSubProcessDone = 1, readAllFromFD = 1, writeToFD = 2,
     })
-    requires("library", "ui/network/manager", { isConnected = true, runWhenConnected = true })
+    requires("sync", "ui/network/manager", { isConnected = true, runWhenConnected = true })
 
     -- CoverBrowser: metadata and covers of cloud books. Missing CoverBrowser
     -- is fine (no covers anywhere then); a changed one isn't.
@@ -263,8 +269,8 @@ end
 --- Lines for the Status screen ("" when all is well).
 function Guard.statusText()
     local lines = {}
-    for _i, feature in ipairs({ "library", "listing", "search", "badge", "zenos", "history", "metadata",
-            "jobs" }) do
+    for _i, feature in ipairs({ "library", "listing", "open", "delete", "sync", "search", "badge", "zenos",
+            "history", "metadata", "jobs" }) do
         if Guard.unavailable[feature] then
             table.insert(lines, string.format("%s not started: %s", feature,
                 table.concat(Guard.unavailable[feature], "; ")))

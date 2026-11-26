@@ -479,7 +479,7 @@ Virtual._installBookInfo = installBookInfo -- for tests
 
 local function installOpen()
     local ReaderUI = require("apps/reader/readerui")
-    Guard.hook("library", ReaderUI, "showReader", function(orig, self, file, ...)
+    Guard.hook("open", ReaderUI, "showReader", function(orig, self, file, ...)
         if Virtual.by_path[file] then
             Virtual.showDetails(file)
             return
@@ -487,7 +487,7 @@ local function installOpen()
         return orig(self, file, ...)
     end, "ReaderUI:showReader")
     if type(ReaderUI.switchDocument) == "function" then
-        Guard.hook("library", ReaderUI, "switchDocument", function(orig, self, file, ...)
+        Guard.hook("open", ReaderUI, "switchDocument", function(orig, self, file, ...)
             if Virtual.by_path[file] then
                 Virtual.showDetails(file)
                 return

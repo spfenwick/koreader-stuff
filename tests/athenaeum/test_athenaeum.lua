@@ -1349,6 +1349,14 @@ do
     Guard.hook("listing", t6, "f", function() error("message bug") end)
     eq(t6:f(), 1, "listing extra fails: KOReader's original runs")
     check(not Guard.ok("listing") and Guard.ok("library"), "only the listing extras turn off")
+    -- So do opening and delete handling.
+    for _i, feature in ipairs({ "open", "delete" }) do
+        reset()
+        local t = { f = function() return "orig" end }
+        Guard.hook(feature, t, "f", function() error(feature .. " bug") end)
+        eq(t:f(), "orig", feature .. " fails: KOReader's original runs")
+        check(not Guard.ok(feature) and Guard.ok("library"), feature .. " fails: the library stays")
+    end
 
     -- Background tasks: errors reported, tasks keep running.
     reset()
@@ -1379,13 +1387,37 @@ do
     reset()
     check(Guard.check(), "startup check passes: " .. Guard.statusText())
     eq(Guard.statusText(), "", "no problems on this KOReader")
+    -- The settings guard changed: the library doesn't start.
+    local DocSettings = require("docsettings")
+    local real_flush = DocSettings.flush
+    DocSettings.flush = function() end
+    check(not Guard.check(), "startup check notices a changed function")
+    check(Guard.statusText():find("flush takes 0 parameters, expected 1", 1, true),
+        "problem described: " .. Guard.statusText())
+    DocSettings.flush = real_flush
+    -- Opening changed: the library starts, opening outside ZenOS doesn't.
     local ReaderUI = require("apps/reader/readerui")
     local real = ReaderUI.showReader
     ReaderUI.showReader = function(_self) end
-    check(not Guard.check(), "startup check notices a changed function")
-    check(Guard.statusText():find("showReader takes 1 parameters, expected 2", 1, true),
-        "problem described: " .. Guard.statusText())
+    check(Guard.check(), "a changed showReader doesn't stop the library")
+    check(Guard.unavailable.open ~= nil and Guard.statusText():find("open not started", 1, true),
+        "opening reported as not started: " .. Guard.statusText())
     ReaderUI.showReader = real
+    -- No subprocesses: the library starts, syncs and downloads don't.
+    local ffiutil = require("ffi/util")
+    local real_sub = ffiutil.runInSubProcess
+    ffiutil.runInSubProcess = nil
+    check(Guard.check(), "no runInSubProcess doesn't stop the library")
+    check(not Guard.ok("sync") and Guard.statusText():find("sync not started", 1, true),
+        "sync reported as not started: " .. Guard.statusText())
+    local Library = require("athenaeum/library")
+    local real_server_fn = Library.server
+    Library.server = function() return { url = "http://sync.invalid/opds", username = "u" } end
+    eq(Library.sync("quick", true), false, "sync off: no sync started")
+    eq(Library.download("x"), false, "sync off: no download started")
+    eq(require("athenaeum/covers").canFetch(), false, "sync off: no cover downloads")
+    Library.server = real_server_fn
+    ffiutil.runInSubProcess = real_sub
     local zen = package.loaded["common/book_sources"]
     local real_bwf = zen.booksWithoutFile
     zen.booksWithoutFile = nil
