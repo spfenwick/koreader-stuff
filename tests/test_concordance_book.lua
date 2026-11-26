@@ -877,4 +877,36 @@ do
     check(execs == 4, "schema: run for each of those")
 end
 
+-- The file lists are read once until something's written ----------------------------------
+do
+    local dir = TMP .. "/listed"
+    S.mkdirp(dir)
+    local store = BookStore.new{ sq3 = S.SQ3, state_path = dir .. "/state.sqlite3", md5 = digest }
+    local reads = 0
+    local read = store._read
+    store._read = function(...) reads = reads + 1; return read(...) end
+
+    check(next(store:files()) == nil and next(store:collFiles()) == nil, "listed: empty to start")
+    reads = 0
+    store:files(); store:collFiles(); store:files(); store:collFiles()
+    check(reads == 0, "listed: not read again while nothing's written (" .. reads .. ")")
+
+    store:setCollFiles{ { path = "/b/one.epub", md5 = "m1", sig = "1@1" } }
+    check(store:collFiles()["/b/one.epub"].md5 == "m1", "listed: a write is seen")
+    store:observe{ md5 = "m2", values = { status = "reading" }, times = {}, now = clock, device = "D",
+                   path = "/b/two.epub", sig = "2@2" }
+    check(store:files()["/b/two.epub"].md5 == "m2", "listed: a book recorded is seen")
+    store:forgetFile("/b/two.epub")
+    check(store:files()["/b/two.epub"] == nil, "listed: a book forgotten is gone")
+
+    -- Written by something else: seen after forgetListed (each sync's start).
+    store:collFiles()
+    local conn = S.SQ3.open(store.state_path)
+    conn:exec("DELETE FROM coll_files;")
+    conn:close()
+    check(store:collFiles()["/b/one.epub"] ~= nil, "listed: kept until the sync starts")
+    store:forgetListed()
+    check(store:collFiles()["/b/one.epub"] == nil, "listed: read again then")
+end
+
 S.finish("concordance book data tests")

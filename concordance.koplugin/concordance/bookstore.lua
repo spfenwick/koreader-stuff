@@ -165,6 +165,7 @@ local function closeConn(conn)
 end
 
 function BookStore:_tx(fn)
+    self.listed = nil -- see files()
     local conn = self:open()
     conn:exec("BEGIN IMMEDIATE;")
     local res = packn(pcall(fn, conn))
@@ -174,6 +175,7 @@ function BookStore:_tx(fn)
     end
     if not res[1] then pcall(conn.exec, conn, "ROLLBACK;") end
     closeConn(conn)
+    self.listed = nil
     if not res[1] then error(res[2], 0) end
     return unpack(res, 2, res.n)
 end
@@ -779,16 +781,35 @@ function BookStore:statesByUuid(usedFacts)
     end)
 end
 
---- path -> { md5, sig } for books whose MD5 was found for collections or
--- the reading history.
-function BookStore:collFiles()
-    return self:_read(function(conn)
-        local out = {}
-        for _, r in ipairs(rows(conn:prepare("SELECT path, md5, sig FROM coll_files;"))) do
-            out[r[1]] = { md5 = r[2], sig = r[3] }
+-- files() and collFiles() are asked for many times a sync (about 5 ms each
+-- on a Kobo), so what they read is kept (self.listed, table -> list) until
+-- this store next writes (_tx) or a sync starts (forgetListed). Only this
+-- process writes the state database. Callers mustn't change the lists.
+function BookStore:_listed(tbl)
+    local listed = self.listed or {}
+    self.listed = listed
+    if listed[tbl] then return listed[tbl] end
+    local out = self:_read(function(conn)
+        local res = {}
+        for _, r in ipairs(rows(conn:prepare("SELECT path, md5, sig FROM " .. tbl .. ";"))) do
+            res[r[1]] = { md5 = r[2], sig = r[3] }
         end
-        return out
+        return res
     end)
+    -- A write in between (it can't happen now, but) would have dropped it.
+    if self.listed == listed then listed[tbl] = out end
+    return out
+end
+
+--- Forgets what files() and collFiles() read: they look again.
+function BookStore:forgetListed()
+    self.listed = nil
+end
+
+--- path -> { md5, sig } for books whose MD5 was found for collections or
+-- the reading history. Don't change it.
+function BookStore:collFiles()
+    return self:_listed("coll_files")
 end
 
 --- Records (md5 given) or forgets (md5 nil) books' MD5s: list = { { path, md5, sig }, … }.
@@ -815,15 +836,10 @@ end
 
 -- Where books are -----------------------------------------------------------------------
 
---- path -> { md5, sig } for every book file seen on this device.
+--- path -> { md5, sig } for every book file seen on this device. Don't
+-- change it.
 function BookStore:files()
-    return self:_read(function(conn)
-        local out = {}
-        for _, r in ipairs(rows(conn:prepare("SELECT path, md5, sig FROM book_files;"))) do
-            out[r[1]] = { md5 = r[2], sig = r[3] }
-        end
-        return out
-    end)
+    return self:_listed("book_files")
 end
 
 --- Forgets a book file that's gone from this device.

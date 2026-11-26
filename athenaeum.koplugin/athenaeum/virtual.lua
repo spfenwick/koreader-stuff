@@ -51,7 +51,31 @@ local Virtual = {
     installed = false,
     generation = 0, -- changes with every setCatalog()
     catalog_sig = "", -- the books listed and what their list items show
+    covers_dir = nil, -- where downloaded covers are (Library.load sets it)
 }
+
+-- A book's cover file is covers_dir/cover_file, made into one string only
+-- when it's needed (decoding, the details dialog). Thousands of long paths
+-- that share a prefix are slow for LuaJIT to make: its string hash looks at
+-- a few of their characters, so they all collide, and making 2000 took
+-- about 1 s on a Kobo. A book's own cover field (false: the file couldn't
+-- be decoded) comes first.
+
+--- Whether the book has a downloaded cover (makes no path).
+local function hasCover(book)
+    local cover = book.cover
+    if cover ~= nil then return cover ~= false end
+    return book.cover_file ~= nil and Virtual.covers_dir ~= nil
+end
+
+--- The book's cover file, or nil.
+function Virtual.coverPath(book)
+    local cover = book.cover
+    if cover ~= nil then return cover or nil end
+    local file = book.cover_file
+    if file and Virtual.covers_dir then return Virtual.covers_dir .. "/" .. file end
+    return nil
+end
 
 local function normalize(path)
     if type(path) ~= "string" then return nil end
@@ -130,17 +154,24 @@ end
 local SHOWN_FIELDS = { "title", "authors", "tags", "language", "added", "size",
     "series", "series_index", "pages", "cover_href", "cover_file", "cover_w",
     "cover_h", "cover_failed", "cover_stale" }
+-- A stored row keeps lists as text ("_authors"), split when first read.
+local RAW_FIELDS = {}
+for i, key in ipairs(SHOWN_FIELDS) do RAW_FIELDS[i] = "_" .. key end
 
-local function shown(book)
-    local parts = {}
-    for i, key in ipairs(SHOWN_FIELDS) do
-        -- A stored row keeps lists as text ("_authors"), split when first read.
-        local value = rawget(book, "_" .. key)
-        if value == nil then value = rawget(book, key) end
-        if type(value) == "table" then value = table.concat(value, "\31") end
-        parts[i] = tostring(value)
+local function shownValue(book, i)
+    local value = rawget(book, RAW_FIELDS[i])
+    if value == nil then value = rawget(book, SHOWN_FIELDS[i]) end
+    if type(value) == "table" then value = table.concat(value, "\31") end
+    return value
+end
+
+--- Whether ZenOS shows the two the same. Compared field by field: a string
+-- of each book's fields would be slow to make for thousands (see hasCover).
+local function sameShown(a, b)
+    for i = 1, #SHOWN_FIELDS do
+        if shownValue(a, i) ~= shownValue(b, i) then return false end
     end
-    return table.concat(parts, "\t")
+    return true
 end
 
 --- Tells ZenOS which cloud books changed since old_books (gone, changed,
@@ -155,7 +186,7 @@ function Virtual.notifyChanged(old_books)
     for _i, book in ipairs(old_books or {}) do
         before[book.path] = true
         local current = now[book.path]
-        if not current or shown(current) ~= shown(book) then paths[#paths + 1] = book.path end
+        if not current or not sameShown(current, book) then paths[#paths + 1] = book.path end
     end
     for _i, book in ipairs(Virtual.books) do
         if not before[book.path] then paths[#paths + 1] = book.path end
@@ -212,11 +243,12 @@ Virtual.stateText = nil      -- function(id) -> a line on the book's status from
 
 --- "ready", "pending" (can be downloaded now) or "none".
 function Virtual.coverState(book)
-    if book.cover then
+    local has_cover = hasCover(book)
+    if has_cover then
         if book.cover_w == nil then
             -- No size recorded (test catalogs): decode once to find it.
             local RenderImage = require("ui/renderimage")
-            local ok, bb = pcall(RenderImage.renderImageFile, RenderImage, book.cover, false)
+            local ok, bb = pcall(RenderImage.renderImageFile, RenderImage, Virtual.coverPath(book), false)
             if ok and bb then
                 book.cover_w, book.cover_h = bb:getWidth(), bb:getHeight()
                 bb:free()
@@ -228,7 +260,7 @@ function Virtual.coverState(book)
     end
     -- "pending" makes CoverBrowser ask for it (installBookInfo): not while
     -- that hook is off (Guard's "covers").
-    if book.cover_href and not book.cover_failed and not book.cover
+    if book.cover_href and not book.cover_failed and not has_cover
             and not (book.cover_retry_at and book.cover_retry_at > os.time())
             and Guard.ok("covers") and Virtual.canFetchCovers and Virtual.canFetchCovers() then
         return "pending"
@@ -255,23 +287,25 @@ local function fitted(book)
 end
 
 local function decodedCover(book)
-    local bb = decoded[book.cover]
+    local path = Virtual.coverPath(book)
+    if not path then return nil end
+    local bb = decoded[path]
     if not bb then
         local w, h, scaled = fitted(book)
         local RenderImage = require("ui/renderimage")
         local t0 = Timing.start()
-        local ok, res = pcall(RenderImage.renderImageFile, RenderImage, book.cover, false,
+        local ok, res = pcall(RenderImage.renderImageFile, RenderImage, path, false,
             scaled and w or nil, scaled and h or nil)
         Timing.record("covers: decode one", Timing.since(t0),
             string.format("%dx%d%s", w, h, scaled and ", scaled" or ""), true)
         if not (ok and res) then
-            logger.warn("Athenaeum: can't decode cover", book.cover, res)
-            book.cover, book.cover_w, book.cover_failed = nil, nil, os.time()
+            logger.warn("Athenaeum: can't decode cover", path, res)
+            book.cover, book.cover_w, book.cover_failed = false, nil, os.time()
             return nil
         end
         bb = res
-        decoded[book.cover] = bb
-        table.insert(decoded_order, book.cover)
+        decoded[path] = bb
+        table.insert(decoded_order, path)
         while #decoded_order > DECODED_MAX do
             local old = table.remove(decoded_order, 1)
             if decoded[old] then decoded[old]:free() end
@@ -383,7 +417,7 @@ function Virtual.showDetails(path, opts)
     end
     dialog = require("athenaeum/details").show{
         path = path,
-        cover_file = book.cover,
+        cover_file = Virtual.coverPath(book),
         title = full.title or book.title or book.id,
         authors = full.authors and #full.authors > 0 and table.concat(full.authors, ", ") or nil,
         series = series,
@@ -635,7 +669,7 @@ function Virtual.install()
     Guard.on_failure.covers = function()
         local paths = {}
         for _i, book in ipairs(Virtual.books) do
-            if not book.cover then paths[#paths + 1] = book.path end
+            if not hasCover(book) then paths[#paths + 1] = book.path end
         end
         if #paths > 0 then ZenSource.changed(paths) end
     end

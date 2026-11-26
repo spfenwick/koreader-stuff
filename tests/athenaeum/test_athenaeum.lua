@@ -1086,6 +1086,21 @@ do
     pending.cover_failed = 1
     eq(Virtual.coverState(pending), "none", "failed cover isn't asked for again")
     eq(Virtual.coverState({ id = "n" }), "none", "no cover on the server")
+
+    -- A stored cover's path is made when it's needed, from covers_dir.
+    local dir_before = Virtual.covers_dir
+    local png_dir, png_name = png_path:match("^(.*)/([^/]+)$")
+    Virtual.covers_dir = png_dir
+    local stored = { id = "s", cover_file = png_name, cover_w = 30, cover_h = 45, cover_href = "/opds/cover/2" }
+    eq(Virtual.coverPath(stored), png_path, "stored cover: path from covers_dir and cover_file")
+    eq(Virtual.coverState(stored), "ready", "stored cover is ready")
+    stored.cover = false -- couldn't be decoded
+    eq(Virtual.coverPath(stored), nil, "a cover that couldn't be decoded has no path")
+    eq(Virtual.coverState(stored), "pending", "and is downloaded again")
+    eq(Virtual.coverPath({ id = "own", cover = "/x.png", cover_file = "y.png" }), "/x.png", "a book's own cover comes first")
+    Virtual.covers_dir = nil
+    eq(Virtual.coverPath({ id = "nd", cover_file = png_name }), nil, "no covers folder: no path")
+    Virtual.covers_dir = dir_before
     Virtual.canFetchCovers = nil
 end
 
@@ -2663,15 +2678,15 @@ do
         local ffiutil = require("ffi/util")
         local UIManager = require("ui/uimanager")
         local real = { ffiutil.isSubProcessDone, ffiutil.readAllFromFD, ffiutil.runInSubProcess,
-            UIManager.scheduleIn, Covers.on_arrived, Covers.config }
+            UIManager.scheduleIn, Covers.on_arrived, Covers.config, Virtual.covers_dir }
         ffiutil.isSubProcessDone = function() return true end
         ffiutil.readAllFromFD = function()
             return require("dump")({ results = { a = { file = "a/a.webp", w = 10, h = 15 } } })
         end
         ffiutil.runInSubProcess = function() return nil, "no fork" end
         UIManager.scheduleIn = function() end
-        Covers.config = { dir = "/covers" }
-        local done = { id = "a", path = "/lib/A.epub" }
+        Covers.config, Virtual.covers_dir = { dir = "/covers" }, "/covers"
+        local done = { id = "a", path = "/lib/A.epub", cover = false } -- a decode failure, forgotten
         local queued = { id = "b", path = "/lib/B.epub" }
         local reported
         Covers.on_arrived = function(books) reported = books end
@@ -2680,10 +2695,10 @@ do
         Covers.poll()
         check(reported and #reported == 2 and reported[1] == done and reported[2] == queued,
             "unstarted batch reported with the finished one")
-        check(done.cover == "/covers/a/a.webp" and queued.cover_retry_at ~= nil and not Covers.busy(),
+        check(Virtual.coverPath(done) == "/covers/a/a.webp" and queued.cover_retry_at ~= nil and not Covers.busy(),
             "finished cover kept, queued one retried soon, not busy")
         ffiutil.isSubProcessDone, ffiutil.readAllFromFD, ffiutil.runInSubProcess = real[1], real[2], real[3]
-        UIManager.scheduleIn, Covers.on_arrived, Covers.config = real[4], real[5], real[6]
+        UIManager.scheduleIn, Covers.on_arrived, Covers.config, Virtual.covers_dir = real[4], real[5], real[6], real[7]
         Covers.pending, Covers.pending_count = {}, 0
     end
 

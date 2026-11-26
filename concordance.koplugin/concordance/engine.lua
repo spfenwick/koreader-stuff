@@ -170,6 +170,9 @@ function Engine:request(reason, opts)
                   id_segments_imported = 0, id_scanned = 0, id_new_facts = 0,
                   timing = {} }
     self.current = run
+    -- Each sync reads the book store's file lists afresh (see BookStore:files).
+    local bs = self.deps.book and self.deps.book.store
+    if bs and type(bs.forgetListed) == "function" then bs:forgetListed() end
     self.deps.schedule(0, function() self:_step(run, "export") end)
     return "started"
 end

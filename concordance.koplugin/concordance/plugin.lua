@@ -909,7 +909,7 @@ function Plugin.engine()
                 Plugin.bookSync():collect()
                 local ok, err = pcall(function() Plugin.collSync():observe() end)
                 if not ok then logger.warn("Concordance: recording collection changes failed:", err) end
-                ok, err = pcall(function() Plugin.histSync():observe() end)
+                ok, err = pcall(function() Plugin.histSync():collect() end)
                 if not ok then logger.warn("Concordance: recording history changes failed:", err) end
             end,
             -- Each its own tick at the end of a sync (see Engine:_finish).

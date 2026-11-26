@@ -120,11 +120,9 @@ end
 
 -- Local changes ------------------------------------------------------------------------
 
---- Records when this device last opened each book in its history. Returns
--- the number of changes recorded.
---- Records changes to this device's history. unless: what an earlier
+--- Records when this device last opened each book in its history. unless: what an earlier
 -- observe() recorded (self.observed): if the history is still that,
--- nothing is looked at again (on a Kobo that's about 0.1 s for 100 books).
+-- nothing is looked at again (on a Kobo that's about 0.1 s for 300 books).
 -- Only this file writes the history's local copies (observe and
 -- appliedMany), so it's still in the store unless appliedMany ran since,
 -- which forgets self.observed. Returns the number of changes recorded.
@@ -155,6 +153,12 @@ function HistSync:observe(unless)
     self.observed = sig
     if changed > 0 then self.log.dbg("Concordance: history:", changed, "changes recorded") end
     return changed
+end
+
+--- Before a sync: records the history's changes, unless it's what the last
+-- look recorded (see observe). Returns the number of changes recorded.
+function HistSync:collect()
+    return self:observe(self.observed)
 end
 
 -- Applying the merged state --------------------------------------------------------------
@@ -451,9 +455,7 @@ end
 -- isn't looked at again if it's what the sync's export recorded.
 function HistSync:afterSync()
     self.pending_stale = true -- the sync may have brought more
-    local since = self.observed
-    self.observed = nil -- used once: a retry later looks again
-    local ok, n, why = pcall(self.apply, self, nil, since)
+    local ok, n, why = pcall(self.apply, self, nil, self.observed)
     if not ok then
         self.log.warn("Concordance: applying the history failed:", n)
         Problems.report("hist:apply", "Applying the reading history failed", n)

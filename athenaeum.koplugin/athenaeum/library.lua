@@ -206,6 +206,7 @@ function Library.load()
         Library.copies = {}
         Library.by_title, Library.file_info = {}, {}
         Covers.configure(nil)
+        Virtual.covers_dir = nil
         showCatalog(folder, {})
         Guard.call("history", History.reconcile)
         Library.loaded_key = loadKey(server, folder, s)
@@ -218,9 +219,7 @@ function Library.load()
     local t0 = Timing.start()
     local store = openStore(server)
     local books, counts = store:listing()
-    for _i, b in ipairs(books) do
-        if b.cover_file then b.cover = covers_dir .. "/" .. b.cover_file end
-    end
+    Virtual.covers_dir = covers_dir -- covers are covers_dir/cover_file (Virtual.coverPath)
     local files = store:localFiles()
     local unnamed = store:unnamedFormats()
     store:close()

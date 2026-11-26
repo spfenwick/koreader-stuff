@@ -169,7 +169,7 @@ function Dev:send(...)
 end
 function Dev:before()
     self.sync:refresh(); self:run()
-    return self.sync:observe()
+    return self.sync:collect()
 end
 function Dev:after()
     self.sync:afterSync(); self:run()
@@ -379,7 +379,7 @@ do
     check(H.rh.flushes == flushes + 1, "the history saved once")
 end
 
--- Looked at once a sync when unchanged ---------------------------------------------------------
+-- Not looked at again while unchanged ----------------------------------------------------------
 do
     local J, K = newDev("J"), newDev("K")
     local j1, j2 = J:book("one"), J:book("two")
@@ -395,14 +395,14 @@ do
     J:before()
     J:send(K)
     J:after()
-    check(looks == 1, "unchanged since the export: looked at once a sync, not twice (" .. looks .. ")")
+    check(looks == 0, "unchanged since the last look: not looked at again, before or after the sync (" .. looks .. ")")
 
     -- Opened while the sync was away: recorded at the end of the same sync.
     J:before()
     tick(10); J.rh:open(j2, clock); tick(10)
     J:send(K)
     J:after()
-    check(looks == 3, "changed since the export: looked at again (" .. looks .. ")")
+    check(looks == 1, "changed since the export: looked at again (" .. looks .. ")")
     round(J, K)
     check(K.rh:files() == "two,one" and K.rh:timeOf(K.dir .. "/books/two.epub") == J.rh:timeOf(j2),
         "the book opened mid-sync reaches the other device: " .. K.rh:files())
@@ -415,7 +415,7 @@ do
     J.sync:afterSync()
     J.idle = true
     J:run()
-    check(looks == 2, "a retry looks at the history again (" .. looks .. ")")
+    check(looks == 1, "a retry looks at the history again (" .. looks .. ")")
 
     -- Books already in the history get marked seen: their local copies change,
     -- so what the export recorded doesn't count afterwards.

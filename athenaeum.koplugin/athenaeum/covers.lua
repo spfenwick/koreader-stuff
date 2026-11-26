@@ -344,7 +344,6 @@ local function pollCovers()
     Timing.recordAll(result.timing, "covers on demand: ")
     Timing.record("covers on demand: wait", Timing.since(job.started),
         string.format("%d covers, from asking to having them", #job.books))
-    local cfg = Covers.config
     local now = os.time()
     local results = type(result.results) == "table" and result.results or {}
     for _i, b in ipairs(job.books) do
@@ -353,7 +352,7 @@ local function pollCovers()
             b.cover_stale = nil
         elseif r then
             b.cover_file, b.cover_w, b.cover_h = r.file, r.w, r.h
-            b.cover = cfg.dir .. "/" .. r.file
+            b.cover = nil -- covers_dir/cover_file (Virtual.coverPath), a decode failure forgotten
             b.cover_failed, b.cover_retry_at, b.cover_stale = nil, nil, nil
         elseif r == false then
             -- The server had no usable cover: the store retries it in a day.
