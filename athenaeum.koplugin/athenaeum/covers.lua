@@ -26,6 +26,7 @@ local Covers = {
     pending_count = 0,
     on_done = nil,  -- function(results) after each job, in the UI process
     on_arrived = nil, -- function(books) whose cover state a job changed, before on_done
+    current = nil,  -- function(book) -> the catalog's table for that book now, or nil
 }
 
 local RETRY_AFTER = 24 * 60 * 60 -- covers the server couldn't provide
@@ -291,7 +292,9 @@ local function start(books)
         logger.warn("Athenaeum: can't start cover download", fd)
         return false
     end
-    Covers.job = { pid = pid, fd = fd, books = books, started = require("athenaeum/timing").start() }
+    local ids = {}
+    for _i, b in ipairs(books) do ids[b.id] = true end
+    Covers.job = { pid = pid, fd = fd, books = books, ids = ids, started = require("athenaeum/timing").start() }
     local UIManager = require("ui/uimanager")
     UIManager:scheduleIn(0.5, Covers.poll)
     return true
@@ -306,7 +309,9 @@ function Covers.request(books)
         if b.cover_href and (not b.cover_file or b.cover_stale) and not b.cover_failed
                 and not (b.cover_retry_at and b.cover_retry_at > os.time()) then
             if Covers.job then
-                if not Covers.pending[b.id] then
+                -- Asked again while its download runs (ZenOS repeats a
+                -- page's request until the covers arrive): not queued twice.
+                if not Covers.pending[b.id] and not (Covers.job.ids and Covers.job.ids[b.id]) then
                     Covers.pending[b.id] = b
                     Covers.pending_count = Covers.pending_count + 1
                 end
@@ -317,6 +322,13 @@ function Covers.request(books)
     end
     if Covers.job then return true end
     return start(fresh) or #fresh == 0
+end
+
+-- The catalog's current table for a book, when a reload replaced the one
+-- a job was given; nil otherwise.
+local function live(b)
+    local cur = Covers.current and Covers.current(b)
+    if type(cur) == "table" and cur ~= b then return cur end
 end
 
 local function pollCovers()
@@ -346,8 +358,7 @@ local function pollCovers()
         string.format("%d covers, from asking to having them", #job.books))
     local now = os.time()
     local results = type(result.results) == "table" and result.results or {}
-    for _i, b in ipairs(job.books) do
-        local r = results[b.id]
+    local function apply(b, r)
         if r and r.unchanged then
             b.cover_stale = nil
         elseif r then
@@ -363,16 +374,27 @@ local function pollCovers()
             b.cover_retry_at = now + RETRY_SOON
         end
     end
+    local reported = {}
+    for _i, b in ipairs(job.books) do
+        local r = results[b.id]
+        apply(b, r)
+        -- The catalog may have been reloaded during the job (a folder check,
+        -- a sync): its new table for the book gets the result too, or the
+        -- cover would be asked for, and downloaded, again.
+        local cur = live(b)
+        if cur then apply(cur, r) end
+        reported[#reported + 1] = cur or b
+    end
     -- Start the next batch before reporting, so busy() stays true for it.
     local next_books = {}
-    for _id, b in pairs(Covers.pending) do table.insert(next_books, b) end
+    for _id, b in pairs(Covers.pending) do
+        local cur = live(b) or b
+        if not cur.cover_file or cur.cover_stale then table.insert(next_books, cur) end
+    end
     Covers.pending, Covers.pending_count = {}, 0
-    local reported = job.books
     if #next_books > 0 and not start(next_books) then
         -- Couldn't start: reported too (redrawn without a cover), to try
         -- again soon.
-        reported = {}
-        for _i, b in ipairs(job.books) do reported[#reported + 1] = b end
         for _i, b in ipairs(next_books) do
             b.cover_retry_at = now + RETRY_SOON
             reported[#reported + 1] = b

@@ -2730,6 +2730,57 @@ do
         Covers.pending, Covers.pending_count = {}, 0
     end
 
+    -- A book asked for again while its download runs isn't queued again:
+    -- ZenOS repeats a page's request until its covers arrive.
+    do
+        local real_config, real_canFetch = Covers.config, Covers.canFetch
+        Covers.canFetch = function() return true end
+        local running = { id = "r", cover_href = "/cover/r" }
+        local other = { id = "o", cover_href = "/cover/o" }
+        Covers.job = { pid = 1, fd = 1, books = { running }, ids = { r = true } }
+        Covers.pending, Covers.pending_count = {}, 0
+        check(Covers.request({ running, other }) == true, "asked while busy: will be fetched")
+        check(Covers.pending.r == nil and Covers.pending.o == other and Covers.pending_count == 1,
+            "only the book not being downloaded is queued")
+        Covers.request({ running, other })
+        eq(Covers.pending_count, 1, "asked again: still queued once")
+        Covers.job, Covers.pending, Covers.pending_count = nil, {}, 0
+        Covers.config, Covers.canFetch = real_config, real_canFetch
+    end
+
+    -- The catalog reloaded during a job (a folder check, a sync): the new
+    -- tables get the results, so the covers aren't downloaded again.
+    do
+        local ffiutil = require("ffi/util")
+        local UIManager = require("ui/uimanager")
+        local real = { ffiutil.isSubProcessDone, ffiutil.readAllFromFD, ffiutil.runInSubProcess,
+            UIManager.scheduleIn, Covers.on_arrived, Covers.current }
+        ffiutil.isSubProcessDone = function() return true end
+        ffiutil.readAllFromFD = function()
+            return require("dump")({ results = { a = { file = "a/a.webp", w = 10, h = 15 } } })
+        end
+        local started
+        ffiutil.runInSubProcess = function() started = true; return nil, "no fork" end
+        UIManager.scheduleIn = function() end
+        local old_a, new_a = { id = "a", path = "/lib/A.epub" }, { id = "a", path = "/lib/A.epub" }
+        local old_b = { id = "b", path = "/lib/B.epub" }
+        local new_b = { id = "b", path = "/lib/B.epub", cover_file = "b/b.webp" } -- saved before the reload
+        local live = { a = new_a, b = new_b }
+        Covers.current = function(book) return live[book.id] end
+        local reported
+        Covers.on_arrived = function(books) reported = books end
+        Covers.job = { pid = 1, fd = 1, books = { old_a }, ids = { a = true },
+            started = require("athenaeum/timing").start() }
+        Covers.pending, Covers.pending_count = { b = old_b }, 1
+        Covers.poll()
+        check(new_a.cover_file == "a/a.webp" and old_a.cover_file == "a/a.webp", "result on the reloaded table too")
+        check(reported and #reported == 1 and reported[1] == new_a, "the reloaded table reported")
+        check(not started, "a queued book whose reloaded table has its cover isn't downloaded")
+        ffiutil.isSubProcessDone, ffiutil.readAllFromFD, ffiutil.runInSubProcess = real[1], real[2], real[3]
+        UIManager.scheduleIn, Covers.on_arrived, Covers.current = real[4], real[5], real[6]
+        Covers.pending, Covers.pending_count = {}, 0
+    end
+
     -- ZenOS's tag groups are left alone.
     check(db.getGroupedByTags == orig_tags, "tags not hooked")
 

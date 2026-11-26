@@ -9,7 +9,7 @@ Each entry: what's wrong in ZenOS, the fix, and what goes away in the
 plugins. When one merges, remove the plugin code and update this file.
 
 Suggested order: 1, 3, 4, 5, 6, 7, then 8 after talking to the maintainer (2 is no longer
-needed by the plugins). 9 is a speed fix that stands alone: any time.
+needed by the plugins). 9 and 10 are speed fixes that stand alone: any time.
 
 Open upstream (2026-11-25):
 - [#911](https://github.com/xZenLabs/zen-os/pull/911) "Ask book sources when
@@ -678,6 +678,71 @@ cost: 4.44 s, `lfs.attributes` 2.5 s. Not yet a PR: base it on upstream
 **Plugins lose:** nothing; Athenæum's `owns` is a table look-up, so
 `isFileless` costs about 14 µs a book. It's here because Athenæum's cloud
 books are what make it slow.
+
+## 10. A source's cover downloads don't hold up cover extraction
+
+**In ZenOS:** `cover_preload.lua`'s `serialize_extraction` queues a page's
+cover request whenever `BookInfoManager:isExtractingInBackground()` is true,
+and reconciles every batch it launched once that turns false. A fileless
+source that fetches its own covers wraps `extractInBackground` (below
+ZenOS's wrappers: plugins start first) and reports its downloads through
+`isExtractingInBackground()`, so CoverBrowser keeps polling for them.
+ZenOS takes that for a running extraction:
+- A page's real files wait in the queue until the source's downloads end,
+  though CoverBrowser's subprocess is idle.
+- A batch of the source's books becomes the "active" batch, so its end
+  runs `reconcile_completed_extraction`: cache drops, a closed database
+  connection and, with a metadata sort, `_zen_invalidate_item_table_path`
+  on the folder, rebuilding the whole listing for a download that changed
+  no metadata.
+
+Measured in the emulator 2026-11-27 (Forma size; 2,000 cloud books and 20
+local EPUBs with covers mixed on the first pages, sorted by title; cloud
+covers served with 1 s delay): page 2's local covers took 4.6 s (CoverBrowser
+was done at 1.4 s, the rest was waiting for page 1's four cloud
+downloads); each batch end, cloud-only ones included, invalidated the
+2,020-item listing (rebuild 35–142 ms on the desktop; slower on a Kobo,
+not measured). Wrapper order checked in the same run:
+`cover_preload` → `cover_decode_cache` → `coverbrowser_subprocess_compat` →
+Athenæum → CoverBrowser; nothing in ZenOS wraps
+`isExtractingInBackground`.
+
+**Fix** (all in `cover_preload.lua`):
+- `copy_files` splits a request: books `BookSources.ownsWithoutFile` says
+  have no file are handed down at once (to the source's own hook), never
+  queued, never the active batch, so never reconciled. With CoverBrowser
+  idle, a mixed request still goes down as one call; only its files become
+  the active batch.
+- `is_extracting_files()` asks CoverBrowser's own subprocess list
+  (`subprocesses_pids`; `isExtractingInBackground()` if that's missing) and
+  is used by the queue, its watcher and both reconcile points. The cover
+  poll's keep-polling check and the adjacent-page preload skips still use
+  `isExtractingInBackground()`: the poll needs the source's busy state, or
+  CoverBrowser asks for the source's covers again and again.
+
+**Status (2026-11-27):** on `custom`, uncommitted (`cover_preload.lua`,
+four specs under "books whose covers a source fetches" in
+`filebrowser_cover_preload_spec.lua`). `./spec/run lua`: 3,210 pass; the
+two updater specs fail as always, and `home_page_cache_spec`'s "parks a
+built Home across a reading session…" fails in the full run on unmodified
+`custom` too (passes alone). Emulator, same setup: page 2's local covers
+1.08 s; listing invalidated only after batches with files (2 instead of 4).
+Not yet a PR: base it on upstream `dev`.
+
+Not covered: Home's cover upgrades (`home_page.lua` defers on
+`isExtractingInBackground()` before asking) still wait for a source's
+downloads; doing the same there needs `is_extracting_files` in a shared
+module. `cover_decode_cache.lua`'s wrapper still drops caches and calls
+`db_bookinfo.invalidate()` for fileless paths on every request (cost not
+measured).
+
+**Plugins lose:** nothing; Athenæum keeps its `extractInBackground` /
+`isExtractingInBackground` hooks. With ZenOS no longer absorbing repeated
+requests in its queue, they reach Athenæum, which (0.10.19) no longer
+queues a book already in the running download and puts a finished job's
+results on the catalog's current book tables (a reload during a job
+replaced them, so its covers were downloaded twice: 27 downloads for 18
+covers in the run above, 18 after).
 
 ## Not worth a PR
 
