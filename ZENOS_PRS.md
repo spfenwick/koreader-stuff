@@ -283,33 +283,102 @@ the date and size sorts. Books with a file (the Kindle library's) are listed
 where they are, as before. `listingKey()` stays: it keys the saved listing
 cache, which outlives a run.
 
-**Status (2026-11-26):** dropped. Built on ZenOS `custom` and then
-discarded: about 275 lines of ZenOS code, and a rule that any listed item
-may have no file behind it, for a single source. Athenæum 0.10.7 is back to
-adding the cloud books itself (`addCloudItems`, the count padding and
-`withCloudDocProps` in its `getList` hook). The "Include cloud books in
-Authors, Series and Tags" (`zenos_groups`) and "Show cloud books" (`show`)
-settings are gone: cloud books are always listed, and always in the groups.
-It now asks the
-browser's `show_file` too, so the status filter applies to cloud books, in
-the listing and the count. The rest of what the ZenOS change fixed is lost
-again: ZenOS's flat view and folder covers (count, images, "all finished")
-don't see cloud books. Since 0.10.10 the hook is on `getPathList` (KOReader
-2026.07 and later; `getList` before that), so KOReader's own flat view lists
-cloud books, but ZenOS's flat view replaces `getPathList` for the folders
-in its home folders with its own walk (`scan_flat` in
-`browser_flat_view_compat.lua`, `BookWalker.walk`), which never reaches the
-hook. 0.10.10 lost the cloud books from the library folder itself in
-ZenOS's flat view that way (0.10.9's `getList` hook was outside ZenOS's
-walk); since 0.10.11 a `getList` hook adds them when the `getPathList` hook
-didn't run for the library and ZenOS doesn't list them itself. Folders
-above the library in ZenOS's flat view still don't show them. A small
-ZenOS change, with `scan_flat` asking the book sources for books without a
-file in each folder it walks (`BookSources.booksWithoutFile`, drafted
-uncommitted on `custom` 2026-11-26 and checked in the emulator by
-`tests/athenaeum/e2e_search.py`), fixes that; Athenæum's `getList` hook
-then steps aside. The notes below
-describe the discarded version, in case it's revisited.
+**Status (2026-11-26, rebuilt):** a simpler version on `custom`,
+uncommitted, no PR branch yet: about 255 net lines of ZenOS code (+296 −39)
+plus specs, against about 275 for the discarded one. Simpler in kind more
+than size: no item marking, no new contract for covers, one lookup function.
+The code doesn't need #911 or #912, but it should land after #911: without
+it, taps and long-presses in the file browser don't go to the sources, so a
+generic source's book would try to open a missing file (Athenæum catches
+opens itself). The single-client concern doesn't apply: book sources was
+accepted with Athenæum as its only client outside ZenOS.
+
+- A source may declare `fileless = true`: its `books()` only has books with
+  no file on the device, all owned by it. That's the opt-in for folder
+  listings, and it lets ZenOS count those books without checking for files.
+- `BookSources.booksWithoutFile(folders, present, fileless_only)`: the
+  owned books in the given folders that the scan didn't find as files.
+  Without `present` (a count), fileless sources' books only. Looked up in an
+  index by folder per source, built on first use after the books changed
+  (`revision`: sources already call `changed()`), with `owns()` asked while
+  building it. A book may give `attr` for the date and size sorts (kept
+  through metadata edits; each result gets its own copy).
+- Folder listings and counts (`browser_flat_view_compat.lua`'s
+  `getPathList` wrapper, or `getList` on KOReader before 2026.07): after
+  KOReader's walk, the fileless sources' books in that folder, through
+  `show_file`, as items (with `doc_props` from `BookSources.docProps`, so
+  series grouping, which only trusts CoverBrowser's rows, sees them) or
+  `true`. File browser only, not other file choosers.
+- Flat view (`scan_flat`): all sources' owned books without a file in the
+  folders walked (it knows every file it saw).
+- Folder covers (`folder_cover.lua`): count, cover images and "all
+  finished" include them; the descriptor and "all finished" caches key on
+  the sources' `listingKey` and `statusRevision`. The folder long-press
+  dialog's book count includes them too.
+- `getDocProps` answers a fileless source's book from `bookInfo()` without
+  querying CoverBrowser's database (the speed Athenæum's
+  `withCloudDocProps` gave).
+- Select mode: the file browser's selection never takes a book without a
+  file (`BookSources.selectable`, a guard on `selected_files` set when
+  select mode starts, "Select all files in folder" leaves them undimmed;
+  tapping one in select mode, in the file browser or a group view, says
+  "Not on this device: can't be selected"). Its actions are file operations
+  (delete, move, copy, status). Collections' and search's select modes are
+  left alone. The cost: cloud books can't be added to a collection in bulk
+  from the file browser. Group views could select source books before this
+  change too.
+- `spec/lua/unit/book_listing_scans_spec.lua` classifies every file in
+  ZenOS that reads folders (`lfs.dir`, `BookWalker.walk`): "asks" the
+  sources, a known "gap", or "not_books". A new scan fails it until it's
+  classified; an "asks" file that stops asking fails it. Known gaps:
+  `cover_utils.lua`'s fallback when there's no file chooser, and To Be
+  Read's folder scope (`tbr_index.lua`: whether books without a file belong
+  there is undecided).
+
+Timing (desktop emulator, 2,150 fileless books in the library folder, 50
+sibling folders; best of 3):
+
+| | Athenæum's hooks | ZenOS, no index | ZenOS, with index |
+|---|---|---|---|
+| Count 50 folders (one listing of their parent) | 4 ms | 116 ms | 4 ms |
+| List the library by name / by title | 12 / 19 ms | 23 / 29 ms | 19 / 33 ms |
+| Library folder cover | 0 ms (missed them) | 42 ms | 43 ms |
+
+The listing is slower than Athenæum's hooks by about 10 ms here (likely
+0.1–0.2 s on a Kobo), on a cache miss only (after a catalog change or a
+download, #4). The folder cover costs what a folder of 2,150 files does.
+
+Specs in `book_sources_spec.lua`, `filebrowser_flat_view_compat_spec.lua`,
+`folder_cover_spec.lua` and `book_listing_scans_spec.lua`; Lua suite 3182
+pass (the 2 updater specs fail without it too); luacheck finds nothing new.
+
+Athenæum 0.10.12 requires this (Guard's startup check:
+`booksWithoutFile`; no fallback for a ZenOS without it). Its source is
+`fileless` and gives `attr`. Its listing hooks are gone: `addCloudItems`,
+the count padding and its check, the `getList` fallback for ZenOS's flat
+view, and `withCloudDocProps` (ZenOS's `getDocProps` shortcut does that
+now). It keeps a `getPathList` hook (`getList` before KOReader 2026.07) for
+the "Rebuilding library…" message only; it adds nothing.
+`tests/athenaeum/e2e_search.py` checks listing, count, folder cover, flat
+view of the library and of the folder above it, select mode and search.
+
+**Plugins lose:** done in Athenæum as above, once this ZenOS is released.
+
+Still not covered: search (#7; Athenæum's injection handles it). ZenOS
+lists items with no file behind them, for sources that ask; the paths that
+need a file are taps and long-presses (#911), file operations (the
+selection guard) and folder scans (the scan spec).
+
+History: the first version (below) was built and discarded on 2026-11-26:
+about 275 lines of ZenOS code for a single source. Athenæum 0.10.7 went back
+to adding the cloud books itself (`addCloudItems`, the count padding,
+`withCloudDocProps`), asking the browser's `show_file` so the status filter
+applies. 0.10.10 moved its hook to `getPathList` (KOReader 2026.07 and
+later), which put it inside ZenOS's flat view wrapper: ZenOS's flat walk
+(`scan_flat`, `BookWalker.walk`) replaces `getPathList` and never reaches the
+hook, so the library folder lost its cloud books in ZenOS's flat view.
+0.10.11 added the `getList` fallback for that. The notes below describe the
+discarded version.
 
 ZenOS (`common/book_sources.lua` unless noted):
 - `folderBooks(folder)`: `books()` indexed by folder, only books their own

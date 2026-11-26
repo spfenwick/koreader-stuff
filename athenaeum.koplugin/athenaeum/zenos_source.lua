@@ -15,6 +15,10 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   own cover caches (changed(paths) drops their entries when a cover
   arrives, or a book is downloaded or deleted: its path stays the same,
   what's behind it doesn't)
+  the library folder's listing, the counts in the folders above it, folder
+  covers and ZenOS's flat view, via fileless and books() (with attr for the
+  date and size sorts): ZenOS lists the books without a file that their
+  source owns (BookSources.booksWithoutFile)
   cached folder listings, via listingKey(): a listing is rebuilt when the
   cloud books in it change, and one saved before the plugin was removed
   isn't reused
@@ -109,7 +113,10 @@ local function books()
             language = book.language,
             keywords = type(book.tags) == "table" and #book.tags > 0
                 and table.concat(book.tags, "\n") or nil,
-        } }
+        },
+        -- Size and dates (the date added) for the date and size sorts, where
+        -- ZenOS lists the book itself (its flat view).
+        attr = Virtual.attributes(book) }
     end
     books_cache, books_gen = out, Virtual.generation
     return out
@@ -162,6 +169,9 @@ function ZenSource.install(virtual)
     end
     Virtual = virtual
     local source = {
+        -- books() has only cloud books (no file here): ZenOS lists them in
+        -- the library folder, its folder cover and the counts above it.
+        fileless = true,
         books = protect("zenos", "books", books),
         owns = protect("library", "owns", function(path) return Virtual.by_path[path] ~= nil end),
         open = protect("library", "open", function(path) return show(path) end),

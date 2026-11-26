@@ -8,15 +8,19 @@ own walk, so they're matched as files are:
 - a whole-word search nothing matches: "No results";
 - ZenOS's search over several home folders, the library under the second;
 - tapping a cloud result shows its details; the search hooks stay on;
-- a folder count (getList without collate) includes the cloud books;
+- ZenOS lists the cloud books: a folder count (getList without collate)
+  includes them, and so does the library folder's cover (count, cover
+  images);
 - ZenOS's flat view ("Show all files from subfolders"): the library folder
-  shows and counts its cloud books once; a folder above it does too when
-  ZenOS lists book sources' books in its flat view (booksWithoutFile), else
-  not (a known gap).
+  and the folder above it show and count its cloud books once;
+- select mode: cloud books can't be selected (tapped, or "select all").
 
-Use ZenOS's custom branch (git archive custom | tar -x -C <dir>).
+Needs a ZenOS that lists book sources' books without a file (its
+booksWithoutFile): ZenOS's custom branch with the fileless books change
+(git archive custom | tar -x -C <dir>, plus that change if uncommitted).
 
-    python3 tests/athenaeum/e2e_search.py --koreader <emulator>/koreader         --zenos <zen-os export> --out /tmp/e2e-search
+    python3 tests/athenaeum/e2e_search.py --koreader <emulator>/koreader \\
+        --zenos <zen-os export> --out /tmp/e2e-search
 """
 
 from __future__ import annotations
@@ -79,8 +83,19 @@ EXTRA = r"""
         local files = r[2] or {}
         local all_true = true
         for _i, f in ipairs(files) do if f ~= true then all_true = false end end
-        return { ok = true, files = #files, all_true = all_true,
-            placeholders = Virtual.count_placeholders, problem = Virtual.count_problem or false }
+        local BookSources = package.loaded["common/book_sources"]
+        local zenos_lists = type(BookSources) == "table" and type(BookSources.booksWithoutFile) == "function"
+        -- The library folder's cover, as the folder above shows it.
+        local FolderCover = require("modules/filebrowser/folder_cover")
+        if type(FolderCover.clear) == "function" then FolderCover.clear() end
+        local entries, _physical, cover_count = FolderCover.previewEntries(fc,
+            { path = params.path, attr = { mode = "directory" } }, 4)
+        local cover_cloud = 0
+        for _i, e in ipairs(entries or {}) do
+            if Virtual.isVirtual(e.path) then cover_cloud = cover_cloud + 1 end
+        end
+        return { ok = true, files = #files, all_true = all_true, zenos_lists = zenos_lists,
+            cover_count = cover_count, cover_cloud = cover_cloud }
     end
     if kind == "flat" then
         local fc = require("apps/filemanager/filemanager").instance.file_chooser
@@ -104,6 +119,33 @@ EXTRA = r"""
         local BookSources = package.loaded["common/book_sources"]
         return { ok = true, cloud = #cloud, count = #(counted[2] or {}),
             zenos_lists = type(BookSources) == "table" and type(BookSources.booksWithoutFile) == "function" }
+    end
+    if kind == "select" then
+        local fm = require("apps/filemanager/filemanager").instance
+        local fc = fm.file_chooser
+        local Virtual = package.loaded["athenaeum/virtual"]
+        local BookSources = package.loaded["common/book_sources"]
+        fc:changeToPath(params.path)
+        if fm.selected_files then fm:onToggleSelectMode() end
+        fm:onToggleSelectMode()
+        local cloud_item, local_item
+        for _i, item in ipairs(fc.item_table or {}) do
+            if item.is_file and Virtual.isVirtual(item.path) then cloud_item = cloud_item or item
+            elseif item.is_file then local_item = local_item or item end
+        end
+        if cloud_item then fc:onFileSelect(cloud_item) end
+        local tapped = cloud_item and fm.selected_files[cloud_item.path] == true or false
+        local tapped_dim = cloud_item and cloud_item.dim == true or false
+        fc:selectAllFilesInFolder(true)
+        local cloud_selected, selected = 0, 0
+        for path in pairs(fm.selected_files) do
+            selected = selected + 1
+            if Virtual.isVirtual(path) then cloud_selected = cloud_selected + 1 end
+        end
+        fm:onToggleSelectMode()
+        return { ok = true, guarded = type(BookSources) == "table" and type(BookSources.selectable) == "function",
+            tapped = tapped, tapped_dim = tapped_dim, cloud_selected = cloud_selected, selected = selected,
+            has_cloud = cloud_item ~= nil }
     end
     if kind == "srch_tap" then
         local menu = require("apps/filemanager/filemanager").instance.filesearcher.booklist_menu
@@ -174,6 +216,8 @@ try:
     report["flat_library"] = s.cmd("flat", on=True, path=lib, invalidate=[lib, parent])
     report["flat_parent"] = s.cmd("flat", on=True, home=parent, path=parent, invalidate=[lib, parent])
     report["flat_off"] = s.cmd("flat", on=False, home=lib, path=lib, invalidate=[lib, parent])
+    # Select mode: books without a file can't be selected (a ZenOS with the guard).
+    report["select"] = s.cmd("select", path=lib)
 finally:
     s.close()
 (args.out / "report.json").write_text(json.dumps(report, indent=2))
@@ -187,18 +231,26 @@ failed = [k for k, v in expected.items() if not isinstance(report.get(k), dict) 
 if report.get("zen_wholeword_remot") != "no results":
     failed.append("zen_wholeword_remot")
 count = report.get("count") or {}
-if not (count.get("files") == 4 and count.get("all_true") and count.get("placeholders") is True
-        and count.get("problem") is False):
+# ZenOS lists the cloud books: counts, the library folder's cover (count and
+# cover images), flat view of the library and the folder above it.
+if not count.get("zenos_lists"):
+    failed.append("ZenOS doesn't list book sources' books (needs booksWithoutFile)")
+if not (count.get("files") == 4 and count.get("all_true")):
     failed.append("count")
+if not (count.get("cover_count") == 4 and count.get("cover_cloud", 0) >= 1):
+    failed.append("folder cover")
 flat = report.get("flat_library") or {}
 if not (flat.get("cloud") == 2 and flat.get("count") == 4):
     failed.append("flat_library")
-parent_flat = report.get("flat_parent") or {}
-if parent_flat.get("cloud") != (2 if parent_flat.get("zenos_lists") else 0):
+if (report.get("flat_parent") or {}).get("cloud") != 2:
     failed.append("flat_parent")
 off = report.get("flat_off") or {}
 if not (off.get("cloud") == 2 and off.get("count") == 4):
     failed.append("flat_off")
+sel = report.get("select") or {}
+if not (sel.get("guarded") and sel.get("has_cloud") and not sel.get("tapped") and not sel.get("tapped_dim")
+        and sel.get("cloud_selected") == 0):
+    failed.append("select")
 if not report.get("tap_details"):
     failed.append("tap_details")
 if any(isinstance(v, dict) and "search_ok" in v and not v["search_ok"] for v in report.values()) or report.get("status"):

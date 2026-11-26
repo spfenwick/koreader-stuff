@@ -29,6 +29,7 @@ package.loaded["common/book_sources"] = {
     listingKey = function() end,
     badge = function() end,
     installMetadataIntegration = function() ZenOS.integrated = ZenOS.integrated + 1 return true end,
+    booksWithoutFile = function() return {} end,
 }
 
 local lfs = require("libs/libkoreader-lfs")
@@ -1445,13 +1446,19 @@ do
     reset()
     check(Guard.check(), "startup check passes: " .. Guard.statusText())
     eq(Guard.statusText(), "", "no problems on this KOReader")
-    local FileChooser = require("ui/widget/filechooser")
-    local real = FileChooser.getListItem
-    FileChooser.getListItem = function(_self) end
+    local ReaderUI = require("apps/reader/readerui")
+    local real = ReaderUI.showReader
+    ReaderUI.showReader = function(_self) end
     check(not Guard.check(), "startup check notices a changed function")
-    check(Guard.statusText():find("getListItem takes 1 parameters, expected 6", 1, true),
+    check(Guard.statusText():find("showReader takes 1 parameters, expected 2", 1, true),
         "problem described: " .. Guard.statusText())
-    FileChooser.getListItem = real
+    ReaderUI.showReader = real
+    local zen = package.loaded["common/book_sources"]
+    local real_bwf = zen.booksWithoutFile
+    zen.booksWithoutFile = nil
+    check(not Guard.check() and Guard.statusText():find("booksWithoutFile is missing", 1, true),
+        "needs a ZenOS that lists the cloud books: " .. Guard.statusText())
+    zen.booksWithoutFile = real_bwf
     local FileSearcher = require("apps/filemanager/filemanagerfilesearcher")
     local real_show = FileSearcher.onShowSearchResults
     FileSearcher.onShowSearchResults = nil
@@ -2243,26 +2250,6 @@ do
     })
     eq(Virtual.by_id.n1.path, "/lib/Ann - T.pdf", "path from the stored name")
     eq(Virtual.by_id.n2.path, "/lib/U.pdf", "a clashing name: renamed (from its title), suffix kept")
-    -- A file turned up at a cloud book's name: listed as itself.
-    local lfc = { getListItem = function(_self, _dir, name, item_path) return { path = item_path, text = name } end }
-    local listed = { { path = "/lib/Ann - T.pdf", text = "Ann - T.pdf" } }
-    Virtual._addCloudItems(lfc, "/lib", listed, {})
-    eq(#listed, 2, "one cloud book added")
-    eq(listed[2].path, "/lib/U.pdf", "the other cloud book")
-    -- The browser's filters apply to cloud books too (status filter...).
-    local asked
-    lfc.show_file = function(_self, name, item_path) asked = { name, item_path } return nil end
-    listed = { { path = "/lib/Ann - T.pdf", text = "Ann - T.pdf" } }
-    Virtual._addCloudItems(lfc, "/lib", listed, {})
-    eq(#listed, 1, "filtered out: not added")
-    check(asked and asked[1] == "U.pdf" and asked[2] == "/lib/U.pdf", "filter asked with name and path")
-    lfc.show_file = function() return true end
-    listed = {}
-    Virtual._addCloudItems(lfc, "/lib", listed, {})
-    eq(#listed, 2, "let through: added")
-    lfc.show_file = function() error("filter bug") end
-    check(Virtual._passesFilter(lfc, Virtual.books[1]), "a failing filter lets the book through")
-    check(Virtual._passesFilter({}, Virtual.books[1]), "no filter: let through")
     Virtual.setCatalog("/lib/", {
         { id = "x1", title = "One" }, { id = "x1", title = "One again" }, { id = "x2", title = "Two" },
         { title = "no id" },
@@ -2278,187 +2265,31 @@ do
         "metadata set by a sort is kept")
 end
 
--- The listing hook: every return value passed on; folder counts --------------------
+-- The listing hook: only "Rebuilding library…" (ZenOS lists the books) ----------
 
 do
-    Virtual.setCatalog("/lib", { { id = "c1", title = "One" }, { id = "c2", title = "Two" } })
+    Virtual.setCatalog("/lib", { { id = "c1", title = "One" } })
     local real_rebuilding = Virtual.listingRebuilding
-    Virtual.listingRebuilding = function() end
-    local fc = { name = "filemanager", show_file = function() return true end,
-        getListItem = function(_self, _dir, name, item_path) return { path = item_path, text = name } end }
-    local function orig(_self, _path, collate)
-        if collate then return { { path = "/lib/sub" } }, { { path = "/lib/local.epub" } }, true, "extra", nil end
-        return { true }, { true }, false, "extra", nil
-    end
-    local r = { n = select("#", Virtual._listing(orig, fc, "/lib", {})), Virtual._listing(orig, fc, "/lib", {}) }
-    eq(r.n, 5, "listing: every value returned, nils at the end too")
-    check(#r[2] == 3 and r[3] == true and r[4] == "extra", "listing: cloud books added, later values kept")
-    r = { Virtual._listing(orig, fc, "/lib") }
-    check(#r[2] == 3 and r[2][2] == true and r[2][3] == true and r[3] == false and r[4] == "extra",
-        "count: cloud books counted as true, later values kept")
-    r = { Virtual._listing(orig, fc, "/elsewhere") }
-    eq(#r[2], 1, "another folder: nothing added")
-
-    -- getPathList (KOReader 2026.07 and later): fills the lists it's given.
-    local function porig(_self, _path, collate, dirs, files)
-        table.insert(dirs, collate and { path = "/lib/sub" } or true)
-        table.insert(files, collate and { path = "/lib/local.epub" } or true)
-        return true, "extra"
-    end
-    local dirs, files = {}, {}
-    r = { n = select("#", Virtual._pathListing(porig, fc, "/lib", {}, dirs, files)),
-        Virtual._pathListing(porig, fc, "/lib", {}, {}, {}) }
-    check(r.n == 2 and r[1] == true and r[2] == "extra", "getPathList: every value returned")
-    check(#files == 3 and files[2].path and files[3].path, "getPathList: cloud items added to its files")
-    files = {}
-    Virtual._pathListing(porig, fc, "/lib", nil, {}, files)
-    check(#files == 3 and files[2] == true and files[3] == true, "getPathList count: cloud books counted")
-    files = {}
-    Virtual._pathListing(porig, fc, "/lib/sub", {}, {}, files)
-    eq(#files, 1, "getPathList: another folder, nothing added")
     local shown = 0
     Virtual.listingRebuilding = function() shown = shown + 1 end
+    local fc = { name = "filemanager", path = "/lib" }
+    local function orig(_self, _path, _collate, dirs, files)
+        if dirs then table.insert(files, { path = "/lib/local.epub" }) end
+        return true, "extra"
+    end
+    local files = {}
+    local r = { n = select("#", Virtual._messageOnly(orig, fc, "/lib", {}, {}, files)),
+        Virtual._messageOnly(orig, fc, "/lib", {}, {}, {}) }
+    check(r.n == 2 and r[1] == true and r[2] == "extra" and #files == 1, "nothing added, every value returned")
+    eq(shown, 2, "message shown for a listing of the library")
+    Virtual._messageOnly(orig, fc, "/lib")
+    Virtual._messageOnly(orig, fc, "/elsewhere", {})
     fc.path = "/"
-    Virtual._pathListing(porig, fc, "/lib", {}, {}, {})
-    eq(shown, 0, "flat view from a folder above: no rebuilding message")
-    fc.path = "/lib"
-    Virtual._pathListing(porig, fc, "/lib", {}, {}, {})
-    eq(shown, 1, "the library shown: rebuilding message")
-    Virtual._pathListing(porig, fc, "/lib", nil, {}, {})
-    eq(shown, 1, "a count: no message")
-    fc.path = nil
-    Virtual.listingRebuilding = function() end
-
-    -- getList beside getPathList: ZenOS's flat view walks the library itself
-    -- (getPathList never runs for it); the books are added then, once.
-    local function zen_flat(_self, _path, collate)
-        return {}, { collate and { path = "/lib/local.epub" } or true }, true, "extra"
-    end
-    local function through_path(self, path, collate)
-        local d, f = {}, {}
-        local ok_p = Virtual._pathListing(porig, self, path, collate, d, f)
-        return d, f, ok_p, "extra"
-    end
-    r = { Virtual._flatFallback(zen_flat, fc, "/lib", {}) }
-    check(#r[2] == 3 and r[2][2].path and r[4] == "extra", "flat fallback: ZenOS's walk, cloud books added")
-    r = { Virtual._flatFallback(zen_flat, fc, "/lib") }
-    eq(#r[2], 3, "flat fallback: counted too")
-    r = { Virtual._flatFallback(through_path, fc, "/lib", {}) }
-    eq(#r[2], 3, "getPathList ran: added there only, not again")
-    r = { Virtual._flatFallback(through_path, fc, "/lib") }
-    eq(#r[2], 3, "getPathList ran: counted once")
-    r = { Virtual._flatFallback(zen_flat, fc, "/elsewhere") }
-    eq(#r[2], 1, "flat fallback: another folder, nothing added")
-    -- A count of the library inside another folder's getList.
-    local function nested(self, _path, collate)
-        local inner = { Virtual._flatFallback(zen_flat, self, "/lib") }
-        local d, f = {}, {}
-        Virtual._pathListing(porig, self, "/lib", collate, d, f)
-        return d, f, #inner[2]
-    end
-    r = { Virtual._flatFallback(nested, fc, "/lib", {}) }
-    check(#r[2] == 3 and r[3] == 3, "nested getList: each counted once")
-    local zen_sources = package.loaded["common/book_sources"]
-    zen_sources.booksWithoutFile = function() return {} end
-    r = { Virtual._flatFallback(zen_flat, fc, "/lib", {}) }
-    eq(#r[2], 1, "ZenOS lists source books in its flat view: not added")
-    zen_sources.booksWithoutFile = nil
-
-    -- Counting with something other than true: cloud books left out.
-    eq(Virtual._placeholdersIn({ true }, { true }), true, "true placeholders")
-    eq(Virtual._placeholdersIn({}, {}), nil, "nothing to tell by")
-    eq(Virtual._placeholdersIn({ true }, { { path = "x" } }), false, "an item among them")
-    local items = function() return {}, { { path = "/lib/local.epub" } }, true end
-    r = { Virtual._listing(items, fc, "/lib") }
-    check(#r[2] == 1 and Virtual.count_placeholders == false and Virtual.count_problem,
-        "count with items: cloud books not added, problem noted")
-    r = { Virtual._listing(orig, fc, "/lib") }
-    eq(#r[2], 1, "stays off for the run")
-    check(require("athenaeum/library").statusText():find("folder counts leave cloud books out", 1, true),
-        "problem in Status")
-    Virtual.count_placeholders, Virtual.count_problem = nil, nil
-
-    -- KOReader's own getPathList, with its flat view: walking a folder above
-    -- the library reaches the library folder, and the cloud books are listed
-    -- there (by full path: a file of the same name elsewhere isn't the book).
-    do
-        local FileChooser = require("ui/widget/filechooser")
-        if type(FileChooser.getPathList) == "function" then
-            local top = TMP .. "/flat"
-            local lib = top .. "/lib"
-            lfs.mkdir(top); lfs.mkdir(lib); lfs.mkdir(top .. "/other")
-            local f = io.open(lib .. "/local.epub", "w"); f:write("x"); f:close()
-            Virtual.setCatalog(lib, { { id = "f1", title = "Flat", file_stem = "Same", file_ext = "epub" } })
-            f = io.open(top .. "/other/Same.epub", "w"); f:write("x"); f:close()
-            local probe = setmetatable({ name = "filemanager", is_fm = true, exclude_dirs = {},
-                exclude_files = {}, show_unsupported = true, path = top }, { __index = FileChooser })
-            probe.getPathList = function(self, ...) return Virtual._pathListing(FileChooser.getPathList, self, ...) end
-            local real_flat = FileChooser.show_flat_view
-            FileChooser.show_flat_view = true
-            local fdirs, ffiles = {}, {}
-            local ok_walk, readable = pcall(probe.getPathList, probe, top, {}, fdirs, ffiles)
-            FileChooser.show_flat_view = real_flat
-            local paths = {}
-            for _i, item in ipairs(ok_walk and ffiles or {}) do paths[item.path] = true end
-            check(ok_walk and readable == true, "flat view walk: " .. tostring(readable))
-            check(paths[lib .. "/Same.epub"] and paths[top .. "/other/Same.epub"] and paths[lib .. "/local.epub"],
-                "flat view: the cloud book listed beside a same-named file elsewhere")
-            eq(#ffiles, 3, "flat view: three books")
-            Virtual.setCatalog(nil, {})
-        end
-    end
-
-    -- The startup check, with KOReader's own getList on this plugin's folder.
-    local FileChooser = require("ui/widget/filechooser")
-    eq(Virtual.checkCountPlaceholders(FileChooser), true, "KOReader counts with true")
-    eq(Virtual.count_placeholders, true, "so cloud books are counted")
-    local fake = { getList = function() return { { path = "/x/sub" } }, {} end }
-    eq(Virtual.checkCountPlaceholders(fake, "/x"), false, "a KOReader counting with items: noticed")
-    check(Virtual.count_placeholders == false and Virtual.count_problem, "and cloud books not counted")
-    Virtual.count_placeholders, Virtual.count_problem = nil, nil
-    eq(Virtual.checkCountPlaceholders({ getList = function() error("boom") end }, "/x"), nil,
-        "a failing check: trusted")
-    eq(Virtual.count_placeholders, nil, "nothing changed")
+    Virtual._messageOnly(orig, fc, "/lib", {})
+    eq(shown, 2, "no message for a count, another folder, or a flat view from above")
+    Virtual._messageOnly(orig, { name = "pathchooser" }, "/lib", {})
+    eq(shown, 2, "no message for other file choosers")
     Virtual.listingRebuilding = real_rebuilding
-    Virtual.setCatalog(nil, {})
-end
-
--- Metadata sorts get cloud books' metadata from the book sources directly ----------
-
-do
-    Virtual.setCatalog("/lib/", { { id = "m1", title = "Meta" } })
-    local cloud = Virtual.books[1].path
-    local zen = package.loaded["common/book_sources"]
-    local real_info = zen.bookInfo
-    zen.bookInfo = function(path, get_cover)
-        if path == cloud and get_cover == false then
-            return { title = "Edited", authors = "A", series = "S", series_index = 2,
-                language = "en", keywords = "K", description = "D", cover_fetched = "Y" }
-        end
-    end
-    local slow = 0
-    local bookinfo = { getDocProps = function(_self, file) slow = slow + 1 return { title = "db " .. file } end }
-    local ui = { coverbrowser = {}, bookinfo = bookinfo }
-    local got, other
-    Virtual._withCloudDocProps(ui, function()
-        got = ui.bookinfo:getDocProps(cloud)
-        other = ui.bookinfo:getDocProps("/lib/local.epub")
-    end)
-    check(got and got.title == "Edited" and got.display_title == "Edited" and got.series_index == 2
-        and got.description == "D" and got.cover_fetched == nil, "cloud book: the sources' fields")
-    eq(other and other.title, "db /lib/local.epub", "local file: asked as before")
-    eq(slow, 1, "only the local file reached the slow lookup")
-    check(rawget(bookinfo, "getDocProps") ~= nil and bookinfo.getDocProps(bookinfo, cloud).title == "db " .. cloud,
-        "put back after the listing")
-    check(not pcall(Virtual._withCloudDocProps, ui, function() error("boom") end)
-        and bookinfo.getDocProps(bookinfo, cloud).title == "db " .. cloud, "put back after a failed listing too")
-    zen.bookInfo = function() return { authors = "A" } end
-    Virtual._withCloudDocProps(ui, function() got = ui.bookinfo:getDocProps(cloud) end)
-    eq(got.display_title, "Meta", "no title: the file name, as KOReader shows it")
-    local plain = { bookinfo = bookinfo } -- no CoverBrowser: KOReader's own lookup
-    Virtual._withCloudDocProps(plain, function() got = plain.bookinfo:getDocProps(cloud) end)
-    eq(got.title, "db " .. cloud, "without CoverBrowser: not answered")
-    zen.bookInfo = real_info
     Virtual.setCatalog(nil, {})
 end
 
@@ -2566,7 +2397,7 @@ do
     package.loaded["common/db_bookinfo"] = db
     Virtual.setCatalog("/lib", {
         { id = "c1", title = "Cloud One", authors = { "Ann", "Bo" }, series = "Saga", series_index = "2",
-          tags = { "x" }, language = "en" },
+          tags = { "x" }, language = "en", added = 1700000000, size = 4321 },
     })
     local fmu = require("apps/filemanager/filemanagerutil")
     local real_openFile = fmu.openFile
@@ -2576,6 +2407,7 @@ do
     eq(ZenOS.integrated, 1, "ZenOS's metadata integration installed")
     check(ZenSource.install(Virtual) and ZenOS.integrated == 1, "registers once")
 
+    check(source.fileless == true, "a fileless source: ZenOS may list its books in folders")
     local books = source.books()
     eq(#books, 1, "cloud books listed")
     eq(books[1].file, "/lib/Ann, Bo - Cloud One.epub", "book path")
@@ -2584,6 +2416,9 @@ do
     eq(info.series_index, 2, "series number")
     eq(info.keywords, "x", "tags as keywords")
     eq(info.language, "en", "language")
+    local attr = books[1].attr
+    check(attr and attr.mode == "file" and attr.size == 4321 and attr.modification == 1700000000,
+        "attr: size and date added, for ZenOS's flat view sorts")
     check(source.books() == books, "books cached while the catalog is unchanged")
 
     check(source.owns("/lib/Ann, Bo - Cloud One.epub") and not source.owns("/lib/a.epub"), "owns cloud books only")

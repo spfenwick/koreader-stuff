@@ -16,10 +16,8 @@ calling getList once per folder, with FileSearcher.search_path set to it;
 this getList is inside ZenOS's, so each call is checked against its folder.
 
 Also:
-- doSearch runs with cloud books' metadata answered from the book sources
-  (Virtual.withCloudDocProps): isFileMatch's metadata search (in the
-  subprocess, which inherits it) and the items KOReader builds for the
-  results both read it through getDocProps;
+- isFileMatch's metadata search reads cloud books' metadata through
+  getDocProps, which ZenOS answers from the book sources;
 - results are searched again when the cloud books changed since they were
   cached (KOReader would show the cached ones);
 - results carry the books' metadata (doc_props), as the library's items do;
@@ -130,10 +128,7 @@ function Search.install(Virtual)
 
     Guard.hook("search", FileSearcher, "doSearch", function(orig, self, ...)
         Search.dropStale(FileSearcher, Virtual.generation)
-        if not (Search.enabled and #Virtual.books > 0) then return orig(self, ...) end
-        local args, r = pack(...), nil
-        Virtual.withCloudDocProps(self.ui, function() r = pack(orig(self, unpack(args, 1, args.n))) end)
-        return unpack(r, 1, r.n)
+        return orig(self, ...)
     end, "FileSearcher:doSearch")
 
     Guard.hook("search", FileSearcher, "onShowSearchResults", function(orig, self, ...)

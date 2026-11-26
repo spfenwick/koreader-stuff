@@ -188,15 +188,10 @@ end
 -- (Parameter counts include self.)
 function Guard.check()
     Guard.unavailable = {}
-    local fc = requires("library", "ui/widget/filechooser", {
-        getListItem = 6, genItemTable = 3,
-        onMenuSelect = 2, onMenuHold = 2, refreshPath = true, updateItems = true,
-    })
-    -- The listing hook: getPathList (KOReader 2026.07 and later, with getList
-    -- for ZenOS's flat view), else getList.
-    if fc and type(fc.getPathList) == "function" then
-        requires("library", "ui/widget/filechooser", { getPathList = 5, getList = 3 })
-    else
+    local fc = requires("library", "ui/widget/filechooser", { updateItems = true })
+    -- The "Rebuilding library…" message: getPathList (KOReader 2026.07 and
+    -- later), else getList.
+    if not (fc and type(fc.getPathList) == "function") then
         requires("library", "ui/widget/filechooser", { getList = 3 })
     end
     requires("library", "apps/reader/readerui", { showReader = 2 })
@@ -210,9 +205,10 @@ function Guard.check()
     if Guard.zenos_missing then
         Guard.problem("library", "needs ZenOS with book sources")
     else
+        -- booksWithoutFile: ZenOS lists the cloud books in the library folder.
         requires("library", "common/book_sources", {
             register = 2, changed = true, bookInfo = true, listingKey = true,
-            installMetadataIntegration = true,
+            installMetadataIntegration = true, booksWithoutFile = true,
         })
         -- Cover badges are ZenOS's to paint (athenaeum/badge.lua).
         requires("badge", "common/book_sources", { badge = true })

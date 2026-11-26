@@ -15,15 +15,10 @@ The plugin runs under ZenOS only: the cloud books are a ZenOS book source
 getDocProps for them (from Virtual.bookInfoFor), sends taps and
 long-presses to the source, and keys its cached listings on
 Virtual.listingKey(). The KOReader and CoverBrowser functions changed here:
-  FileChooser:getPathList          adds the entries to the library folder
-                                   (and counts them in the folder above,
-                                   and lists them in KOReader's flat view),
-                                   with the "Rebuilding library..." message
-  FileChooser:getList              the same, for the library folder shown
-                                   in ZenOS's flat view (its walk replaces
-                                   getPathList), unless ZenOS lists them;
-                                   instead of getPathList on a KOReader
-                                   before 2026.07, which has no getPathList
+  FileChooser:getPathList          the "Rebuilding library..." message while
+                                   the library folder is listed (ZenOS lists
+                                   the cloud books itself; getList on a
+                                   KOReader before 2026.07)
   BookInfoManager:extractInBackground / :isExtractingInBackground
                                    covers not downloaded yet are fetched when
                                    CoverBrowser (or ZenOS) asks to extract
@@ -412,132 +407,11 @@ end
 
 Virtual.withProps = withProps -- file search's results
 
--- getDocProps() fields CoverBrowser keeps (ZenOS's book sources fill them).
-local DOC_PROPS = { "pages", "title", "authors", "series", "series_index",
-    "language", "keywords", "description" }
-
--- The title, author and series sorts look up each book's metadata through
--- FileManagerBookInfo:getDocProps(): for a cloud book that's CoverBrowser's
--- getDocProps(), which ZenOS answers from its book sources (Athenaeum's
--- metadata with the user's edits) after querying CoverBrowser's database,
--- which has no row for a path without a file. While fn lists the cloud
--- books, ui.bookinfo answers them from the book sources directly, with what
--- that chain gives: the same fields, and display_title as KOReader sets it.
--- Only with CoverBrowser (without it, KOReader looks elsewhere).
-local function withCloudDocProps(ui, fn)
-    local bookinfo = type(ui) == "table" and ui.coverbrowser and ui.bookinfo
-    local BookSources = package.loaded["common/book_sources"]
-    if type(bookinfo) ~= "table" or type(bookinfo.getDocProps) ~= "function"
-            or type(BookSources) ~= "table" or type(BookSources.bookInfo) ~= "function" then
-        return fn()
-    end
-    local splitFileNameType = require("apps/filemanager/filemanagerutil").splitFileNameType
-    local own, getDocProps = rawget(bookinfo, "getDocProps"), bookinfo.getDocProps
-    bookinfo.getDocProps = function(self, file, ...)
-        local info = Virtual.by_path[file] and BookSources.bookInfo(file, false)
-        if type(info) ~= "table" then return getDocProps(self, file, ...) end
-        local props = {}
-        for _i, key in ipairs(DOC_PROPS) do props[key] = info[key] end
-        props.display_title = props.title or splitFileNameType(file)
-        return props
-    end
-    local ok, err = pcall(fn)
-    rawset(bookinfo, "getDocProps", own)
-    if not ok then error(err, 0) end
-end
-Virtual.withCloudDocProps = withCloudDocProps -- file search
-Virtual._withCloudDocProps = withCloudDocProps -- for tests
-
--- True when the file browser's filters (its status filter, excluded and
--- unsupported files) let a cloud book through, as FileChooser:getPathList asks
--- of each file. A filter that fails lets it through.
-local function passesFilter(fc, book)
-    if type(fc) ~= "table" or type(fc.show_file) ~= "function" then return true end
-    local ok, shown = pcall(fc.show_file, fc, book.filename, book.path)
-    return not ok or not not shown
-end
-Virtual._passesFilter = passesFilter -- for tests
-
--- Adds the cloud books' items to a listing of the library folder (files:
--- what's listed so far, the folder's own files and, in a flat view, other
--- folders' too), those the browser's filters let through. A file that
--- turned up at a cloud book's path since the catalog was loaded is listed
--- as itself (the next load renames the book). Matched by full path: in a
--- flat view, a file of the same name in another folder isn't the book.
-local function addCloudItems(fc, path, files, collate)
-    local present = {}
-    for _i, item in ipairs(files) do
-        if type(item) == "table" and type(item.path) == "string" then
-            present[item.path] = true
-        end
-    end
-    for _i, book in ipairs(Virtual.books) do
-        if not present[book.path] and passesFilter(fc, book) then
-            table.insert(files, withProps(fc:getListItem(path, book.filename,
-                book.path, attributes(book), collate), book))
-        end
-    end
-end
-Virtual._addCloudItems = addCloudItems -- for tests
-
-local function pack(...) return { n = select("#", ...), ... } end
-
--- Counting a folder (getList without collate, for the count shown under a
--- folder), KOReader lists each entry as `true` rather than an item, and
--- cloud books are counted by adding as many `true`. Should KOReader ever
--- put something else there, code reading the entries would fail on ours,
--- after the hook, where Guard can't catch it: then cloud books aren't
--- counted (Virtual.count_placeholders false, Virtual.count_problem says
--- why). Checked at startup, on a folder with entries, and again on each
--- count that has entries of its own.
-
---- Whether a count's entries (dirs and files) are all `true`: true, false,
--- or nil when there are none to tell by.
-local function placeholdersIn(dirs, files)
-    local seen = false
-    for _i, list in ipairs({ dirs, files }) do
-        if type(list) == "table" then
-            for _j, entry in ipairs(list) do
-                if entry ~= true then return false end
-                seen = true
-            end
-        end
-    end
-    if seen then return true end
-    return nil
-end
-Virtual._placeholdersIn = placeholdersIn -- for tests
-
-local function noPlaceholders(why)
-    if Virtual.count_placeholders == false then return end
-    Virtual.count_placeholders = false
-    Virtual.count_problem = why
-    logger.warn("Athenaeum: folder counts leave cloud books out:", why)
-end
-
---- At startup: counts this plugin's own folder (it has subfolders) with
--- KOReader's getList, on a stand-in file chooser with no filters.
-function Virtual.checkCountPlaceholders(FileChooser, dir)
-    if not dir then
-        local source = debug.getinfo(1, "S").source
-        dir = type(source) == "string" and source:match("^@(.*)/athenaeum/[^/]*$")
-    end
-    if not dir then return nil end -- nowhere to look: trust it
-    local probe = setmetatable({ exclude_dirs = {}, exclude_files = {}, show_unsupported = true },
-        { __index = FileChooser })
-    local ok, dirs, files = pcall(FileChooser.getList, probe, dir)
-    if not ok then
-        logger.warn("Athenaeum: couldn't check folder counts:", dirs)
-        return nil
-    end
-    local shape = placeholdersIn(dirs, files)
-    if shape == false then
-        noPlaceholders("KOReader's folder counts list something other than true")
-    elseif shape then
-        Virtual.count_placeholders = true
-    end
-    return shape
-end
+-- ZenOS lists the cloud books in the library folder, counts them in the
+-- folders above it, and shows them on folder covers and in its flat view
+-- (Athenaeum's source is fileless: common/book_sources.lua's
+-- booksWithoutFile). The plugin only shows "Rebuilding library…" while
+-- the library folder is listed.
 
 -- Is this a listing of the library folder by the file browser?
 local function isLibrary(fc, path)
@@ -553,96 +427,18 @@ local function rebuildingMessage(fc)
     if not ok then logger.warn("Athenaeum: rebuilding message:", err) end
 end
 
--- Adds the cloud books to a listing of the library folder: dirs and files
--- are the lists KOReader filled. Without collate it's a count: one `true`
--- per book.
-local function addToListing(fc, path, collate, dirs, files)
-    if type(files) ~= "table" then return end
-    if not collate then
-        if placeholdersIn(dirs, files) == false then
-            noPlaceholders("a folder count listed something other than true")
-        end
-        if Virtual.count_placeholders ~= false then
-            for _i, book in ipairs(Virtual.books) do
-                if passesFilter(fc, book) then
-                    table.insert(files, true) -- counting only, like FileChooser:getPathList()
-                end
-            end
-        end
-        return
-    end
-    -- Timed as a whole: timing each book's parts (wrapping three calls per
-    -- book) cost more than some of the parts it measured.
-    local t0 = Timing.start()
-    withCloudDocProps(fc.ui, function() addCloudItems(fc, path, files, collate) end)
-    Timing.record("listing: add cloud books", Timing.since(t0), #Virtual.books .. " books")
+--- FileChooser:getPathList (or getList, on a KOReader before 2026.07) with
+-- the "Rebuilding library…" message before the library folder is listed.
+local function messageOnly(orig, self, path, collate, ...)
+    if collate and isLibrary(self, path) then rebuildingMessage(self) end
+    return orig(self, path, collate, ...)
 end
+Virtual._messageOnly = messageOnly -- for tests
 
---- FileChooser:getPathList with the cloud books (Guard.hook's fn; KOReader
--- 2026.07 and later). It walks one folder into the dirs and files it's
--- given: for a listing, a count, and each folder of KOReader's flat view.
--- Every value it returns is passed on.
-local path_listed = false -- the hook below ran for the library (see flatFallback)
-local function pathListing(orig, self, path, collate, dirs, files, ...)
-    local library = isLibrary(self, path)
-    if library then path_listed = true end
-    if library and collate then rebuildingMessage(self) end
-    local r = pack(orig(self, path, collate, dirs, files, ...))
-    if library then addToListing(self, path, collate, dirs, files) end
-    return unpack(r, 1, r.n)
-end
-Virtual._pathListing = pathListing -- for tests
-
---- FileChooser:getList with the cloud books, on a KOReader without
--- getPathList (before 2026.07). Every value it returns is passed on.
-local function listing(orig, self, path, collate, ...)
-    local library = isLibrary(self, path)
-    if library and collate then rebuildingMessage(self) end
-    local r = pack(orig(self, path, collate, ...))
-    if library then addToListing(self, path, collate, r[1], r[2]) end
-    return unpack(r, 1, r.n)
-end
-Virtual._listing = listing -- for tests
-
--- Whether ZenOS lists the book sources' books without a file in its own
--- flat view (common/book_sources.lua's booksWithoutFile, asked by its walk).
-local function zenosListsSourceBooks()
-    local BookSources = package.loaded["common/book_sources"]
-    return type(BookSources) == "table" and type(BookSources.booksWithoutFile) == "function"
-end
-
---- FileChooser:getList, alongside the getPathList hook: ZenOS's flat view
--- ("Show all files from subfolders") replaces getPathList for the folders
--- in its home folders with its own walk, which never calls it, so the
--- library folder shown in it would have no cloud books. They're added
--- here then: when the getPathList hook didn't run for the library during
--- this getList, unless ZenOS lists them itself. (Folders above the library
--- in ZenOS's flat view are only covered by a ZenOS that does.)
-local function flatFallback(orig, self, path, collate, ...)
-    if not isLibrary(self, path) then return orig(self, path, collate, ...) end
-    local outer = path_listed -- a getList inside a getList (a folder's count)
-    path_listed = false
-    local r = pack(orig(self, path, collate, ...))
-    local ran = path_listed
-    path_listed = outer
-    if not ran and not zenosListsSourceBooks() then
-        addToListing(self, path, collate, r[1], r[2])
-    end
-    return unpack(r, 1, r.n)
-end
-Virtual._flatFallback = flatFallback -- for tests
-
---- getPathList where KOReader has it, with getList for ZenOS's flat view
--- (flatFallback); else getList.
 local function installListing()
     local FileChooser = require("ui/widget/filechooser")
-    Virtual.checkCountPlaceholders(FileChooser)
-    if type(FileChooser.getPathList) == "function" then
-        Guard.hook("library", FileChooser, "getPathList", pathListing, "FileChooser:getPathList")
-        Guard.hook("library", FileChooser, "getList", flatFallback, "FileChooser:getList")
-    else
-        Guard.hook("library", FileChooser, "getList", listing, "FileChooser:getList")
-    end
+    local name = type(FileChooser.getPathList) == "function" and "getPathList" or "getList"
+    Guard.hook("library", FileChooser, name, messageOnly, "FileChooser:" .. name)
 end
 
 --- Downloads the covers of the cloud books among paths (they have no file
