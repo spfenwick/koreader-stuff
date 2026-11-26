@@ -125,16 +125,15 @@ function Concordance:init()
     end
     Updates.register(function() return self:updateEntries() end)
     Updates.scheduleCheck()
+    -- Pulled settings put in place quietly; only a failure is reported.
     if startup and not startup.shown then
         startup.shown = true
-        UIManager:nextTick(function()
-            if startup.ok then
-                notify(_("Pulled settings put in place."))
-            else
+        if not startup.ok then
+            UIManager:nextTick(function()
                 notify(T(_("Concordance couldn't put all the pulled settings in place. It will try again at the next start.\n\nLog: %1"),
                     startup.log or "?"))
-            end
-        end)
+            end)
+        end
     end
 end
 

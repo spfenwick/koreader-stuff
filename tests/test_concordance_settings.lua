@@ -976,9 +976,10 @@ check(#restarts == 2 and #broadcast == broadcasts, "sync refused while settings 
 check(item("Discard pulled settings"), "menu offers to discard")
 
 -- The next start puts them in place.
+local notified_before_start = #notified
 plugin = loadPlugin()
 check(read(P.kodir .. "/settings/gestures.lua") ~= "return { p = 1 }\n", "put in place at start")
-check(notified[#notified] == "Pulled settings put in place.", "start reports it")
+check(#notified == notified_before_start, "put in place quietly: " .. tostring(notified[#notified]))
 
 plugin:onConcordanceSettings()
 check(notified[#notified] == "Settings already up to date." or (notified[#notified] or ""):find("^Uploaded"),
