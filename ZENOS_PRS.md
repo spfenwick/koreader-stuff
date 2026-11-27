@@ -8,8 +8,8 @@ upstream as #892 on 2026-11-17). Base each PR on upstream's `dev`.
 Each entry: what's wrong in ZenOS, the fix, and what goes away in the
 plugins. When one merges, remove the plugin code and update this file.
 
-Suggested order: 1, 3, 4, 5, 6, 7, then 8 after talking to the maintainer (2 is no longer
-needed by the plugins). 9 and 10 are speed fixes that stand alone: any time.
+Suggested order: 1, 3, 5, 6, 7, then 8 after talking to the maintainer (2 is no longer
+needed by the plugins; 4's remaining part is a low priority since #6 and #9). 9 and 10 are speed fixes that stand alone: any time.
 11 is small and needs only #1 (merged).
 
 Merged upstream into `dev` (2026-11-26):
@@ -137,6 +137,14 @@ which edited ZenOS's private fields, are gone. A `moved(old, new)` call
 isn't needed: since Athenæum 0.10 (STABLE_PATHS_PLAN.md) a book keeps its
 path when it's downloaded or deleted, and the rare real path changes happen
 during a catalog load, where `changed({ old, new, … })` covers them.
+
+**Priority (2026-11-27): much lower now.** The rebuild below is far
+cheaper than when this was written. ZenOS lists the books without a file
+itself, with no per-item `getListItem` look-ups (#6). Last-read sorting no
+longer looks up paths for those books (#9, "Optimise file-less library
+rebuild", a89468e6): a cold Library open on the Kobo, sorted by last read,
+went from 4.89 s to 2.13 s, and most of the old cost was those look-ups. A download's rebuild
+hasn't been timed on the Kobo since; do that before taking this up.
 
 **Still to do in ZenOS:** a download rebuilds the library folder's whole
 listing (about 2,150 entries on the Kobo, with "Rebuilding library…").
