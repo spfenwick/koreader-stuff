@@ -10,17 +10,17 @@ plugins. When one merges, remove the plugin code and update this file.
 
 Suggested order: 1, 3, 4, 5, 6, 7, then 8 after talking to the maintainer (2 is no longer
 needed by the plugins). 9 and 10 are speed fixes that stand alone: any time.
-11 is small and needs only #1.
+11 is small and needs only #1 (merged).
 
-Open upstream (2026-11-25):
+Merged upstream into `dev` (2026-11-26):
 - [#911](https://github.com/xZenLabs/zen-os/pull/911) "Ask book sources when
-  opening or long-pressing a book anywhere" (branch `book-source-long-press`):
-  #1.
+  opening or long-pressing a book anywhere" (branch `book-source-long-press`,
+  merge 0321053f): #1.
 - [#912](https://github.com/xZenLabs/zen-os/pull/912) "Refresh open views
-  when book sources report changes" (branch `refresh-views`): #3 and the
-  views part of #4.
+  when book sources report changes" (branch `refresh-views`, merge
+  6d866c5c): #3 and the views part of #4.
 
-Next: #5 (badges), once those two are merged.
+Next: #5 (badges), now that those two are merged.
 
 ## 1. Opens and long-presses ask the book sources everywhere
 
@@ -36,9 +36,9 @@ and `showFileDialog` in `modules/filebrowser/patches/context_menu.lua`. That
 covers every caller. When a source handles an open, ZenOS cancels its own
 opening banner.
 
-**Status (2026-11-25):** PR open upstream,
+**Status (2026-11-26):** merged upstream into `dev` as
 [#911](https://github.com/xZenLabs/zen-os/pull/911) (branch
-`book-source-long-press`, from upstream `dev`, with CodeRabbit fixes), and on
+`book-source-long-press`, with CodeRabbit fixes), and on
 `custom` (986a2ec9). `BookSources.open` and `showContextMenu`
 are asked from the `openFile` and `showFileDialog` wrappers; they guard
 against re-entry (a source's handler that opens a file or shows ZenOS's
@@ -74,8 +74,8 @@ revision bumped from `ReadHistory:_flush`. Neither needs the realpath walk
 the memo exists to avoid.
 
 **Status (2026-11-25): not needed by the plugins.** #3's
-`BookSources.historyChanged` drops the memo (on the `refresh-views` PR
-branch, #912, even with no file browser open, e.g. in the reader; `custom` drops it
+`BookSources.historyChanged` drops the memo (as merged upstream in
+#912, even with no file browser open, e.g. in the reader; `custom` drops it
 only when the file browser exists). Both plugins now call it instead of
 `rh:reload(true)`: Concordance's `refreshAfterHistory` tells ZenOS first and
 leaves the file browser's redraw to it; Athenaeum's `History.reconcile` and
@@ -106,7 +106,7 @@ cache for those paths and rebuild it (now if it's on top, else when it's
 next shown). Add `BookSources.historyChanged(paths)` and a public
 `isHomeOnTop()`. The Kindle source gets Home refreshes for free.
 
-**Status (2026-11-25):** PR open upstream,
+**Status (2026-11-26):** merged upstream into `dev` as
 [#912](https://github.com/xZenLabs/zen-os/pull/912) (branch `refresh-views`,
 with CodeRabbit fixes), and on `custom` (3b30448d). Athenæum and Concordance now use `BookSources.changed`,
 `statusChanged`, `historyChanged` and `isHomeOnTop` and assume a ZenOS with
@@ -130,7 +130,8 @@ discuss.
 
 **Done:** ZenOS's open views (group pages and their book lists, To Be
 Read, the file browser) refresh when a source calls `changed(paths)`. This
-is in [#912](https://github.com/xZenLabs/zen-os/pull/912), with #3.
+is in [#912](https://github.com/xZenLabs/zen-os/pull/912) (merged
+2026-11-26), with #3.
 Athenæum's `replaceInViews`, `swapInItem` and `ZenSource.downloaded`,
 which edited ZenOS's private fields, are gone. A `moved(old, new)` call
 isn't needed: since Athenæum 0.10 (STABLE_PATHS_PLAN.md) a book keeps its
@@ -244,7 +245,8 @@ Known gaps, not fixed:
 
 **Status (2026-11-26):** committed on ZenOS `custom` as "Book source
 badges" (77f2e7c8 on 2026-11-26; amended in place, so find it by name; no
-PR branch yet), to be opened once #911 and #912 are merged
+PR branch yet), to be opened now that #911 and #912 are merged
+(2026-11-26)
 (`common/source_badge.lua`, spec `spec/lua/unit/source_badge_spec.lua`).
 Its specs pass, and luacheck finds nothing in its files (the zen-os
 checkout's two `book_sources.lua` warnings, `reader_settings` shadowing,
@@ -770,7 +772,7 @@ an open History list: its listeners are the item table cache and Home.
   calls `historyChanged` already, so it needs no change then.
 
 **Status (2026-11-27):** not started. Small: a few lines in
-`patches/history.lua` plus a spec. Base it on upstream `dev`, after #911.
+`patches/history.lua` plus a spec. Base it on upstream `dev` (#911 is in).
 
 **Plugins lose:** Athenæum's `FileManagerHistory:onShowHist` hook and
 `History.wrapHistoryMenu`, which patches `onMenuHold` on each History
