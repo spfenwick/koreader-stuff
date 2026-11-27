@@ -1862,8 +1862,8 @@ do
     ReadHistory:reload(true)
     eq(ReadHistory.hist[1].text, "Bo Writer - Up.epub", "a cloud entry put in by hand is named too")
 
-    -- Tapping or long-pressing it in the History view shows its details;
-    -- long-press adds "Remove from history".
+    -- Long-pressing it in the History view shows its details with "Remove
+    -- from history"; a tap is left to ZenOS's openFile (open()).
     local shown, shown_opts, real_show = {}, {}, Virtual.showDetails
     Virtual.showDetails = function(path, opts) table.insert(shown, path); table.insert(shown_opts, opts or false) end
     local refreshed = 0
@@ -1871,14 +1871,14 @@ do
         onMenuSelect = function() return "opened" end, onMenuHold = function() return "held" end,
     }, updateItemTable = function() refreshed = refreshed + 1 end }
     History.wrapHistoryMenu(manager)
-    check(manager.booklist_menu:onMenuSelect({ file = cloud1 }) == true and shown[1] == cloud1, "tap: details")
-    check(not shown_opts[1], "tap: no history row")
-    check(manager.booklist_menu:onMenuHold({ file = cloud1 }) == true and #shown == 2, "long-press: details")
+    eq(manager.booklist_menu:onMenuSelect({ file = cloud1 }), "opened", "tap: not hooked")
+    check(#shown == 0, "tap: no details from the hook")
+    check(manager.booklist_menu:onMenuHold({ file = cloud1 }) == true and shown[1] == cloud1, "long-press: details")
     local closed = 0
-    local rows = type(shown_opts[2]) == "table" and shown_opts[2].extra_rows(function() closed = closed + 1 end) or {}
+    local rows = type(shown_opts[1]) == "table" and shown_opts[1].extra_rows(function() closed = closed + 1 end) or {}
     local remove = rows[1] and rows[1][1]
     check(remove and remove.text:find("Remove from history", 1, true), "long-press: Remove from history row")
-    eq(manager.booklist_menu:onMenuSelect({ file = down }), "opened", "a file opens as usual")
+    eq(manager.booklist_menu:onMenuHold({ file = down }), "held", "a file long-presses as usual")
     Virtual.showDetails = real_show
     if remove then remove.callback() end
     check(closed == 1 and refreshed == 1 and not ReadHistory:getIndexByFile(cloud1),

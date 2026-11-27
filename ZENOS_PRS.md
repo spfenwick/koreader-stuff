@@ -10,6 +10,7 @@ plugins. When one merges, remove the plugin code and update this file.
 
 Suggested order: 1, 3, 4, 5, 6, 7, then 8 after talking to the maintainer (2 is no longer
 needed by the plugins). 9 and 10 are speed fixes that stand alone: any time.
+11 is small and needs only #1.
 
 Open upstream (2026-11-25):
 - [#911](https://github.com/xZenLabs/zen-os/pull/911) "Ask book sources when
@@ -743,6 +744,55 @@ queues a book already in the running download and puts a finished job's
 results on the catalog's current book tables (a reload during a job
 replaced them, so its covers were downloaded twice: 27 downloads for 18
 covers in the run above, 18 after).
+
+## 11. History's long-press says the book is from the history
+
+**In ZenOS:** `modules/filebrowser/patches/history.lua` replaces
+`FileManagerHistory:onMenuHold` with `showFileDialog`, which asks
+`BookSources.showContextMenu` (#1). The item it builds (`path`, `is_file`,
+`text`, `_zen_extra_buttons`) doesn't say it came from the history, so a
+source can't offer "Remove from history": ZenOS's own row is in
+`_zen_extra_buttons`, on ZenOS's dialog, which the source's menu replaces.
+Home's Recently read already marks its items (`_zen_is_history`,
+`_zen_history_path`), and Athenæum's `historyOpts` (`zenos_source.lua`)
+adds the row for those. Also, `BookSources.historyChanged` doesn't redraw
+an open History list: its listeners are the item table cache and Home.
+
+**Fix:**
+- In `onMenuHold`, set `_zen_is_history = true` and `_zen_history_path =
+  item.file` on the item given to `showFileDialog`.
+- Redraw the History list after a change: pass `showContextMenu` an
+  `after_change` that calls `hist_mgr:updateItemTable()` (the argument
+  exists; `showFileDialog`'s wrapper passes none today), or have
+  `patches/history.lua` listen with `BookSources.onChanged` for "history"
+  and call `updateItemTable()` when `booklist_menu` is open. The listener
+  also covers other `historyChanged` callers; Athenæum's `historyOpts`
+  calls `historyChanged` already, so it needs no change then.
+
+**Status (2026-11-27):** not started. Small: a few lines in
+`patches/history.lua` plus a spec. Base it on upstream `dev`, after #911.
+
+**Plugins lose:** Athenæum's `FileManagerHistory:onShowHist` hook and
+`History.wrapHistoryMenu`, which patches `onMenuHold` on each History
+menu instance (it depends on `booklist_menu` and `item.file`; one of the
+more fragile hooks). Not covered: with ZenOS's History feature off
+(`features.history`), its `onMenuHold` isn't installed and KOReader's
+dialog shows, so Athenæum keeps a fallback, or Guard turns the history
+long-press off and says so.
+
+The tap half of that hook was dropped already (Athenæum 0.10.20): a
+tap in History goes through `filemanagerutil.openFile`, where ZenOS asks
+`open()` (#1), with Athenæum's `ReaderUI:showReader` hook behind it when
+`open()` declines (during select mode). Checked in the emulator 2026-11-27
+against `custom` (scratch script): tapping a cloud book in History shows
+its details without the history row, long-press shows them with it, and a
+local book still opens.
+
+The `ReadHistory` hooks (`_read`, `clearMissing`, `_flush`) aren't for a
+ZenOS PR: ZenOS doesn't hook `ReadHistory`, so a ZenOS contract for them
+would wrap the same private methods, only in ZenOS. A stable form would be
+upstream KOReader asking a registered predicate whether an entry without a
+file is kept and shown undimmed (`clearMissing`, `buildEntry`).
 
 ## Not worth a PR
 

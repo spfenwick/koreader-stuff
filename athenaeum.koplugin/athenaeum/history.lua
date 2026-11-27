@@ -272,23 +272,25 @@ function History.removeRows(path, after)
     end
 end
 
+-- Long-press only: a tap goes through filemanagerutil.openFile, where ZenOS
+-- asks the sources (open()), with ReaderUI:showReader's hook behind it.
+-- ZenOS's long-press reaches showContextMenu too, but without saying it's
+-- from the history, so there'd be no "Remove from history" (ZENOS_PRS.md,
+-- #11).
 function History.wrapHistoryMenu(manager)
     local menu = manager and manager.booklist_menu
     if type(menu) ~= "table" then return end
-    for _i, name in ipairs({ "onMenuSelect", "onMenuHold" }) do
-        local orig = menu[name]
-        if type(orig) == "function" then
-            menu[name] = function(m, item, ...)
-                if Guard.ok("history") and type(item) == "table" and Virtual.by_path[item.file] then
-                    local opts = name == "onMenuHold" and { extra_rows = History.removeRows(item.file,
-                        function() if manager.updateItemTable then manager:updateItemTable() end end) } or nil
-                    local ok, err = pcall(Virtual.showDetails, item.file, opts)
-                    if ok then return true end
-                    Guard.fail("history", "history " .. name, err)
-                end
-                return orig(m, item, ...)
-            end
+    local orig = menu.onMenuHold
+    if type(orig) ~= "function" then return end
+    menu.onMenuHold = function(m, item, ...)
+        if Guard.ok("history") and type(item) == "table" and Virtual.by_path[item.file] then
+            local opts = { extra_rows = History.removeRows(item.file,
+                function() if manager.updateItemTable then manager:updateItemTable() end end) }
+            local ok, err = pcall(Virtual.showDetails, item.file, opts)
+            if ok then return true end
+            Guard.fail("history", "history onMenuHold", err)
         end
+        return orig(m, item, ...)
     end
 end
 
