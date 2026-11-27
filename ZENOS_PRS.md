@@ -20,7 +20,20 @@ Merged upstream into `dev` (2026-11-26):
   when book sources report changes" (branch `refresh-views`, merge
   6d866c5c): #3 and the views part of #4.
 
-Next: #5 (badges), now that those two are merged.
+Ready for a PR (2026-11-27), not opened yet:
+- branch `file-less` (pushed; from upstream `dev` after #911 and #912), six
+  commits: #6 (42e1729a "File-less book source contract", 4c120597 "List
+  file-less books in folders and the flat view", 6b3191ed "Keep file-less
+  books out of selections"), #7 (4ecdd8e7), #10 (f8ed6be4) and #9
+  (a89468e6). The same commits are on `custom` with other hashes.
+
+Next: #5 (badges), now that #911 and #912 are merged; it has no branch from
+`dev` yet.
+
+Local `custom` (171fa38c) is ahead of `origin/custom` (0539f07d): its last
+three commits were amended (search's wildcards with no "Use patterns"
+option, KOReader v2026.07 and earlier) and need a force-push. `file-less`
+has the amended versions.
 
 ## 1. Opens and long-presses ask the book sources everywhere
 
@@ -251,11 +264,11 @@ Known gaps, not fixed:
   badge change only needs a repaint. A lighter `badgesChanged()` could
   repaint, call `SourceBadge.clear()` and reset the failed sources.
 
-**Status (2026-11-26):** committed on ZenOS `custom` as "Book source
-badges" (77f2e7c8 on 2026-11-26; amended in place, so find it by name; no
-PR branch yet), to be opened now that #911 and #912 are merged
-(2026-11-26)
-(`common/source_badge.lua`, spec `spec/lua/unit/source_badge_spec.lua`).
+**Status (2026-11-27):** committed on ZenOS `custom` as c7604527 "Book
+source badges" and 6fd72626 "Lift badges above progress bar" (rebased since
+77f2e7c8, so find them by name; `common/source_badge.lua`, spec
+`spec/lua/unit/source_badge_spec.lua`). No PR branch from `dev` yet; it can
+be opened now that #911 and #912 are merged.
 Its specs pass, and luacheck finds nothing in its files (the zen-os
 checkout's two `book_sources.lua` warnings, `reader_settings` shadowing,
 are from 6b81afc2, before it).
@@ -294,8 +307,11 @@ the date and size sorts. Books with a file (the Kindle library's) are listed
 where they are, as before. `listingKey()` stays: it keys the saved listing
 cache, which outlives a run.
 
-**Status (2026-11-26, rebuilt):** a simpler version on `custom`,
-uncommitted, no PR branch yet: about 255 net lines of ZenOS code (+296 −39)
+**Status (2026-11-27, rebuilt):** committed on `custom` (fd2c9805 "File-less
+book source contract", c6d65fe3 "List file-less books in folders and the
+flat view", 565e9a1d "Keep file-less books out of selections") and on the
+`file-less` branch (42e1729a, 4c120597, 6b3191ed); no upstream PR yet.
+About 255 net lines of ZenOS code (+296 −39)
 plus specs, against about 275 for the discarded one. Simpler in kind more
 than size: no item marking, no new contract for covers, one lookup function.
 The code doesn't need #911 or #912, but it should land after #911: without
@@ -507,8 +523,9 @@ option or go, as `zenos_groups` did in #6), including the copy of getList's
 search text preparation. Every source's books become searchable, not just
 Athenæum's.
 
-**Status (2026-11-26):** built on `custom`, uncommitted, on top of #6
-(bc964b14); no PR branch yet. It needs #6 (`fileless`, `booksWithoutFile`)
+**Status (2026-11-27):** committed on `custom` (bfe21415 "Include file-less
+books in search results") and on `file-less` (4ecdd8e7), on top of #6; no
+upstream PR yet. It needs #6 (`fileless`, `booksWithoutFile`)
 and should land after #911, like #6. No new hooks: the books are added
 where ZenOS's search patch (`modules/filebrowser/patches/search.lua`)
 already calls or overrides KOReader's search, so it only works with ZenOS's
@@ -650,7 +667,8 @@ one database query per folder, instead of per-item lookups for about
 not replace it. Probably a few hundred lines plus specs, mostly in
 `browser_item_table_cache.lua` and a new item builder.
 
-Not started.
+Not started (checked 2026-11-27: a cache miss still calls KOReader's
+`genItemTableFromPath`).
 
 ## 9. Sorting by last read doesn't look up books that have no file
 
@@ -676,15 +694,16 @@ paths get a `stat` before `realpath()` (a deleted book's history entry: no
 `realpath()`, and the `stat` is fast once cached); listed folders, known to
 be there, get neither, as before.
 
-**Status (2026-11-26):** on `custom`, uncommitted (both files plus specs:
+**Status (2026-11-27):** committed on `custom` (171fa38c "Optimise
+file-less library rebuild") and on `file-less` (a89468e6); no upstream PR
+yet (both files plus specs:
 `isFileless` in `book_sources_spec.lua`; "resolves only paths that are
 there for last-read sorting" in `filebrowser_item_table_cache_spec.lua`).
 `./spec/run lua` passes apart from the two updater specs that always fail.
 On the Kobo, cold, sorted by last read: 4.89 s → 2.13 s
 (`HistoryIndex.fileTime` 2,853 ms → 122 ms; `isFileless` 28 ms for 2,001
 paths). A `stat` in front of `realpath()` alone (tried first) only moved the
-cost: 4.44 s, `lfs.attributes` 2.5 s. Not yet a PR: base it on upstream
-`dev`.
+cost: 4.44 s, `lfs.attributes` 2.5 s.
 
 **Plugins lose:** nothing; Athenæum's `owns` is a table look-up, so
 `isFileless` costs about 14 µs a book. It's here because Athenæum's cloud
@@ -731,14 +750,15 @@ Athenæum → CoverBrowser; nothing in ZenOS wraps
   `isExtractingInBackground()`: the poll needs the source's busy state, or
   CoverBrowser asks for the source's covers again and again.
 
-**Status (2026-11-27):** on `custom`, uncommitted (`cover_preload.lua`,
+**Status (2026-11-27):** committed on `custom` (60720a2c "File-less cover
+downloads") and on `file-less` (f8ed6be4); no upstream PR yet
+(`cover_preload.lua`,
 four specs under "books whose covers a source fetches" in
 `filebrowser_cover_preload_spec.lua`). `./spec/run lua`: 3,210 pass; the
 two updater specs fail as always, and `home_page_cache_spec`'s "parks a
 built Home across a reading session…" fails in the full run on unmodified
 `custom` too (passes alone). Emulator, same setup: page 2's local covers
 1.08 s; listing invalidated only after batches with files (2 instead of 4).
-Not yet a PR: base it on upstream `dev`.
 
 Not covered: Home's cover upgrades (`home_page.lua` defers on
 `isExtractingInBackground()` before asking) still wait for a source's
