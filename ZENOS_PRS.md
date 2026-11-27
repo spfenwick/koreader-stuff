@@ -20,19 +20,27 @@ Merged upstream into `dev` (2026-11-26):
   when book sources report changes" (branch `refresh-views`, merge
   6d866c5c): #3 and the views part of #4.
 
-Ready for a PR (2026-11-27), not opened yet:
-- branch `file-less` (pushed; from upstream `dev` after #911 and #912), six
-  commits: #6 (42e1729a "File-less book source contract", 4c120597 "List
-  file-less books in folders and the flat view", 6b3191ed "Keep file-less
-  books out of selections"), #7 (4ecdd8e7), #10 (f8ed6be4) and #9
-  (a89468e6). The same commits are on `custom` with other hashes.
+Ready for a PR (2026-11-28), not opened yet:
+- branch `book-source-library` (pushed; from upstream `dev` after #911 and
+  #912; called `file-less` until 2026-11-28; PR description in
+  PR_BOOK_SOURCE_LIBRARY.md), six
+  commits: #6 (12817403 "Library book source contract", 1af5eb08 "List
+  library sources' books in folders and the flat view", 887f8ec7 "Keep
+  source books without a file out of selections"), #7 (3d60fb97), #10
+  (390eaa14) and #9 (0566dda5). Rebuilt 2026-11-28 to rename the source
+  flag `fileless` to `library`, list only library sources' books in the
+  flat view, and leave out scanned files in every count (see #6).
+  The same commits are on `custom` with other hashes, still with the old
+  `fileless` flag. Athenæum now sets `library = true` and its Guard
+  requires `BookSources.isLibraryBook`, so a `custom` build reports the
+  library as unavailable until it gets the rename too.
 
 Next: #5 (badges), now that #911 and #912 are merged; it has no branch from
 `dev` yet.
 
 Local `custom` (171fa38c) is ahead of `origin/custom` (0539f07d): its last
 three commits were amended (search's wildcards with no "Use patterns"
-option, KOReader v2026.07 and earlier) and need a force-push. `file-less`
+option, KOReader v2026.07 and earlier) and need a force-push. `book-source-library`
 has the amended versions.
 
 ## 1. Opens and long-presses ask the book sources everywhere
@@ -154,8 +162,8 @@ during a catalog load, where `changed({ old, new, … })` covers them.
 **Priority (2026-11-27): much lower now.** The rebuild below is far
 cheaper than when this was written. ZenOS lists the books without a file
 itself, with no per-item `getListItem` look-ups (#6). Last-read sorting no
-longer looks up paths for those books (#9, "Optimise file-less library
-rebuild", a89468e6): a cold Library open on the Kobo, sorted by last read,
+longer looks up paths for those books (#9, "Don't look up library
+sources' books when sorting by last read", 0566dda5): a cold Library open on the Kobo, sorted by last read,
 went from 4.89 s to 2.13 s, and most of the old cost was those look-ups. A download's rebuild
 hasn't been timed on the Kobo since; do that before taking this up.
 
@@ -307,10 +315,13 @@ the date and size sorts. Books with a file (the Kindle library's) are listed
 where they are, as before. `listingKey()` stays: it keys the saved listing
 cache, which outlives a run.
 
-**Status (2026-11-27, rebuilt):** committed on `custom` (fd2c9805 "File-less
+**Status (2026-11-28, renamed):** committed on `custom` (fd2c9805 "File-less
 book source contract", c6d65fe3 "List file-less books in folders and the
-flat view", 565e9a1d "Keep file-less books out of selections") and on the
-`file-less` branch (42e1729a, 4c120597, 6b3191ed); no upstream PR yet.
+flat view", 565e9a1d "Keep file-less books out of selections"; still
+`fileless`) and on the `book-source-library` branch (12817403 "Library book source
+contract", 1af5eb08 "List library sources' books in folders and the flat
+view", 887f8ec7 "Keep source books without a file out of selections");
+no upstream PR yet.
 About 255 net lines of ZenOS code (+296 −39)
 plus specs, against about 275 for the discarded one. Simpler in kind more
 than size: no item marking, no new contract for covers, one lookup function.
@@ -320,29 +331,51 @@ generic source's book would try to open a missing file (Athenæum catches
 opens itself). The single-client concern doesn't apply: book sources was
 accepted with Athenæum as its only client outside ZenOS.
 
-- A source may declare `fileless = true`: its `books()` only has books with
-  no file on the device, all owned by it. That's the opt-in for folder
-  listings, and it lets ZenOS count those books without checking for files.
-- `BookSources.booksWithoutFile(folders, present, fileless_only)`: the
-  owned books in the given folders that the scan didn't find as files.
-  Without `present` (a count), fileless sources' books only. Looked up in an
+- A source may declare `library = true`: the opt-in for listing its books
+  in the Library tab. Its books are meant to be ones ZenOS's own scan of
+  the library doesn't find: a cloud book not downloaded yet, or a book
+  whose file is kept outside the library (as the Kindle plugin's are).
+  Called `fileless` until 2026-11-28. What's really about having no file
+  at all stays in the contract as such: wrapping `extractInBackground` for
+  covers, and a downloaded book leaving the source for the scan at the
+  same path.
+  Until 2026-11-28 this was a promise ZenOS relied on: count-only folder
+  listings and the folder long-press count added the books without
+  checking them against the files there. Both now leave out files the
+  scan found (the count-only listing reads the folder's names once, only
+  when it holds library books; desktop, 2,150 names: 1.3 ms warm; not
+  measured on the Kobo, though Athenæum's library folder holds only the
+  downloaded books), so a library book that is also a scanned file is
+  listed and counted once, as the file, everywhere. The flag is still
+  opt-in because ZenOS takes the source's word for the rest: no disk
+  look-up of the paths (`isLibraryBook`), `getDocProps` from `bookInfo()`
+  alone, and file search by name and metadata only. Other sources' books
+  are de-duplicated the same way in the groupings (`seen_files` in
+  `db_bookinfo.lua`; `getDocProps` merges their fields with the
+  CoverBrowser row) and appear only there, not in the Library tab (flat
+  view included, since 2026-11-28).
+- `BookSources.booksWithoutFile(folders, present)`: the library sources'
+  owned books in the given folders, leaving out `present` (what the scan
+  found; every caller that lists or counts passes it). Until 2026-11-28 it also gave
+  other sources' books when asked (`library_only` false, the flat view's
+  case); no caller needs that now. Looked up in an
   index by folder per source, built on first use after the books changed
   (`revision`: sources already call `changed()`), with `owns()` asked while
   building it. A book may give `attr` for the date and size sorts (kept
   through metadata edits; each result gets its own copy).
 - Folder listings and counts (`browser_flat_view_compat.lua`'s
   `getPathList` wrapper, or `getList` on KOReader before 2026.07): after
-  KOReader's walk, the fileless sources' books in that folder, through
+  KOReader's walk, the library sources' books in that folder, through
   `show_file`, as items (with `doc_props` from `BookSources.docProps`, so
   series grouping, which only trusts CoverBrowser's rows, sees them) or
   `true`. File browser only, not other file choosers.
-- Flat view (`scan_flat`): all sources' owned books without a file in the
-  folders walked (it knows every file it saw).
+- Flat view (`scan_flat`): the library sources' books in the folders
+  walked, as in folder listings.
 - Folder covers (`folder_cover.lua`): count, cover images and "all
   finished" include them; the descriptor and "all finished" caches key on
   the sources' `listingKey` and `statusRevision`. The folder long-press
   dialog's book count includes them too.
-- `getDocProps` answers a fileless source's book from `bookInfo()` without
+- `getDocProps` answers a library source's book from `bookInfo()` without
   querying CoverBrowser's database (the speed Athenæum's
   `withCloudDocProps` gave).
 - Select mode: the file browser's selection never takes a book without a
@@ -362,7 +395,7 @@ accepted with Athenæum as its only client outside ZenOS.
   Read's folder scope (`tbr_index.lua`: whether books without a file belong
   there is undecided).
 
-Timing (desktop emulator, 2,150 fileless books in the library folder, 50
+Timing (desktop emulator, 2,150 cloud books in the library folder, 50
 sibling folders; best of 3):
 
 | | Athenæum's hooks | ZenOS, no index | ZenOS, with index |
@@ -380,8 +413,9 @@ Specs in `book_sources_spec.lua`, `filebrowser_flat_view_compat_spec.lua`,
 pass (the 2 updater specs fail without it too); luacheck finds nothing new.
 
 Athenæum 0.10.12 requires this (Guard's startup check:
-`booksWithoutFile`; no fallback for a ZenOS without it). Its source is
-`fileless` and gives `attr`. Its listing hooks are gone: `addCloudItems`,
+`booksWithoutFile`; no fallback for a ZenOS without it). Its source is a
+`library` source (`fileless` before 2026-11-28; Guard also requires
+`isLibraryBook` since then) and gives `attr`. Its listing hooks are gone: `addCloudItems`,
 the count padding and its check, the `getList` fallback for ZenOS's flat
 view, and `withCloudDocProps` (ZenOS's `getDocProps` shortcut does that
 now). It keeps a `getPathList` hook (`getList` before KOReader 2026.07) for
@@ -523,9 +557,10 @@ option or go, as `zenos_groups` did in #6), including the copy of getList's
 search text preparation. Every source's books become searchable, not just
 Athenæum's.
 
-**Status (2026-11-27):** committed on `custom` (bfe21415 "Include file-less
-books in search results") and on `file-less` (4ecdd8e7), on top of #6; no
-upstream PR yet. It needs #6 (`fileless`, `booksWithoutFile`)
+**Status (2026-11-28):** committed on `custom` (bfe21415 "Include file-less
+books in search results") and on `book-source-library` (3d60fb97 "Include library
+sources' books in search results"), on top of #6; no upstream PR yet. It
+needs #6 (`library`, `booksWithoutFile`)
 and should land after #911, like #6. No new hooks: the books are added
 where ZenOS's search patch (`modules/filebrowser/patches/search.lua`)
 already calls or overrides KOReader's search, so it only works with ZenOS's
@@ -533,7 +568,7 @@ Search feature on. With it off, KOReader's own search finds files only
 (decided 2026-11-26: KOReader's `doSearch` is the only other caller of
 `getList`, and reaching it would need a hook).
 - `common/book_sources.lua`, no hooks:
-  - `searchResults(searcher, root, search_string, found)`: the fileless
+  - `searchResults(searcher, root, search_string, found)`: the library
     sources' books a search of root finds, as getList's `{ name, fullpath,
     attr }` entries. Folders as KOReader's walk covers them (root; with
     subfolders, every folder below it reached through shown, non-hidden
@@ -541,8 +576,8 @@ Search feature on. With it off, KOReader's own search finds files only
     the walk's filters (`._`, `hasProvider` unless unsupported files are
     shown, `show_file`), and the searcher's own `isFileMatch` with the text
     getList would pass. Content search off and `no_metadata_count` put
-    back while they're matched. Fileless sources only, as in folder
-    listings: a non-fileless source's books may have files the walk skipped
+    back while they're matched. Library sources only, as in folder
+    listings: another source's books may have files the walk skipped
     on purpose (the Kindle library is under `/mnt/base-us`).
   - `prepareFolderIndex()`; `booksWithoutFile` also
     takes a function for `folders`.
@@ -571,7 +606,7 @@ locals: a KOReader change there fails it when ZenOS's pinned KOReader is
 updated (checked by breaking each copied rule in turn). Lua suite 3198 pass
 (the 2 updater specs fail without it too); luacheck finds nothing new.
 
-Timing (desktop emulator, i5-8259U; 2,150 fileless books in the home
+Timing (desktop emulator, i5-8259U; 2,150 cloud books in the home
 folder, a third in series, with tags; ZenOS's search, substring; best of 3;
 scratch script):
 
@@ -676,7 +711,7 @@ Not started (checked 2026-11-27: a cache miss still calls KOReader's
 `browser_item_table_cache.lua`'s `apply_history_order` finds each listed
 book's read time with `HistoryIndex.fileTime`. A book whose path isn't in
 the history as given (most of them) goes through `canonical_path`, which
-calls `realpath()`. For a fileless source's book there's no file, so
+calls `realpath()`. For a library source's book there's no file, so
 `realpath()` fails and the path is used as it was, but on the Kobo a
 look-up of a missing name in a big FAT folder costs about 1 ms when it
 isn't cached, `realpath()`'s or a `stat`'s alike. With 2,027 cloud books
@@ -685,19 +720,19 @@ that was 2.8 s of a 4.9 s cold Library open (measured on the user's Kobo
 `HistoryIndex.load` normalises every history entry the same way, so
 history entries for deleted books pay it too.
 
-**Fix:** `BookSources.isFileless(path)` (new, `common/book_sources.lua`): true
-when a fileless source owns the path, which by the `fileless` contract
-means there's no file there; it asks the source's `owns` and nothing on
-disk. `canonical_path` asks it first and leaves those paths as given, with
+**Fix:** `BookSources.isLibraryBook(path)` (new, `common/book_sources.lua`;
+`isFileless` until 2026-11-28): true when a library source owns the path,
+which by the `library` contract means it isn't a file the library scan
+finds; it asks the source's `owns` and nothing on disk. `canonical_path` asks it first and leaves those paths as given, with
 no look-up at all (the result `realpath()`'s failure gave before). Other
 paths get a `stat` before `realpath()` (a deleted book's history entry: no
 `realpath()`, and the `stat` is fast once cached); listed folders, known to
 be there, get neither, as before.
 
-**Status (2026-11-27):** committed on `custom` (171fa38c "Optimise
-file-less library rebuild") and on `file-less` (a89468e6); no upstream PR
-yet (both files plus specs:
-`isFileless` in `book_sources_spec.lua`; "resolves only paths that are
+**Status (2026-11-28):** committed on `custom` (171fa38c "Optimise
+file-less library rebuild") and on `book-source-library` (0566dda5 "Don't look up
+library sources' books when sorting by last read"); no upstream PR yet
+(both files plus specs: `isLibraryBook` in `book_sources_spec.lua`; "resolves only paths that are
 there for last-read sorting" in `filebrowser_item_table_cache_spec.lua`).
 `./spec/run lua` passes apart from the two updater specs that always fail.
 On the Kobo, cold, sorted by last read: 4.89 s → 2.13 s
@@ -706,14 +741,14 @@ paths). A `stat` in front of `realpath()` alone (tried first) only moved the
 cost: 4.44 s, `lfs.attributes` 2.5 s.
 
 **Plugins lose:** nothing; Athenæum's `owns` is a table look-up, so
-`isFileless` costs about 14 µs a book. It's here because Athenæum's cloud
+`isLibraryBook` costs about 14 µs a book. It's here because Athenæum's cloud
 books are what make it slow.
 
 ## 10. A source's cover downloads don't hold up cover extraction
 
 **In ZenOS:** `cover_preload.lua`'s `serialize_extraction` queues a page's
 cover request whenever `BookInfoManager:isExtractingInBackground()` is true,
-and reconciles every batch it launched once that turns false. A fileless
+and reconciles every batch it launched once that turns false. A library
 source that fetches its own covers wraps `extractInBackground` (below
 ZenOS's wrappers: plugins start first) and reports its downloads through
 `isExtractingInBackground()`, so CoverBrowser keeps polling for them.
@@ -750,8 +785,9 @@ Athenæum → CoverBrowser; nothing in ZenOS wraps
   `isExtractingInBackground()`: the poll needs the source's busy state, or
   CoverBrowser asks for the source's covers again and again.
 
-**Status (2026-11-27):** committed on `custom` (60720a2c "File-less cover
-downloads") and on `file-less` (f8ed6be4); no upstream PR yet
+**Status (2026-11-28):** committed on `custom` (60720a2c "File-less cover
+downloads") and on `book-source-library` (390eaa14 "Don't hold up cover extraction
+for a source's cover downloads"); no upstream PR yet
 (`cover_preload.lua`,
 four specs under "books whose covers a source fetches" in
 `filebrowser_cover_preload_spec.lua`). `./spec/run lua`: 3,210 pass; the
@@ -764,7 +800,7 @@ Not covered: Home's cover upgrades (`home_page.lua` defers on
 `isExtractingInBackground()` before asking) still wait for a source's
 downloads; doing the same there needs `is_extracting_files` in a shared
 module. `cover_decode_cache.lua`'s wrapper still drops caches and calls
-`db_bookinfo.invalidate()` for fileless paths on every request (cost not
+`db_bookinfo.invalidate()` for library sources' paths on every request (cost not
 measured).
 
 **Plugins lose:** nothing; Athenæum keeps its `extractInBackground` /

@@ -16,10 +16,10 @@ common/book_sources.lua, which the plugin requires). ZenOS then shows them:
   arrives, or a book is downloaded or deleted: its path stays the same,
   what's behind it doesn't)
   the library folder's listing, the counts in the folders above it, folder
-  covers and ZenOS's flat view, via fileless and books() (with attr for the
+  covers and ZenOS's flat view, via library and books() (with attr for the
   date and size sorts): ZenOS lists the books without a file that their
   source owns (BookSources.booksWithoutFile)
-  ZenOS's file search results (with its Search feature on), via fileless:
+  ZenOS's file search results (with its Search feature on), via library:
   ZenOS's search matches the cloud books in the folders searched as it
   matches files (BookSources.searchResults), gives the results their
   metadata, and sends taps and long-presses on them to open() and
@@ -177,7 +177,7 @@ function ZenSource.install(virtual)
     local source = {
         -- books() has only cloud books (no file here): ZenOS lists them in
         -- the library folder, its folder cover and the counts above it.
-        fileless = true,
+        library = true,
         books = protect("zenos", "books", books),
         owns = protect("library", "owns", function(path) return Virtual.by_path[path] ~= nil end),
         open = protect("library", "open", function(path) return show(path) end),

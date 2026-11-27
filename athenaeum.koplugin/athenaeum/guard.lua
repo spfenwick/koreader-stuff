@@ -230,13 +230,16 @@ function Guard.check()
         Guard.problem("library", "needs ZenOS with book sources")
     else
         -- booksWithoutFile: ZenOS lists the cloud books in the library folder.
+        -- isLibraryBook: it reads the source's library flag (a ZenOS that
+        -- reads the older fileless flag instead would list none of them).
         requires("library", "common/book_sources", {
             register = 2, changed = true, bookInfo = true, listingKey = true,
             installMetadataIntegration = true, booksWithoutFile = true,
+            isLibraryBook = true,
         })
         -- Cover badges are ZenOS's to paint (athenaeum/badge.lua).
         requires("badge", "common/book_sources", { badge = true })
-        -- ZenOS's search puts the cloud books into its results (fileless sources).
+        -- ZenOS's search puts the cloud books into its results (library sources).
         requires("search", "common/book_sources", { searchResults = 4 })
     end
     requires("sync", "ffi/util", {

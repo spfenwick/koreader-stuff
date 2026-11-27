@@ -30,6 +30,7 @@ package.loaded["common/book_sources"] = {
     badge = function() end,
     installMetadataIntegration = function() ZenOS.integrated = ZenOS.integrated + 1 return true end,
     booksWithoutFile = function() return {} end,
+    isLibraryBook = function() return false end,
     searchResults = function(_searcher, _root, _text, _found) return {} end,
 }
 
@@ -1468,6 +1469,11 @@ do
     check(not Guard.check() and Guard.statusText():find("booksWithoutFile is missing", 1, true),
         "needs a ZenOS that lists the cloud books: " .. Guard.statusText())
     zen.booksWithoutFile = real_bwf
+    local real_lib = zen.isLibraryBook
+    zen.isLibraryBook = nil
+    check(not Guard.check() and Guard.statusText():find("isLibraryBook is missing", 1, true),
+        "needs a ZenOS that reads the library flag: " .. Guard.statusText())
+    zen.isLibraryBook = real_lib
     local real_search = zen.searchResults
     zen.searchResults = nil
     check(Guard.check(), "a ZenOS without cloud books in search doesn't stop the library")
@@ -2501,7 +2507,7 @@ do
     eq(ZenOS.integrated, 1, "ZenOS's metadata integration installed")
     check(ZenSource.install(Virtual) and ZenOS.integrated == 1, "registers once")
 
-    check(source.fileless == true, "a fileless source: ZenOS may list its books in folders")
+    check(source.library == true, "a library source: ZenOS may list its books in folders")
     local books = source.books()
     eq(#books, 1, "cloud books listed")
     eq(books[1].file, "/lib/Ann, Bo - Cloud One.epub", "book path")

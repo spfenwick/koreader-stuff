@@ -1,5 +1,5 @@
 """Cloud books in file search, in the real app (KOReader + ZenOS), with the
-test catalog (no server). ZenOS's search adds its fileless book sources'
+test catalog (no server). ZenOS's search adds its library book sources'
 books to each home folder's results (BookSources.searchResults, after
 KOReader's walk), so they're matched as files are:
 

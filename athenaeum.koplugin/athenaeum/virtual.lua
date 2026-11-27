@@ -434,9 +434,9 @@ end
 
 -- ZenOS lists the cloud books in the library folder, counts them in the
 -- folders above it, and shows them on folder covers, in its flat view and
--- in file search (Athenaeum's source is fileless: common/book_sources.lua's
--- booksWithoutFile). The plugin only shows "Rebuilding library…" while
--- the library folder is listed.
+-- in file search (Athenaeum's is a library source: common/book_sources.lua's
+-- booksWithoutFile). The plugin only shows "Rebuilding library…" while the
+-- library folder is listed.
 
 -- Is this a listing of the library folder by the file browser?
 local function isLibrary(fc, path)
