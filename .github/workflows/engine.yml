@@ -10,7 +10,8 @@
 #     "builds": { "<fingerprint>": { "<target>": {
 #         "file": "...", "url": "...", "sha256": "...", "size": n,
 #         "commit": "<12 hex>", "koreader": "<nightly it was built for>",
-#         "base": "<koreader-base commit>", "built": "<ISO time>" } } },
+#         "base": "<koreader-base commit>", "built": "<ISO time>",
+#         "api": "<API fingerprint>" } } },
 #     "bases": { "<koreader-base commit>": "<fingerprint>" } }
 #
 # Targets are named as the plugin finds them: KOReader's names for its
@@ -29,12 +30,22 @@
 # cre.cpp (the Lua API KOReader's frontend calls), its build options, and
 # the shared libraries it links (of which only lunasvg, a C++ library
 # without a versioned soname, can change incompatibly without failing to
-# load). The fingerprint is a hash of those parts of koreader-base, so most
-# new nightlies need no new build: their koreader-base is just recorded in
+# load). The API fingerprint is a hash of those parts of koreader-base. A
+# standalone engine also has its own copies of the libraries crengine uses
+# (HarfBuzz, FreeType, …), which only a rebuild updates, so the
+# fingerprint the manifest lists builds by also covers those libraries'
+# folders in koreader-base. When only they change, the standalone targets
+# are rebuilt, and the others' builds (same crengine commit and API
+# fingerprint) are listed again under the new fingerprint. So most new
+# nightlies need no new build: their koreader-base is just recorded in
 # "bases" as using the existing one. A device finds its koreader-base from
 # the commit in its version (v2026.07.2-299-g8012773_… → 8012773); with no
 # entry for it, the plugin falls back to the newest build and checks it
 # against the running engine before installing.
+#
+# It also runs weekly, for the latest nightly, so that a library update in
+# KOReader reaches the standalone engine without waiting for a crengine
+# push.
 #
 # Jobs: plan (what needs building) → build (one per target, in parallel) →
 # publish (all at once, so builds don't overwrite each other's manifest).
@@ -57,6 +68,9 @@ on:
   # Sent by spfenwick/crengine on a push to knuth-plass-history.
   repository_dispatch:
     types: [crengine-updated]
+  # Weekly (Mondays, 04:17 UTC), for the latest nightly.
+  schedule:
+    - cron: "17 4 * * 1"
 
 permissions:
   contents: write
@@ -89,6 +103,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       fp: ${{ steps.v.outputs.fp }}
+      api_fp: ${{ steps.v.outputs.api_fp }}
       koreader: ${{ steps.v.outputs.koreader }}
       base: ${{ steps.v.outputs.base }}
       ref: ${{ steps.v.outputs.ref }}
@@ -96,6 +111,7 @@ jobs:
       cre_short: ${{ steps.v.outputs.cre_short }}
       matrix: ${{ steps.plan.outputs.matrix }}
       builds: ${{ steps.plan.outputs.builds }}
+      reuse: ${{ steps.plan.outputs.reuse }}
       publish: ${{ steps.plan.outputs.publish }}
     steps:
       - name: Resolve versions
@@ -123,6 +139,7 @@ jobs:
           ref=$IN_REF
           cre=$(gh api "repos/$CRENGINE_REPO/commits/$ref" --jq .sha)
           base=$(gh api "repos/koreader/koreader/contents/base?ref=$ko_ref" --jq .sha)
+          thirdparty=$(gh api "repos/koreader/koreader-base/contents/thirdparty?ref=$base")
           # Git's ids of the parts of koreader-base the engine depends on.
           parts=$(
             {
@@ -130,16 +147,37 @@ jobs:
                 --jq '.[] | select(.name == "cre.cpp" or .name == "cre.h") | .path + " " + .sha'
               gh api "repos/koreader/koreader-base/contents/cmake?ref=$base" \
                 --jq '.[] | select(.name == "crengine") | .path + " " + .sha'
-              gh api "repos/koreader/koreader-base/contents/thirdparty?ref=$base" \
-                --jq '.[] | select(.name == "lunasvg") | .path + " " + .sha'
+              jq -r '.[] | select(.name == "lunasvg") | .path + " " + .sha' <<< "$thirdparty"
             } | sort
           )
           echo "$parts"
           [ "$(wc -l <<< "$parts")" -eq 4 ] || { echo "::error::koreader-base layout changed"; exit 1; }
-          fp=$(sha256sum <<< "$parts" | cut -c1-16)
-          echo "KOReader $ko_version (base $base, fingerprint $fp), crengine $ref @ $cre"
+          api_fp=$(sha256sum <<< "$parts" | cut -c1-16)
+          # The libraries a standalone engine has its own copies of: those
+          # crengine links (its target_link_libraries in koreader-base,
+          # named <thirdparty folder>::<library>), and brotli, which
+          # FreeType links.
+          libs_cmake=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/koreader/koreader-base/contents/thirdparty/cmake_modules/koreader_thirdparty_libs.cmake?ref=$base")
+          bundled=$(
+            {
+              sed -n '/^    _crengine__crengine$/,/^)$/p' <<< "$libs_cmake" \
+                | grep '::' | sed 's/^[[:space:]]*//; s/::.*//'
+              echo brotli
+            } | sort -u
+          )
+          [ "$(wc -l <<< "$bundled")" -ge 10 ] || { echo "::error::crengine's libraries not found: $bundled"; exit 1; }
+          libs=$(jq -r --arg names "$bundled" \
+            '($names | split("\n")) as $n | .[] | select(.name as $x | $n | index($x)) | .path + " " + .sha' \
+            <<< "$thirdparty" | sort)
+          echo "$libs"
+          [ "$(wc -l <<< "$libs")" -eq "$(wc -l <<< "$bundled")" ] \
+            || { echo "::error::not every library crengine uses is in thirdparty/: $bundled"; exit 1; }
+          fp=$(printf '%s\n%s\n' "$parts" "$libs" | sha256sum | cut -c1-16)
+          echo "KOReader $ko_version (base $base, fingerprint $fp, API $api_fp), crengine $ref @ $cre"
           {
             echo "fp=$fp"
+            echo "api_fp=$api_fp"
             echo "koreader=$ko_version"
             echo "base=$base"
             echo "ref=$ref"
@@ -148,12 +186,16 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # A target needs a build when there's none of this crengine commit for
-      # this fingerprint; otherwise at most the koreader-base is recorded.
+      # this fingerprint, unless it isn't standalone and there's one for its
+      # API fingerprint (under an earlier fingerprint: builds from before
+      # "api" was recorded were listed by it), which is then listed again
+      # under this one. Otherwise at most the koreader-base is recorded.
       - name: Plan
         id: plan
         env:
           FORCE: ${{ inputs.force || false }}
           FP: ${{ steps.v.outputs.fp }}
+          API_FP: ${{ steps.v.outputs.api_fp }}
           BASE: ${{ steps.v.outputs.base }}
           CRE_SHORT: ${{ steps.v.outputs.cre_short }}
         run: |
@@ -162,21 +204,37 @@ jobs:
             || echo '{}' > old.json
           # Builds listed by koreader-base (before schema 2) are dropped.
           jq -e '.schema == 2' old.json >/dev/null || echo '{"schema": 2}' > old.json
+          # {target: build} for the targets whose build is listed again.
+          reuse=$(jq -c --argjson targets "$TARGETS" --arg fp "$FP" --arg api "$API_FP" \
+              --arg commit "$CRE_SHORT" --arg force "$FORCE" \
+            '. as $m
+             | [$targets[]
+                | select($force != "true" and (.standalone | not)
+                         and ($m.builds[$fp][.name].commit // "") != $commit)
+                | .name as $t
+                | [($m.builds // {}) | to_entries[] | (.value[$t] // empty) as $b
+                   | select($b.commit == $commit and ($b.api // .key) == $api) | $b + {api: $api}]
+                | max_by(.built) // empty
+                | {key: $t, value: .}]
+             | from_entries' old.json)
           matrix=$(jq -c --argjson targets "$TARGETS" --arg fp "$FP" --arg commit "$CRE_SHORT" \
-              --arg force "$FORCE" \
+              --arg force "$FORCE" --argjson reuse "$reuse" \
             '. as $m | {include: [$targets[] | select($force == "true"
-                                                     or ($m.builds[$fp][.name].commit // "") != $commit)]}' \
+                                                     or (($m.builds[$fp][.name].commit // "") != $commit
+                                                         and $reuse[.name] == null))]}' \
             old.json)
           builds=$(jq '.include | length' <<< "$matrix")
           recorded=$(jq -r --arg base "$BASE" '.bases[$base] // ""' old.json)
           publish=false
-          if [ "$builds" -gt 0 ] || [ "$recorded" != "$FP" ]; then
+          if [ "$builds" -gt 0 ] || [ "$reuse" != "{}" ] || [ "$recorded" != "$FP" ]; then
             publish=true
           fi
-          echo "To build: $(jq -r '[.include[].name] | join(", ")' <<< "$matrix"); publish: $publish"
+          echo "To build: $(jq -r '[.include[].name] | join(", ")' <<< "$matrix");" \
+            "listed again: $(jq -r 'keys | join(", ")' <<< "$reuse"); publish: $publish"
           {
             echo "matrix=$matrix"
             echo "builds=$builds"
+            echo "reuse=$reuse"
             echo "publish=$publish"
           } >> "$GITHUB_OUTPUT"
 
@@ -343,6 +401,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FP: ${{ needs.plan.outputs.fp }}
+      API_FP: ${{ needs.plan.outputs.api_fp }}
       BASE: ${{ needs.plan.outputs.base }}
     steps:
       - uses: actions/download-artifact@v4
@@ -356,6 +415,7 @@ jobs:
           KOREADER: ${{ needs.plan.outputs.koreader }}
           REF: ${{ needs.plan.outputs.ref }}
           CRE_SHORT: ${{ needs.plan.outputs.cre_short }}
+          REUSE: ${{ needs.plan.outputs.reuse }}
         run: |
           set -euo pipefail
           mkdir -p out
@@ -367,8 +427,10 @@ jobs:
           gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" -p manifest.json -O old.json 2>/dev/null \
             || echo '{}' > old.json
           jq -e '.schema == 2' old.json >/dev/null || echo '{"schema": 2}' > old.json
-          # This koreader-base uses this fingerprint's builds.
-          jq --arg base "$BASE" --arg fp "$FP" '.bases[$base] = $fp' old.json > manifest.json
+          # This koreader-base uses this fingerprint's builds, including
+          # those listed again from an earlier one (see Plan).
+          jq --arg base "$BASE" --arg fp "$FP" --argjson reuse "$REUSE" \
+            '.bases[$base] = $fp | .builds[$fp] = ((.builds[$fp] // {}) + $reuse)' old.json > manifest.json
           built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           shopt -s nullglob
           for meta in out/*.json; do
@@ -379,10 +441,11 @@ jobs:
             url="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$file"
             jq --slurpfile meta "$meta" --arg fp "$FP" --arg t "$target" --arg url "$url" \
                --arg commit "$CRE_SHORT" --arg base "$BASE" --arg ko "$KOREADER" --arg built "$built" \
-               --arg repo "$CRENGINE_REPO" --arg ref "$REF" \
+               --arg repo "$CRENGINE_REPO" --arg ref "$REF" --arg api "$API_FP" \
                '.crengine = {repo: $repo, ref: $ref, commit: $commit}
                 | .builds[$fp][$t] = ($meta[0] | del(.target)) + {url: $url, commit: $commit,
-                                                                  koreader: $ko, base: $base, built: $built}' \
+                                                                  koreader: $ko, base: $base, built: $built,
+                                                                  api: $api}' \
                manifest.json > next.json
             mv next.json manifest.json
             echo "Published $target: $file"

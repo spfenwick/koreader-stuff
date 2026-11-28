@@ -161,7 +161,11 @@ reMarkable 1 or 2 uses `remarkable`.)
   libraries it uses and the C++ runtime linked in and hidden
   (`.github/scripts/standalone-cre.sh`): it needs only the system libraries
   and `libluajit.so`, and keeps its own copies of FreeType, HarfBuzz and
-  the rest (about 7 MB).
+  the rest (about 7 MB). Only a rebuild updates those, so for this build
+  the fingerprint also covers those libraries in koreader-base: when
+  KOReader updates one, the Android engine is rebuilt (and the other
+  devices' builds are kept). The workflow also runs weekly, for the latest
+  nightly, to notice such updates.
 - Before installing, the plugin loads the new engine in a separate process
   (which fails if a library or function it needs is missing from this
   KOReader) and checks it has every function of KOReader's own engine. A build
